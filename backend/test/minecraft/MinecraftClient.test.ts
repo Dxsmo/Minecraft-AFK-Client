@@ -1,48 +1,62 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
 /**
- * Fake Mineflayer bot: a bare EventEmitter with the handful of methods
- * MinecraftClient actually calls. Lets tests drive the real state machine
- * by emitting 'spawn' / 'end' / 'error' / 'chat' / 'message' without ever
- * opening a real network connection.
+ * Fake `azalea-bot` subprocess: an EventEmitter with the child-process surface
+ * MinecraftClient uses (stdin.write, stdout/stderr streams, kill, exit). Tests
+ * drive the real state machine by pushing NDJSON lines to stdout and emitting
+ * `exit`, without spawning a real process or opening a network connection.
  */
-class FakeBot extends EventEmitter {
-  username = "TestBot";
-  health = 20;
-  food = 20;
-  entity = { position: { x: 0, y: 64, z: 0 } };
-  chat = vi.fn();
-  quit = vi.fn(() => this.emit("end", "quit() called"));
-  setControlState = vi.fn();
-  look = vi.fn();
-  acceptResourcePack = vi.fn();
-  _client = Object.assign(new EventEmitter(), {
-    registerChannel: vi.fn(),
-    writeChannel: vi.fn(),
+class FakeChild extends EventEmitter {
+  stdin = { write: vi.fn(), destroyed: false };
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  killed = false;
+  pid = 4242;
+  kill = vi.fn((signal?: NodeJS.Signals) => {
+    this.killed = true;
+    this.emit("exit", null, signal ?? "SIGTERM");
+    return true;
   });
+
+  /** Emit one NDJSON event line on stdout, as the real bot would. */
+  send(event: Record<string, unknown>): void {
+    this.stdout.write(JSON.stringify(event) + "\n");
+  }
 }
 
-const createdBots: FakeBot[] = [];
+const children: FakeChild[] = [];
 
-vi.mock("mineflayer", () => ({
-  default: {
-    createBot: vi.fn(() => {
-      const bot = new FakeBot();
-      createdBots.push(bot);
-      return bot;
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: vi.fn(() => {
+      const child = new FakeChild();
+      children.push(child);
+      return child;
     }),
-  },
-}));
+  };
+});
+
+// Pretend the compiled bot binary exists so findBotBinary() resolves a path.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: vi.fn(() => true) };
+});
 
 const { MinecraftClient } = await import("../../src/minecraft/MinecraftClient.js");
 import type { ClientRuntimeConfig } from "../../src/minecraft/types.js";
+
+/** Let readline process any pending stdout lines. */
+const tick = () => new Promise((r) => setImmediate(r));
 
 function baseConfig(overrides: Partial<ClientRuntimeConfig> = {}): ClientRuntimeConfig {
   return {
     id: "acc-1",
     name: "Bot_01",
-    minecraftVersion: "1.20.4",
+    minecraftVersion: "",
     serverHost: "localhost",
     serverPort: 25565,
     authType: "OFFLINE",
@@ -59,192 +73,180 @@ function baseConfig(overrides: Partial<ClientRuntimeConfig> = {}): ClientRuntime
   };
 }
 
-describe("MinecraftClient state machine", () => {
+const active: Array<{ disconnect: () => void }> = [];
+function makeClient(overrides: Partial<ClientRuntimeConfig> = {}) {
+  const client = new MinecraftClient(baseConfig(overrides));
+  active.push(client);
+  return client;
+}
+function lastChild(): FakeChild {
+  return children[children.length - 1];
+}
+
+describe("MinecraftClient (Azalea subprocess) state machine", () => {
   beforeEach(() => {
-    createdBots.length = 0;
+    children.length = 0;
+    active.length = 0;
     vi.clearAllMocks();
   });
 
-  it("starts OFFLINE and moves to CONNECTING then ONLINE on spawn", () => {
-    const client = new MinecraftClient(baseConfig());
+  afterEach(() => {
+    // Tear down any clients so their reconnect/kill timers don't dangle.
+    for (const c of active) c.disconnect();
+  });
+
+  it("starts OFFLINE, goes CONNECTING on connect, ONLINE on spawn", async () => {
+    const client = makeClient();
     expect(client.getStatus().status).toBe("OFFLINE");
 
     client.connect();
     expect(client.getStatus().status).toBe("CONNECTING");
+    expect(children).toHaveLength(1);
 
-    createdBots[0].emit("spawn");
+    lastChild().send({ type: "spawn" });
+    await tick();
     expect(client.getStatus().status).toBe("ONLINE");
   });
 
-  it("goes OFFLINE on manual disconnect and does not auto-reconnect", () => {
-    const client = new MinecraftClient(baseConfig());
+  it("writes the config as the first line to the subprocess stdin", () => {
+    const client = makeClient({ serverHost: "play.example.com", serverPort: 25566 });
     client.connect();
-    createdBots[0].emit("spawn");
-    expect(client.getStatus().status).toBe("ONLINE");
 
+    const firstWrite = lastChild().stdin.write.mock.calls[0]?.[0] as string;
+    const config = JSON.parse(firstWrite.trim());
+    expect(config.host).toBe("play.example.com");
+    expect(config.port).toBe(25566);
+    expect(config.auth_type).toBe("offline");
+  });
+
+  it("goes OFFLINE on manual disconnect", () => {
+    const client = makeClient();
+    client.connect();
     client.disconnect();
     expect(client.getStatus().status).toBe("OFFLINE");
-    expect(createdBots[0].quit).toHaveBeenCalled();
   });
 
-  it("schedules a reconnect (RECONNECTING) after an unexpected disconnect", () => {
-    const client = new MinecraftClient(baseConfig({ autoReconnect: true }));
+  it("schedules a reconnect (RECONNECTING) after an unexpected exit", async () => {
+    const client = makeClient({ autoReconnect: true });
     client.connect();
-    createdBots[0].emit("spawn");
+    lastChild().send({ type: "spawn" });
+    await tick();
+    expect(client.getStatus().status).toBe("ONLINE");
 
-    createdBots[0].emit("end", "connection reset");
+    lastChild().emit("exit", 1, null);
     expect(client.getStatus().status).toBe("RECONNECTING");
-    expect(client.getStatus().reconnectAttempt).toBe(1);
+    expect(client.getStatus().lastError).toContain("code 1");
   });
 
-  it("goes OFFLINE (no reconnect) after unexpected disconnect when autoReconnect is disabled", () => {
-    const client = new MinecraftClient(baseConfig({ autoReconnect: false }));
+  it("goes ERROR (no reconnect) on unexpected exit when autoReconnect is disabled", async () => {
+    const client = makeClient({ autoReconnect: false });
     client.connect();
-    createdBots[0].emit("spawn");
+    lastChild().send({ type: "spawn" });
+    await tick();
 
-    createdBots[0].emit("end", "connection reset");
-    expect(client.getStatus().status).toBe("OFFLINE");
+    lastChild().emit("exit", 1, null);
+    expect(client.getStatus().status).toBe("ERROR");
   });
 
-  it("sendCommand returns false and does not call bot.chat while offline", () => {
-    const client = new MinecraftClient(baseConfig());
+  it("schedules a reconnect after a connection_failed event", async () => {
+    const client = makeClient({ autoReconnect: true });
+    client.connect();
+
+    lastChild().send({ type: "connection_failed", error: "Connection refused" });
+    await tick();
+    expect(client.getStatus().status).toBe("RECONNECTING");
+    expect(client.getStatus().lastError).toContain("Connection refused");
+  });
+
+  it("sendCommand returns false and writes nothing while offline", () => {
+    const client = makeClient();
     expect(client.sendCommand("gamemode creative")).toBe(false);
   });
 
-  it("sendCommand prefixes with '/' and forwards to bot.chat while online", () => {
-    const client = new MinecraftClient(baseConfig());
+  it("sendCommand forwards a chat command to the subprocess while online", async () => {
+    const client = makeClient();
     client.connect();
-    createdBots[0].emit("spawn");
+    lastChild().send({ type: "spawn" });
+    await tick();
 
-    const result = client.sendCommand("gamemode creative");
+    lastChild().stdin.write.mockClear();
+    const result = client.sendCommand("/gamemode creative");
     expect(result).toBe(true);
-    expect(createdBots[0].chat).toHaveBeenCalledWith("/gamemode creative");
+
+    const written = lastChild().stdin.write.mock.calls[0][0] as string;
+    expect(JSON.parse(written.trim())).toEqual({ type: "chat", text: "/gamemode creative" });
   });
 
-  it("emits CHAT console events for other players and ignores the bot's own username", () => {
-    const client = new MinecraftClient(baseConfig());
+  it("emits a CHAT console event for player chat and SERVER_MESSAGE for system chat", async () => {
+    const client = makeClient();
     const events: string[] = [];
     client.on("console", (e: { type: string; message: string }) => events.push(`${e.type}:${e.message}`));
 
     client.connect();
-    createdBots[0].emit("spawn");
-    createdBots[0].emit("chat", "Steve", "hello there");
-    createdBots[0].emit("chat", "TestBot", "should be ignored");
+    lastChild().send({ type: "spawn" });
+    lastChild().send({ type: "chat", sender: "Steve", message: "hello there" });
+    lastChild().send({ type: "chat", sender: null, message: "Server restarting" });
+    await tick();
 
-    expect(events).toContain("CHAT:Steve: hello there");
-    expect(events.some((e) => e.includes("should be ignored"))).toBe(false);
+    expect(events).toContain("CHAT:<Steve> hello there");
+    expect(events).toContain("SERVER_MESSAGE:Server restarting");
   });
 
-  it("downloads and auto-accepts a server resource pack instead of leaving the join blocked", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      const client = new MinecraftClient(baseConfig());
-      client.connect();
-      createdBots[0].emit("resourcePack", "https://example.com/pack.zip");
-
-      // The download+accept happens asynchronously after the event fires.
-      await vi.waitFor(() => {
-        expect(createdBots[0].acceptResourcePack).toHaveBeenCalled();
-      });
-      expect(fetchMock).toHaveBeenCalledWith("https://example.com/pack.zip");
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("still accepts the resource pack even if the download itself fails", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network error")));
-
-    try {
-      const client = new MinecraftClient(baseConfig());
-      client.connect();
-      createdBots[0].emit("resourcePack", "https://example.com/pack.zip");
-
-      await vi.waitFor(() => {
-        expect(createdBots[0].acceptResourcePack).toHaveBeenCalled();
-      });
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("forces a reconnect if the connection is stuck without any server activity (watchdog)", () => {
-    vi.useFakeTimers();
-    try {
-      const client = new MinecraftClient(baseConfig({ autoReconnect: true }));
-      client.connect();
-      expect(client.getStatus().status).toBe("CONNECTING");
-
-      // Never emit 'spawn'/'forcedMove' or any packet activity — simulate a
-      // fully hung connection — and advance past the inactivity timeout.
-      vi.advanceTimersByTime(95_000);
-
-      expect(client.getStatus().status).toBe("RECONNECTING");
-      expect(createdBots[0].quit).toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not give up while the server keeps sending packets, even past the old fixed timeout", () => {
-    vi.useFakeTimers();
-    try {
-      const client = new MinecraftClient(baseConfig({ autoReconnect: true }));
-      client.connect();
-
-      // Simulate a server that is slow (e.g. an anti-bot verification queue)
-      // but still exchanging packets with us every 20s, well past what used
-      // to be a fixed 45s giveup — this should NOT trigger a reconnect.
-      for (let i = 0; i < 4; i++) {
-        vi.advanceTimersByTime(20_000);
-        createdBots[0]._client.emit("packet", {});
-      }
-
-      expect(client.getStatus().status).toBe("CONNECTING");
-      expect(createdBots[0].quit).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("eventually forces a reconnect even if the server keeps sending packets forever (hard ceiling)", () => {
-    vi.useFakeTimers();
-    try {
-      const client = new MinecraftClient(baseConfig({ autoReconnect: true }));
-      client.connect();
-
-      // Simulate a server that holds the connection in limbo (e.g. an
-      // anti-bot system that never releases the client into play) but
-      // keeps sending keep-alive-style packets indefinitely — the
-      // inactivity check alone would never trigger, so the hard ceiling
-      // on total connecting duration must kick in instead.
-      for (let i = 0; i < 10; i++) {
-        vi.advanceTimersByTime(20_000);
-        createdBots[0]._client.emit("packet", {});
-      }
-
-      expect(client.getStatus().status).toBe("RECONNECTING");
-      expect(createdBots[0].quit).toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("treats 'forcedMove' (position sync) as sufficient to go ONLINE even without 'spawn'", () => {
-    const client = new MinecraftClient(baseConfig());
+  it("surfaces the Microsoft device code as a status prompt", async () => {
+    const client = makeClient({ authType: "MICROSOFT", credentialsSecret: "bot@example.com" });
     client.connect();
-    expect(client.getStatus().status).toBe("CONNECTING");
 
-    // Some servers never send an update_health packet (which normally
-    // drives mineflayer's 'spawn' event), even though the player has
-    // actually joined — 'forcedMove' should be enough on its own.
-    createdBots[0].emit("forcedMove");
-    expect(client.getStatus().status).toBe("ONLINE");
+    lastChild().send({
+      type: "msa_code",
+      verification_uri: "https://microsoft.com/link",
+      user_code: "ABCD-EFGH",
+      expires_in: 900,
+    });
+    await tick();
+
+    const msa = client.getStatus().msaSignIn;
+    expect(msa?.userCode).toBe("ABCD-EFGH");
+    expect(msa?.verificationUri).toBe("https://microsoft.com/link");
+  });
+
+  it("emits a profile event so the account can be auto-named", async () => {
+    const client = makeClient({ authType: "MICROSOFT", credentialsSecret: "bot@example.com" });
+    const profiles: Array<{ username: string; uuid: string }> = [];
+    client.on("profile", (p: { username: string; uuid: string }) => profiles.push(p));
+
+    client.connect();
+    lastChild().send({ type: "profile", username: "CoolBot", uuid: "uuid-123" });
+    await tick();
+
+    expect(profiles).toEqual([{ minecraftAccountId: "acc-1", username: "CoolBot", uuid: "uuid-123" }]);
+  });
+
+  it("emits status snapshots (not bare strings) on transitions", async () => {
+    const client = makeClient();
+    const statuses: string[] = [];
+    client.on("status", (s: { status: string; id: string }) => statuses.push(s.status));
+
+    client.connect();
+    lastChild().send({ type: "spawn" });
+    await tick();
+
+    expect(statuses).toContain("CONNECTING");
+    expect(statuses).toContain("ONLINE");
+  });
+
+  it("recycles a hung connection via the safety timeout", () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeClient({ autoReconnect: true });
+      client.connect();
+      expect(client.getStatus().status).toBe("CONNECTING");
+
+      // Never send spawn/failure — simulate a fully hung subprocess — and
+      // advance past the hang timeout.
+      vi.advanceTimersByTime(5 * 60_000 + 1000);
+      expect(client.getStatus().status).toBe("RECONNECTING");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
