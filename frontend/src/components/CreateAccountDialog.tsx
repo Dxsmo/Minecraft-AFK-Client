@@ -1,13 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { api, ApiError } from "../lib/api";
-import { MINECRAFT_VERSIONS } from "../lib/minecraftVersions";
+import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
 
 export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [form, setForm] = useState({
     name: "",
     serverHost: "",
     serverPort: 25565,
-    minecraftVersion: MINECRAFT_VERSIONS[0],
+    minecraftVersion: AUTO_DETECT_VERSION,
     authType: "OFFLINE" as "OFFLINE" | "MICROSOFT",
     credentialsSecret: "",
     credentialsPassword: "",
@@ -77,6 +77,7 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
               onChange={(e) => setForm({ ...form, minecraftVersion: e.target.value })}
               className="input"
             >
+              <option value={AUTO_DETECT_VERSION}>Auto-detect (recommended)</option>
               {MINECRAFT_VERSIONS.map((v) => (
                 <option key={v} value={v}>
                   {v}

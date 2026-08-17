@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type { ManagedUser, MinecraftAccount } from "../lib/types";
-import { MINECRAFT_VERSIONS } from "../lib/minecraftVersions";
+import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
 
 export function AccountSettingsPanel({
   account,
@@ -66,7 +66,7 @@ export function AccountSettingsPanel({
     setError(null);
     try {
       await api.patch(`/minecraft/accounts/${account.id}`, { minecraftVersion: newVersion });
-      setVersionMessage(`Version set to ${newVersion}`);
+      setVersionMessage(newVersion === AUTO_DETECT_VERSION ? "Set to auto-detect" : `Version set to ${newVersion}`);
       onUpdated();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to change version");
@@ -93,9 +93,12 @@ export function AccountSettingsPanel({
           value={version}
           disabled={versionSaving}
           onChange={(e) => void applyVersion(e.target.value)}
-          className="input w-32"
+          className="input w-40"
         >
-          {!MINECRAFT_VERSIONS.includes(version) && <option value={version}>{version}</option>}
+          <option value={AUTO_DETECT_VERSION}>Auto-detect (recommended)</option>
+          {!MINECRAFT_VERSIONS.includes(version) && version !== AUTO_DETECT_VERSION && (
+            <option value={version}>{version}</option>
+          )}
           {MINECRAFT_VERSIONS.map((v) => (
             <option key={v} value={v}>
               {v}

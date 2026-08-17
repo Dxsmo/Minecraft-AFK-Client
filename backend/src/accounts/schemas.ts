@@ -10,7 +10,9 @@ import { z } from "zod";
 export const createAccountSchema = z
   .object({
     name: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_-]+$/),
-    minecraftVersion: z.string().min(1).max(16).default("1.20.4"),
+    // Empty string means "auto-detect" (mineflayer negotiates the protocol
+    // version by pinging the server first) — see MinecraftClient.ts.
+    minecraftVersion: z.string().max(16).default(""),
     serverHost: z.string().min(1).max(255),
     serverPort: z.coerce.number().int().min(1).max(65535).default(25565),
     authType: z.enum(["OFFLINE", "MICROSOFT"]).default("OFFLINE"),
@@ -38,7 +40,7 @@ export const createAccountSchema = z
  */
 export const updateAccountSchema = z.object({
   name: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_-]+$/).optional(),
-  minecraftVersion: z.string().min(1).max(16).optional(),
+  minecraftVersion: z.string().max(16).optional(),
   serverHost: z.string().min(1).max(255).optional(),
   serverPort: z.coerce.number().int().min(1).max(65535).optional(),
   afkEnabled: z.boolean().optional(),

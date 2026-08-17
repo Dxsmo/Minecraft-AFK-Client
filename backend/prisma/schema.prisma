@@ -74,7 +74,10 @@ model Session {
 model MinecraftAccount {
   id                 String   @id @default(cuid())
   name               String   @unique
-  minecraftVersion   String   @default("1.20.4")
+  // Empty string means "auto-detect" — MinecraftClient lets mineflayer ping
+  // the server and negotiate whichever protocol version it actually
+  // reports, rather than forcing a possibly-mismatched hardcoded version.
+  minecraftVersion   String   @default("")
   serverHost         String
   serverPort         Int      @default(25565)
   authType           AuthType @default(OFFLINE)

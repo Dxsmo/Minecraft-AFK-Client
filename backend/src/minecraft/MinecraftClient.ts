@@ -165,7 +165,15 @@ export class MinecraftClient extends EventEmitter {
         host: this.config.serverHost,
         port: this.config.serverPort,
         username: this.config.authType === "OFFLINE" ? this.config.name : this.config.credentialsSecret ?? this.config.name,
-        version: this.config.minecraftVersion || undefined,
+        // An empty/unset version means "auto-detect": mineflayer pings the
+        // server first and negotiates whichever protocol version it
+        // actually reports, which is far more reliable than a hardcoded
+        // guess — forcing an incorrect version can make the connection
+        // *look* successful (login, resource pack, even showing up in the
+        // server's tab list) while all subsequent play-state packets
+        // (position sync, health, etc.) silently fail to decode because
+        // they're being parsed against the wrong protocol schema.
+        version: this.config.minecraftVersion ? this.config.minecraftVersion : false,
         auth: this.config.authType === "MICROSOFT" ? "microsoft" : "offline",
         // When a password is stored for this Microsoft account, prismarine-auth
         // authenticates directly against Xbox Live with it instead of prompting
