@@ -1,92 +1,62 @@
 import { EventEmitter } from "node:events";
+import { spawn, type ChildProcess } from "node:child_process";
+import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
-import mineflayer, { type Bot } from "mineflayer";
-import { BehaviorManager } from "./behaviors/BehaviorManager.js";
-import type { ClientRuntimeConfig, ClientStatus, ClientStatusSnapshot, ConsoleEvent, MsaSignInPrompt } from "./types.js";
+import readline from "node:readline";
+import type { ClientRuntimeConfig, ClientStatus, ClientStatusSnapshot, ConsoleEvent, ConsoleEventType, MsaSignInPrompt } from "./types.js";
 import { accountLogger } from "../logging/logger.js";
 import { config as appConfig } from "../config/config.js";
 import type { Logger } from "pino";
 
-// Fixed-interval reconnect: every failed/dropped connection retries after
-// exactly this delay (± a little jitter to avoid a thundering herd if many
-// bots drop at once). Deliberately NOT exponential — for a 24/7 AFK bot a
-// steady, predictable retry cadence is preferred over ever-longer waits.
+// Fixed-interval reconnect: exactly 30 seconds per retry (no exponential backoff).
 const RECONNECT_DELAY_MS = 30_000;
 const RECONNECT_JITTER_MS = 2_000;
 
-// Safety net: some servers (particularly ones behind anti-bot/verification
-// systems) hold a connecting client in a "limbo" state for a while before
-// fully releasing them into the world, during which they may still be
-// visible to other players (e.g. in the tab list) even though mineflayer
-// hasn't reached its normal "spawn" event yet. Rather than using one fixed
-// timer from the start of the connection attempt (which would abandon a
-// connection that is still slowly progressing), we track the timestamp of
-// the last packet received from the server and only give up once NO
-// packets at all have arrived for this long — i.e. the connection is truly
-// dead, not just slow.
-const INACTIVITY_TIMEOUT_MS = 90_000;
-const INACTIVITY_CHECK_INTERVAL_MS = 5_000;
-
-// Hard ceiling: some servers (particularly ones with anti-bot/verification
-// "limbo" systems) keep exchanging packets like keep-alives with a
-// connecting client indefinitely without ever releasing them into actual
-// play (never sending the packets that would trigger our online-detection
-// above). Without a hard cap, such a connection would satisfy the
-// inactivity check forever and never be abandoned. This is deliberately
-// much longer than INACTIVITY_TIMEOUT_MS to give legitimate slow joins
-// (verification queues, etc.) a real chance to complete first.
-const MAX_CONNECTING_DURATION_MS = 3 * 60_000;
+// Azalea bot subprocess doesn't need inactivity watchdog (it reports
+// disconnects directly), but we keep a safety timeout in case the subprocess
+// itself hangs after being spawned.
+const SUBPROCESS_HANG_TIMEOUT_MS = 5 * 60_000; // 5 minutes max for a single attempt
 
 /**
- * Wraps a single Mineflayer bot connection and exposes a small, explicit
- * state machine (OFFLINE -> CONNECTING -> ONLINE -> DISCONNECTING/RECONNECTING/ERROR)
- * plus console/chat event streaming. One instance == one Minecraft account.
- *
- * Errors from this bot are always caught locally: a crash/error here must
- * never take down the process or affect other MinecraftClient instances.
+ * Wraps the Azalea Rust bot subprocess and exposes a state machine plus
+ * console/chat event streaming. One instance == one Minecraft account.
  */
 export class MinecraftClient extends EventEmitter {
-  private bot: Bot | null = null;
+  private subprocess: ChildProcess | null = null;
   private status: ClientStatus = "OFFLINE";
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
-  private connectionWatchdog: NodeJS.Timeout | null = null;
-  private lastActivityAt = 0;
-  private connectionStartedAt = 0;
-  private onlineSignalReceived = false;
+  private hangTimer: NodeJS.Timeout | null = null;
   private manuallyStopped = false;
   private connectedSince: Date | null = null;
   private lastError: string | undefined;
   private msaSignIn: MsaSignInPrompt | undefined;
-  private readonly behaviorManager: BehaviorManager;
   private readonly log: Logger;
+
+  private botName: string = "Unknown";
+  private health: number = 20;
+  private food: number = 20;
 
   constructor(private config: ClientRuntimeConfig) {
     super();
     this.log = accountLogger(config.id, config.name);
-    this.behaviorManager = new BehaviorManager(
-      {
-        afkEnabled: config.afkEnabled,
-        movementEnabled: config.movementEnabled,
-        afkIntervalSeconds: config.afkIntervalSeconds,
-        autoCommandEnabled: config.autoCommandEnabled,
-        autoCommandText: config.autoCommandText,
-        autoCommandIntervalMinutes: config.autoCommandIntervalMinutes,
-      },
-      (message) => this.emitConsole("SYSTEM", message),
-    );
   }
 
   updateConfig(config: ClientRuntimeConfig): void {
     this.config = config;
-    this.behaviorManager.updateConfig({
-      afkEnabled: config.afkEnabled,
-      movementEnabled: config.movementEnabled,
-      afkIntervalSeconds: config.afkIntervalSeconds,
-      autoCommandEnabled: config.autoCommandEnabled,
-      autoCommandText: config.autoCommandText,
-      autoCommandIntervalMinutes: config.autoCommandIntervalMinutes,
-    });
+    // If the bot is online, send a Configure command to update behavior settings live.
+    if (this.subprocess && this.status === "ONLINE") {
+      const cmd = {
+        type: "configure",
+        afk_enabled: config.afkEnabled,
+        movement_enabled: config.movementEnabled,
+        afk_interval_seconds: config.afkIntervalSeconds,
+        auto_command_enabled: config.autoCommandEnabled,
+        auto_command_text: config.autoCommandText,
+        auto_command_interval_minutes: config.autoCommandIntervalMinutes,
+      };
+      this.subprocess.stdin?.write(JSON.stringify(cmd) + "\n");
+    }
   }
 
   getStatus(): ClientStatusSnapshot {
@@ -96,359 +66,298 @@ export class MinecraftClient extends EventEmitter {
       status: this.status,
       serverHost: this.config.serverHost,
       serverPort: this.config.serverPort,
-      health: this.bot?.health,
-      food: this.bot?.food,
-      position: this.bot?.entity?.position
-        ? { x: this.bot.entity.position.x, y: this.bot.entity.position.y, z: this.bot.entity.position.z }
-        : undefined,
+      health: this.health,
+      food: this.food,
+      connectedSince: this.connectedSince?.toISOString(),
       lastError: this.lastError,
       reconnectAttempt: this.reconnectAttempt,
-      connectedSince: this.connectedSince?.toISOString(),
       msaSignIn: this.msaSignIn,
     };
   }
 
   connect(): void {
+    if (this.status !== "OFFLINE") return;
     this.manuallyStopped = false;
-    if (this.status === "ONLINE" || this.status === "CONNECTING") return;
     this.clearReconnectTimer();
     this.reconnectAttempt = 0;
-    this.beginConnection();
+    this.attemptConnect();
   }
 
   disconnect(): void {
     this.manuallyStopped = true;
     this.clearReconnectTimer();
-    this.setStatus("DISCONNECTING");
-    this.teardownBot("Manual disconnect requested");
-    this.msaSignIn = undefined;
-    this.setStatus("OFFLINE");
+    this.teardownSubprocess("Manual disconnect requested");
   }
 
-  async restart(): Promise<void> {
-    this.emitConsole("SYSTEM", "Restarting client...");
-    this.manuallyStopped = true;
+  restart(): void {
+    this.manuallyStopped = false;
     this.clearReconnectTimer();
-    this.teardownBot("Restart requested");
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    this.connect();
+    this.teardownSubprocess("Restart requested");
+    this.attemptConnect();
   }
 
   sendCommand(command: string): boolean {
-    const normalized = command.startsWith("/") ? command : `/${command}`;
-    return this.sendRaw(normalized, "USER_COMMAND", `> ${normalized}`);
-  }
-
-  sendChat(message: string): boolean {
-    return this.sendRaw(message, "USER_COMMAND", `> ${message}`);
-  }
-
-  private sendRaw(text: string, eventType: ConsoleEvent["type"], displayMessage: string): boolean {
-    if (!this.bot || this.status !== "ONLINE") {
-      this.emitConsole("WARNING", "Cannot send: client is not online");
+    if (this.status !== "ONLINE" || !this.subprocess) {
+      this.emitConsole("ERROR", "Bot is not online, cannot send command");
       return false;
     }
-    try {
-      this.bot.chat(text);
-      this.emitConsole(eventType, displayMessage);
-      return true;
-    } catch (err) {
-      this.emitConsole("ERROR", `Failed to send: ${(err as Error).message}`);
-      return false;
-    }
+    const cmd = { type: "chat", text: command };
+    this.subprocess.stdin?.write(JSON.stringify(cmd) + "\n");
+    return true;
   }
 
-  private beginConnection(): void {
-    this.setStatus(this.reconnectAttempt > 0 ? "RECONNECTING" : "CONNECTING");
-    this.emitConsole("SYSTEM", `Connecting to ${this.config.serverHost}:${this.config.serverPort}...`);
-    this.msaSignIn = undefined;
-    this.onlineSignalReceived = false;
-    this.lastActivityAt = Date.now();
-    this.connectionStartedAt = Date.now();
+  sendChat(message: string): void {
+    this.sendCommand(message);
+  }
+
+  private attemptConnect(): void {
+    this.reconnectAttempt++;
+    this.setStatus(this.reconnectAttempt > 1 ? "RECONNECTING" : "CONNECTING");
+
+    this.log.info(
+      `Connection attempt ${this.reconnectAttempt} to ${this.config.serverHost}:${this.config.serverPort}`
+    );
+
+    this.lastError = undefined;
+
+    // Find the azalea-bot binary (built during docker build, or in development at rust-bot/target/debug)
+    const botBinaryPath = this.findBotBinary();
+    if (!botBinaryPath) {
+      const err = "azalea-bot binary not found";
+      this.log.error(err);
+      this.handleConnectionFailure(err);
+      return;
+    }
 
     try {
-      // NOTE: minecraft-protocol's TypeScript types incorrectly declare
-      // `onMsaCode`'s payload with snake_case fields, but the real runtime
-      // object from @azure/msal-node uses camelCase (verified against the
-      // installed library source). We type our callback with the actual
-      // runtime shape and cast the options object to bypass the incorrect
-      // ambient types rather than the (wrong) declared type.
-      const botOptions = {
+      this.subprocess = spawn(botBinaryPath, [], { stdio: ["pipe", "pipe", "pipe"] });
+
+      // Parse NDJSON from stdout
+      const rl = readline.createInterface({
+        input: this.subprocess.stdout!,
+        crlfDelay: Infinity,
+      });
+
+      rl.on("line", (line) => {
+        try {
+          const event = JSON.parse(line);
+          this.handleRustBotEvent(event);
+        } catch (err) {
+          this.log.warn({ err, line }, "Failed to parse bot event");
+        }
+      });
+
+      // Log stderr
+      this.subprocess.stderr?.on("data", (data) => {
+        this.log.debug({ data: data.toString() }, "Bot stderr");
+      });
+
+      // Subprocess exit = connection ended
+      this.subprocess.on("exit", (code, signal) => {
+        this.log.info({ code, signal }, "Bot subprocess exited");
+        if (!this.manuallyStopped) {
+          this.handleConnectionFailure(`Subprocess exited with code ${code}`);
+        } else {
+          this.teardownSubprocess("Subprocess exited (after manual stop)");
+        }
+      });
+
+      this.subprocess.on("error", (err) => {
+        this.log.error(err, "Bot subprocess error");
+        this.handleConnectionFailure(err.message);
+      });
+
+      // Send initial config
+      const cacheDir = path.join(appConfig.dataDir, "bot-cache", this.config.id);
+      const minecraftVersion = this.config.minecraftVersion || "";
+
+      const config = {
         host: this.config.serverHost,
         port: this.config.serverPort,
-        username: this.config.authType === "OFFLINE" ? this.config.name : this.config.credentialsSecret ?? this.config.name,
-        // An empty/unset version means "auto-detect": mineflayer pings the
-        // server first and negotiates whichever protocol version it
-        // actually reports, which is far more reliable than a hardcoded
-        // guess — forcing an incorrect version can make the connection
-        // *look* successful (login, resource pack, even showing up in the
-        // server's tab list) while all subsequent play-state packets
-        // (position sync, health, etc.) silently fail to decode because
-        // they're being parsed against the wrong protocol schema.
-        version: this.config.minecraftVersion ? this.config.minecraftVersion : false,
-        auth: this.config.authType === "MICROSOFT" ? "microsoft" : "offline",
-        // When a password is stored for this Microsoft account, prismarine-auth
-        // authenticates directly against Xbox Live with it instead of prompting
-        // a device-code sign-in. This does NOT work for accounts with 2FA /
-        // modern security features enabled — those will fail to connect and
-        // must rely on the device-code flow (i.e. leave the password empty).
-        password:
-          this.config.authType === "MICROSOFT" ? this.config.credentialsPassword ?? undefined : undefined,
-        // Persist the Microsoft auth token cache per-account inside the data
-        // dir (Docker volume), so re-authentication is only needed once.
-        profilesFolder:
-          this.config.authType === "MICROSOFT"
-            ? path.join(appConfig.dataDir, "mc-auth-cache", this.config.id)
-            : undefined,
-        onMsaCode: (data: { verificationUri: string; userCode: string; message: string; expiresIn: number }) => {
-          this.msaSignIn = {
-            verificationUri: data.verificationUri,
-            userCode: data.userCode,
-            message: data.message,
-            expiresAt: new Date(Date.now() + data.expiresIn * 1000).toISOString(),
-          };
-          this.emitConsole(
-            "SYSTEM",
-            `Microsoft sign-in required: open ${data.verificationUri} and enter code ${data.userCode}`,
-          );
-          this.emit("status", this.getStatus());
-        },
+        auth_type: this.config.authType === "MICROSOFT" ? "microsoft" : "offline",
+        username: this.config.name,
+        email: this.config.credentialsSecret,
+        cache_dir: cacheDir,
+        afk_enabled: this.config.afkEnabled,
+        movement_enabled: this.config.movementEnabled,
+        afk_interval_seconds: this.config.afkIntervalSeconds,
+        auto_command_enabled: this.config.autoCommandEnabled,
+        auto_command_text: this.config.autoCommandText,
+        auto_command_interval_minutes: this.config.autoCommandIntervalMinutes,
       };
-      const bot = mineflayer.createBot(botOptions as unknown as Parameters<typeof mineflayer.createBot>[0]);
-      this.attachBotHandlers(bot);
-      this.bot = bot;
 
-      // mineflayer's own "minecraft:brand" plugin-message logic (game.js)
-      // only fires once the PLAY-state 'login' packet arrives — but real
-      // vanilla clients send their brand identification during the
-      // CONFIGURATION phase instead (this moved in the 1.20.2+ protocol
-      // redesign). Some servers wait for it before ever sending
-      // finish_configuration. Send it ourselves as soon as we enter
-      // configuration state, to match real client behavior as closely as
-      // possible for servers that gate on this. Uses `.on` (not `.once`)
-      // because the state transitions through HANDSHAKING -> LOGIN before
-      // ever reaching CONFIGURATION — a `.once` listener would consume the
-      // wrong (earlier) transition and never fire again.
-      let brandSent = false;
-      bot._client.on("state", (newState: string) => {
-        if (newState !== "configuration" || brandSent) return;
-        brandSent = true;
-        try {
-          bot._client.registerChannel("minecraft:brand", ["string", []]);
-          bot._client.writeChannel("minecraft:brand", "vanilla");
-          this.emitConsole("SYSTEM", "Sent client brand identification during configuration phase");
-        } catch (err) {
-          this.log.warn({ err }, "Failed to send brand during configuration phase");
+      this.subprocess.stdin!.write(JSON.stringify(config) + "\n");
+
+      // Safety timeout: if subprocess hasn't reached ONLINE or failed after this long, kill it.
+      this.hangTimer = setTimeout(() => {
+        if (this.status === "CONNECTING" || this.status === "RECONNECTING") {
+          this.log.warn("Bot subprocess hang timeout, killing process");
+          this.handleConnectionFailure("Connection timed out (subprocess hang)");
         }
-      });
-
-      // Any raw protocol packet counts as activity — this lets us
-      // distinguish "the server is slowly working through an anti-bot/
-      // verification queue but still talking to us" from "the connection
-      // is actually dead", instead of giving up after one fixed timeout.
-      bot._client.on("packet", () => {
-        this.lastActivityAt = Date.now();
-      });
-
-      this.connectionWatchdog = setInterval(() => this.checkForStuckConnection(), INACTIVITY_CHECK_INTERVAL_MS);
+      }, SUBPROCESS_HANG_TIMEOUT_MS);
     } catch (err) {
-      this.handleFatalError(err as Error);
+      const message = err instanceof Error ? err.message : String(err);
+      this.log.error({ err }, `Failed to spawn bot subprocess: ${message}`);
+      this.handleConnectionFailure(message);
     }
   }
 
-  private attachBotHandlers(bot: Bot): void {
-    // mineflayer's built-in 'spawn' event only fires after receiving an
-    // 'update_health' packet, which some servers (especially ones with
-    // anti-bot/verification systems, or that simply never resend default
-    // full health) may delay indefinitely or never send at all — even
-    // though the player has already fully joined and is visible to others
-    // in the tab list. 'forcedMove' fires when the mandatory initial
-    // position/teleport packet is processed, which every server must send
-    // to place a player in any world, making it a more reliable signal.
-    // Whichever of the two fires first is treated as "we're online".
-    bot.once("spawn", () => this.handleOnlineSignal(bot, "Spawned into world"));
-    bot.once("forcedMove", () => this.handleOnlineSignal(bot, "Position synced, considering client online"));
+  private handleRustBotEvent(event: Record<string, unknown>): void {
+    const type = event.type as string;
 
-    bot.on("login", () => {
-      this.emitConsole("SYSTEM", "Login accepted by server, waiting to spawn...");
-    });
-
-    // Some servers require accepting a resource/texture pack before letting
-    // the player fully join, and may specifically verify that the pack was
-    // actually fetched (e.g. via their CDN's access logs) rather than just
-    // trusting the client's say-so. Since this is a headless bot with no
-    // renderer, we can't actually apply the pack, but we DO perform a real
-    // HTTP GET against the pack URL first (discarding the body) so our
-    // network behavior matches a real client as closely as possible, before
-    // telling the server we've accepted and "loaded" it.
-    bot.on("resourcePack", (url: string) => {
-      this.emitConsole("SYSTEM", `Server requested a resource pack (${url}); downloading and accepting...`);
-      void (async () => {
-        try {
-          const response = await fetch(url);
-          // Drain the body so the underlying connection is fully used/closed
-          // (mirrors an actual client download rather than an aborted request).
-          await response.arrayBuffer().catch(() => undefined);
-          this.emitConsole(
-            "SYSTEM",
-            `Resource pack download ${response.ok ? "completed" : `failed (HTTP ${response.status})`}`,
-          );
-        } catch (err) {
-          this.emitConsole("WARNING", `Resource pack download failed: ${(err as Error).message}`);
-        } finally {
-          try {
-            bot.acceptResourcePack();
-          } catch (err) {
-            this.emitConsole("WARNING", `Failed to accept resource pack: ${(err as Error).message}`);
-          }
-        }
-      })();
-    });
-
-    bot.on("chat", (username: string, message: string) => {
-      if (username === bot.username) return;
-      this.emitConsole("CHAT", `${username}: ${message}`);
-    });
-
-    bot.on("message", (jsonMsg, position) => {
-      if (position === "chat") return; // already handled via the 'chat' event above
-      const text = jsonMsg.toString();
-      if (text.trim().length === 0) return;
-      this.emitConsole("SERVER_MESSAGE", text);
-    });
-
-    bot.on("kicked", (reason) => {
-      this.emitConsole("WARNING", `Kicked from server: ${this.stringifyReason(reason)}`);
-      this.log.warn({ reason }, "Bot kicked");
-    });
-
-    bot.on("error", (err: Error) => {
-      this.log.error({ err }, "Mineflayer bot error");
-      this.emitConsole("ERROR", `Connection error: ${err.message}`);
-      this.lastError = err.message;
-    });
-
-    bot.on("end", (reason?: string) => {
-      this.clearConnectionWatchdog();
-      this.behaviorManager.stop();
-      this.connectedSince = null;
-      this.bot = null;
-
-      if (this.manuallyStopped) {
-        this.emitConsole("SYSTEM", "Disconnected");
-        this.setStatus("OFFLINE");
-        return;
+    switch (type) {
+      case "msa_code": {
+        const { verification_uri, user_code, expires_in } = event as {
+          verification_uri: string;
+          user_code: string;
+          expires_in: number;
+        };
+        const expiresAt = new Date(Date.now() + expires_in * 1000).toISOString();
+        this.msaSignIn = {
+          verificationUri: verification_uri,
+          userCode: user_code,
+          message: `Visit ${verification_uri} and enter code ${user_code}`,
+          expiresAt,
+        };
+        this.emitConsole("SYSTEM", `MSA Sign-in required: ${verification_uri} (code: ${user_code})`);
+        break;
       }
 
-      this.emitConsole("WARNING", `Disconnected${reason ? `: ${reason}` : ""}`);
-      this.scheduleReconnect();
-    });
+      case "login": {
+        this.log.info("Bot received login packet");
+        this.emitConsole("SYSTEM", "Logged in to server (login packet received)");
+        break;
+      }
+
+      case "spawn": {
+        this.clearHangTimer();
+        this.setStatus("ONLINE");
+        this.connectedSince = new Date();
+        this.msaSignIn = undefined;
+        this.lastError = undefined;
+        this.log.info("Bot spawned successfully");
+        this.emitConsole("SYSTEM", "Spawned into the world");
+        break;
+      }
+
+      case "chat": {
+        const { sender, message } = event as { sender: string | null; message: string };
+        if (sender) {
+          this.emitConsole("CHAT", `[${sender}]: ${message}`);
+        } else {
+          this.emitConsole("SERVER_MESSAGE", message);
+        }
+        break;
+      }
+
+      case "disconnect": {
+        const reason = (event as { reason?: string }).reason;
+        this.log.info({ reason }, "Bot disconnected");
+        this.emitConsole("SYSTEM", `Disconnected: ${reason || "unknown reason"}`);
+        if (!this.manuallyStopped) {
+          this.handleConnectionFailure(reason || "Disconnected");
+        } else {
+          this.teardownSubprocess("Disconnected after manual stop");
+        }
+        break;
+      }
+
+      case "connection_failed": {
+        const error = (event as { error: string }).error;
+        this.log.warn({ error }, "Connection failed");
+        this.emitConsole("ERROR", `Connection failed: ${error}`);
+        this.handleConnectionFailure(error);
+        break;
+      }
+
+      case "warning": {
+        const message = (event as { message: string }).message;
+        this.log.warn(message);
+        this.emitConsole("WARNING", message);
+        break;
+      }
+
+      case "fatal_error": {
+        const error = (event as { error: string }).error;
+        this.log.error({ error }, "Fatal bot error");
+        this.emitConsole("ERROR", `Fatal error: ${error}`);
+        this.handleConnectionFailure(error);
+        break;
+      }
+
+      case "behavior_log": {
+        const message = (event as { message: string }).message;
+        this.log.debug(message);
+        this.emitConsole("SYSTEM", `[Behavior] ${message}`);
+        break;
+      }
+
+      default:
+        this.log.debug({ type }, "Unknown bot event type");
+    }
   }
 
-  private scheduleReconnect(): void {
-    if (!this.config.autoReconnect) {
+  private handleConnectionFailure(reason: string): void {
+    this.lastError = reason;
+    this.clearHangTimer();
+    this.teardownSubprocess(`Connection failed: ${reason}`);
+
+    if (this.manuallyStopped) {
       this.setStatus("OFFLINE");
       return;
     }
 
-    this.reconnectAttempt += 1;
-    const delay = RECONNECT_DELAY_MS + Math.floor(Math.random() * RECONNECT_JITTER_MS);
-
-    this.setStatus("RECONNECTING");
-    this.emitConsole("SYSTEM", `Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempt})...`);
+    // Schedule a reconnect
+    const delay = RECONNECT_DELAY_MS + Math.random() * RECONNECT_JITTER_MS;
+    this.log.info(
+      { delay, attempt: this.reconnectAttempt },
+      `Reconnecting in ${Math.round(delay / 1000)}s`
+    );
+    this.emitConsole("SYSTEM", `Will reconnect in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempt})...`);
 
     this.reconnectTimer = setTimeout(() => {
-      this.beginConnection();
+      this.attemptConnect();
     }, delay);
   }
 
-  private handleFatalError(err: Error): void {
-    this.log.error({ err }, "Failed to create bot");
-    this.lastError = err.message;
-    this.emitConsole("ERROR", `Failed to connect: ${err.message}`);
-    this.scheduleReconnect();
-  }
+  private teardownSubprocess(reason: string): void {
+    if (this.subprocess) {
+      this.log.debug(reason);
 
-  /**
-   * Marks the client as fully connected. Called from whichever of 'spawn'
-   * or 'forcedMove' fires first (see attachBotHandlers) so a delayed/
-   * missing health packet from the server can no longer leave the client
-   * stuck showing "CONNECTING..." forever despite having actually joined.
-   */
-  private handleOnlineSignal(bot: Bot, message: string): void {
-    if (this.onlineSignalReceived) return;
-    this.onlineSignalReceived = true;
+      // Try graceful disconnect first
+      if (this.subprocess.stdin && !this.subprocess.stdin.destroyed) {
+        try {
+          this.subprocess.stdin.write(JSON.stringify({ type: "disconnect" }) + "\n");
+        } catch (err) {
+          this.log.debug("Failed to write disconnect command");
+        }
+      }
 
-    this.clearConnectionWatchdog();
-    this.reconnectAttempt = 0;
-    this.connectedSince = new Date();
+      // Give subprocess a moment to exit gracefully
+      setTimeout(() => {
+        if (this.subprocess && !this.subprocess.killed) {
+          this.subprocess.kill("SIGTERM");
+          setTimeout(() => {
+            if (this.subprocess && !this.subprocess.killed) {
+              this.subprocess.kill("SIGKILL");
+            }
+          }, 1000);
+        }
+      }, 500);
+
+      this.subprocess = null;
+    }
+
+    this.connectedSince = null;
     this.msaSignIn = undefined;
-    this.setStatus("ONLINE");
-    this.emitConsole("SYSTEM", message);
-    this.behaviorManager.start(bot);
   }
 
-  /**
-   * Periodically checked while a connection attempt is in progress. Forces
-   * a reconnect in either of two cases:
-   *  - No packets at all have been received from the server for a while
-   *    (INACTIVITY_TIMEOUT_MS) — the connection is genuinely dead.
-   *  - The attempt has been running for far too long in total
-   *    (MAX_CONNECTING_DURATION_MS), even if packets are still trickling
-   *    in — this catches servers whose anti-bot/verification systems hold
-   *    a connection in limbo indefinitely (still exchanging keep-alives)
-   *    without ever releasing it into actual play.
-   */
-  private checkForStuckConnection(): void {
-    if (this.status !== "CONNECTING" && this.status !== "RECONNECTING") {
-      this.clearConnectionWatchdog();
-      return;
+  private setStatus(newStatus: ClientStatus): void {
+    if (this.status !== newStatus) {
+      this.log.debug(`Status: ${this.status} -> ${newStatus}`);
+      this.status = newStatus;
+      this.emit("statusChanged", newStatus);
     }
-
-    const now = Date.now();
-    const inactiveFor = now - this.lastActivityAt;
-    const connectingFor = now - this.connectionStartedAt;
-
-    let reason: string | null = null;
-    if (connectingFor >= MAX_CONNECTING_DURATION_MS) {
-      reason = `Still not fully connected after ${Math.round(MAX_CONNECTING_DURATION_MS / 1000)}s (server may be holding the connection in an anti-bot/verification queue), retrying...`;
-    } else if (inactiveFor >= INACTIVITY_TIMEOUT_MS) {
-      reason = `No response from server after ${Math.round(INACTIVITY_TIMEOUT_MS / 1000)}s, retrying...`;
-    }
-    if (!reason) return;
-
-    this.log.warn({ inactiveFor, connectingFor }, "Connection attempt stuck; forcing reconnect");
-    this.emitConsole("WARNING", reason);
-
-    this.clearConnectionWatchdog();
-    const staleBot = this.bot;
-    this.bot = null;
-    this.connectedSince = null;
-    this.behaviorManager.stop();
-    if (staleBot) {
-      try {
-        staleBot.removeAllListeners();
-        staleBot.quit("Connection timed out");
-      } catch {
-        /* already dead, nothing to clean up */
-      }
-    }
-    this.scheduleReconnect();
-  }
-
-  private teardownBot(reason: string): void {
-    this.clearReconnectTimer();
-    this.clearConnectionWatchdog();
-    this.behaviorManager.stop();
-    if (this.bot) {
-      try {
-        this.bot.quit(reason);
-      } catch {
-        /* already disconnected */
-      }
-      this.bot = null;
-    }
-    this.connectedSince = null;
   }
 
   private clearReconnectTimer(): void {
@@ -458,35 +367,34 @@ export class MinecraftClient extends EventEmitter {
     }
   }
 
-  private clearConnectionWatchdog(): void {
-    if (this.connectionWatchdog) {
-      clearInterval(this.connectionWatchdog);
-      this.connectionWatchdog = null;
+  private clearHangTimer(): void {
+    if (this.hangTimer) {
+      clearTimeout(this.hangTimer);
+      this.hangTimer = null;
     }
   }
 
-  private setStatus(status: ClientStatus): void {
-    this.status = status;
-    this.emit("status", this.getStatus());
-  }
-
-  private emitConsole(type: ConsoleEvent["type"], message: string): void {
-    const event: ConsoleEvent = {
+  private emitConsole(type: ConsoleEventType, message: string): void {
+    this.emit("console", {
       minecraftAccountId: this.config.id,
       type,
       message,
       timestamp: new Date().toISOString(),
-    };
-    this.log.info({ type, message }, "console event");
-    this.emit("console", event);
+    } as ConsoleEvent);
   }
 
-  private stringifyReason(reason: unknown): string {
-    if (typeof reason === "string") return reason;
-    try {
-      return JSON.stringify(reason);
-    } catch {
-      return String(reason);
-    }
+  private findBotBinary(): string | null {
+    // In Docker, the binary is at /app/azalea-bot (copied in Dockerfile)
+    if (existsSync("/app/azalea-bot")) return "/app/azalea-bot";
+
+    // In development, the binary is at rust-bot/target/debug/azalea-bot relative to cwd
+    const devPath = path.join(process.cwd(), "rust-bot", "target", "debug", "azalea-bot");
+    if (existsSync(devPath)) return devPath;
+
+    // On Windows dev
+    const devPathExe = devPath + ".exe";
+    if (existsSync(devPathExe)) return devPathExe;
+
+    return null;
   }
 }
