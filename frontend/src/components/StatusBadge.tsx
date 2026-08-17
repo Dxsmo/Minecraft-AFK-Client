@@ -1,28 +1,26 @@
 import type { ClientStatus } from "../lib/types";
 
-const STYLES: Record<ClientStatus, string> = {
-  ONLINE: "bg-emerald-900/40 text-emerald-300",
-  OFFLINE: "bg-slate-800 text-slate-400",
-  CONNECTING: "bg-amber-900/40 text-amber-300",
-  RECONNECTING: "bg-amber-900/40 text-amber-300",
-  DISCONNECTING: "bg-slate-800 text-slate-400",
-  ERROR: "bg-red-900/40 text-red-300",
-};
-
-const DOT_STYLES: Record<ClientStatus, string> = {
-  ONLINE: "bg-emerald-500",
-  OFFLINE: "bg-slate-400",
-  CONNECTING: "bg-amber-500 animate-pulse",
-  RECONNECTING: "bg-amber-500 animate-pulse",
-  DISCONNECTING: "bg-slate-400",
-  ERROR: "bg-red-500",
+const CONFIG: Record<ClientStatus, { label: string; color: string; bg: string; pulse?: boolean }> = {
+  ONLINE: { label: "Online", color: "#34d399", bg: "rgba(16,185,129,0.12)" },
+  OFFLINE: { label: "Offline", color: "#8a8a93", bg: "rgba(140,140,150,0.10)" },
+  CONNECTING: { label: "Connecting", color: "#fbbf24", bg: "rgba(251,191,36,0.12)", pulse: true },
+  RECONNECTING: { label: "Reconnecting", color: "#fbbf24", bg: "rgba(251,191,36,0.12)", pulse: true },
+  DISCONNECTING: { label: "Disconnecting", color: "#8a8a93", bg: "rgba(140,140,150,0.10)", pulse: true },
+  ERROR: { label: "Error", color: "#f87171", bg: "rgba(248,113,113,0.12)" },
 };
 
 export function StatusBadge({ status }: { status: ClientStatus }) {
+  const c = CONFIG[status];
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${STYLES[status]}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${DOT_STYLES[status]}`} />
-      {status}
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium"
+      style={{ color: c.color, backgroundColor: c.bg }}
+    >
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${c.pulse ? "animate-pulse" : ""}`}
+        style={{ backgroundColor: c.color }}
+      />
+      {c.label}
     </span>
   );
 }

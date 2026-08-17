@@ -37,16 +37,20 @@ export function SettingsPage() {
   return (
     <div className="max-w-md space-y-6">
       <div>
-        <h1 className="text-xl font-semibold text-slate-100">Settings</h1>
-        <p className="text-sm text-slate-500">
-          Signed in as {user?.username} ({user?.role})
+        <h1 className="text-xl font-semibold" style={{ color: "var(--text)" }}>
+          Settings
+        </h1>
+        <p className="mt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
+          Signed in as {user?.username} · {user?.role}
         </p>
       </div>
 
       <form onSubmit={handleSubmit} className="card space-y-3 p-5">
-        <h2 className="text-sm font-semibold text-slate-100">Change password</h2>
+        <h2 className="text-sm font-semibold" style={{ color: "var(--text)" }}>
+          Change password
+        </h2>
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-300">Current password</label>
+          <label className="label">Current password</label>
           <input
             type="password"
             required
@@ -56,7 +60,7 @@ export function SettingsPage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-300">New password</label>
+          <label className="label">New password</label>
           <input
             type="password"
             required
@@ -67,7 +71,7 @@ export function SettingsPage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-300">Confirm new password</label>
+          <label className="label">Confirm new password</label>
           <input
             type="password"
             required
@@ -77,11 +81,11 @@ export function SettingsPage() {
           />
         </div>
 
-        {error && <p className="rounded-md bg-red-950 px-3 py-2 text-sm text-red-400">{error}</p>}
-        {success && <p className="rounded-md bg-emerald-950 px-3 py-2 text-sm text-emerald-400">Password updated</p>}
+        {error && <p className="alert-error">{error}</p>}
+        {success && <p className="alert-success">Password updated</p>}
 
-        <button type="submit" disabled={saving} className="btn-primary w-full">
-          {saving ? "Saving..." : "Update password"}
+        <button type="submit" disabled={saving} className="btn btn-primary w-full">
+          {saving ? "Saving…" : "Update password"}
         </button>
       </form>
     </div>

@@ -26,8 +26,8 @@ export function AccountSettingsPanel({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Minecraft version has its own instantly-applied control (see below),
-  // separate from the general "Save settings" button.
+  // Minecraft version has its own instantly-applied control, separate from the
+  // general "Save settings" button.
   const [version, setVersion] = useState(account.minecraftVersion);
   const [versionSaving, setVersionSaving] = useState(false);
   const [versionMessage, setVersionMessage] = useState<string | null>(null);
@@ -46,7 +46,6 @@ export function AccountSettingsPanel({
         autoCommandText,
         autoCommandIntervalMinutes,
       });
-      // Only admins are allowed to grant/revoke access for other users.
       if (isAdmin) {
         await api.put(`/minecraft/accounts/${account.id}/assignments`, { userIds: Array.from(assigned) });
       }
@@ -85,17 +84,21 @@ export function AccountSettingsPanel({
 
   return (
     <div className="card p-4 text-sm">
-      <h3 className="mb-3 font-semibold text-slate-100">Settings</h3>
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
+        Settings
+      </h3>
 
       <label className="flex items-center justify-between gap-2">
-        <span className="shrink-0 text-slate-400">Minecraft version</span>
+        <span className="shrink-0" style={{ color: "var(--text-muted)" }}>
+          Minecraft version
+        </span>
         <select
           value={version}
           disabled={versionSaving}
           onChange={(e) => void applyVersion(e.target.value)}
           className="input w-40"
         >
-          <option value={AUTO_DETECT_VERSION}>Auto-detect (recommended)</option>
+          <option value={AUTO_DETECT_VERSION}>Auto-detect</option>
           {!MINECRAFT_VERSIONS.includes(version) && version !== AUTO_DETECT_VERSION && (
             <option value={version}>{version}</option>
           )}
@@ -106,23 +109,14 @@ export function AccountSettingsPanel({
           ))}
         </select>
       </label>
-      {versionMessage && <p className="mt-1 text-xs text-emerald-400">{versionMessage}</p>}
+      {versionMessage && <p className="mt-1 text-xs" style={{ color: "#34d399" }}>{versionMessage}</p>}
 
-      <div className="mt-4 space-y-2">
+      <div className="mt-4 space-y-2.5">
+        <Switch label="AFK behavior" checked={afkEnabled} onChange={setAfkEnabled} />
+        <Switch label="Movement behavior" checked={movementEnabled} onChange={setMovementEnabled} />
+        <Switch label="Auto-reconnect" checked={autoReconnect} onChange={setAutoReconnect} />
         <label className="flex items-center justify-between">
-          <span className="text-slate-400">AFK behavior</span>
-          <input type="checkbox" checked={afkEnabled} onChange={(e) => setAfkEnabled(e.target.checked)} />
-        </label>
-        <label className="flex items-center justify-between">
-          <span className="text-slate-400">Movement behavior</span>
-          <input type="checkbox" checked={movementEnabled} onChange={(e) => setMovementEnabled(e.target.checked)} />
-        </label>
-        <label className="flex items-center justify-between">
-          <span className="text-slate-400">Auto-reconnect</span>
-          <input type="checkbox" checked={autoReconnect} onChange={(e) => setAutoReconnect(e.target.checked)} />
-        </label>
-        <label className="flex items-center justify-between">
-          <span className="text-slate-400">AFK interval (s)</span>
+          <span style={{ color: "var(--text-muted)" }}>AFK interval (s)</span>
           <input
             type="number"
             min={5}
@@ -134,27 +128,22 @@ export function AccountSettingsPanel({
         </label>
       </div>
 
-      <h4 className="mb-2 mt-4 text-xs font-semibold uppercase text-slate-500">Auto-command</h4>
-      <div className="space-y-2">
-        <label className="flex items-center justify-between">
-          <span className="text-slate-400">Enabled</span>
-          <input
-            type="checkbox"
-            checked={autoCommandEnabled}
-            onChange={(e) => setAutoCommandEnabled(e.target.checked)}
-          />
-        </label>
-        <label className="flex items-center justify-between gap-2">
-          <span className="shrink-0 text-slate-400">Command / message</span>
+      <h4 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
+        Auto-command
+      </h4>
+      <div className="space-y-2.5">
+        <Switch label="Enabled" checked={autoCommandEnabled} onChange={setAutoCommandEnabled} />
+        <div>
+          <label className="label">Command / message</label>
           <input
             value={autoCommandText}
             onChange={(e) => setAutoCommandText(e.target.value)}
             placeholder="/hub or a chat message"
             className="input"
           />
-        </label>
+        </div>
         <label className="flex items-center justify-between">
-          <span className="text-slate-400">Every (minutes)</span>
+          <span style={{ color: "var(--text-muted)" }}>Every (minutes)</span>
           <input
             type="number"
             min={1}
@@ -168,12 +157,19 @@ export function AccountSettingsPanel({
 
       {isAdmin && (
         <>
-          <h4 className="mb-2 mt-4 text-xs font-semibold uppercase text-slate-500">Assigned users</h4>
-          <div className="max-h-40 space-y-1 overflow-y-auto">
-            {users.length === 0 && <p className="text-xs text-slate-500">No users created yet.</p>}
+          <h4 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
+            Assigned users
+          </h4>
+          <div className="max-h-40 space-y-1.5 overflow-y-auto">
+            {users.length === 0 && <p className="text-xs" style={{ color: "var(--text-subtle)" }}>No users created yet.</p>}
             {users.map((u) => (
-              <label key={u.id} className="flex items-center gap-2 text-slate-300">
-                <input type="checkbox" checked={assigned.has(u.id)} onChange={() => toggleUser(u.id)} />
+              <label key={u.id} className="flex cursor-pointer items-center gap-2" style={{ color: "var(--text-muted)" }}>
+                <input
+                  type="checkbox"
+                  checked={assigned.has(u.id)}
+                  onChange={() => toggleUser(u.id)}
+                  className="accent-emerald-500"
+                />
                 {u.username}
               </label>
             ))}
@@ -181,12 +177,21 @@ export function AccountSettingsPanel({
         </>
       )}
 
-      {error && <p className="mt-3 rounded-md bg-red-950 px-2 py-1.5 text-xs text-red-400">{error}</p>}
-      {message && <p className="mt-3 rounded-md bg-emerald-950 px-2 py-1.5 text-xs text-emerald-400">{message}</p>}
+      {error && <p className="alert-error mt-3">{error}</p>}
+      {message && <p className="alert-success mt-3">{message}</p>}
 
-      <button onClick={() => void saveSettings()} disabled={saving} className="btn-primary mt-4 w-full">
-        {saving ? "Saving..." : "Save settings"}
+      <button onClick={() => void saveSettings()} disabled={saving} className="btn btn-primary mt-4 w-full">
+        {saving ? "Saving…" : "Save settings"}
       </button>
     </div>
+  );
+}
+
+function Switch({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="flex cursor-pointer items-center justify-between">
+      <span style={{ color: "var(--text-muted)" }}>{label}</span>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="accent-emerald-500" />
+    </label>
   );
 }

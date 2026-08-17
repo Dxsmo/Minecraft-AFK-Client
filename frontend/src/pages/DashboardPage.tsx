@@ -15,8 +15,7 @@ export function DashboardPage() {
 
   async function load() {
     try {
-      const data = await api.get<MinecraftAccount[]>("/minecraft/accounts");
-      setAccounts(data);
+      setAccounts(await api.get<MinecraftAccount[]>("/minecraft/accounts"));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to load accounts");
     }
@@ -34,8 +33,9 @@ export function DashboardPage() {
   const counts = useMemo(() => {
     const statuses = merged.map((a) => a.live?.status ?? a.status);
     return {
+      total: statuses.length,
       online: statuses.filter((s) => s === "ONLINE").length,
-      offline: statuses.filter((s) => s === "OFFLINE").length,
+      offline: statuses.filter((s) => s === "OFFLINE" || s === "DISCONNECTING").length,
       error: statuses.filter((s) => s === "ERROR").length,
     };
   }, [merged]);
@@ -74,102 +74,107 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-end justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-slate-100">Dashboard</h1>
-          <p className="text-sm text-slate-500">Overview of all Minecraft AFK clients</p>
+          <h1 className="text-xl font-semibold" style={{ color: "var(--text)" }}>
+            Dashboard
+          </h1>
+          <p className="mt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
+            Overview of your Minecraft AFK clients
+          </p>
         </div>
-        <button onClick={() => setDialogOpen(true)} className="btn-primary">
+        <button onClick={() => setDialogOpen(true)} className="btn btn-primary">
           + New account
         </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <SummaryCard label="Online Clients" value={counts.online} tone="emerald" />
-        <SummaryCard label="Offline Clients" value={counts.offline} tone="slate" />
-        <SummaryCard label="Errors" value={counts.error} tone="red" />
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <StatCard label="Online" value={counts.online} accent="#34d399" />
+        <StatCard label="Offline" value={counts.offline} accent="#8a8a93" />
+        <StatCard label="Errors" value={counts.error} accent="#f87171" />
       </div>
 
-      {error && <p className="rounded-md bg-red-950 px-3 py-2 text-sm text-red-400">{error}</p>}
+      {error && <p className="alert-error">{error}</p>}
 
-      <div className="card overflow-hidden">
-        {accounts === null ? (
-          <div className="p-8 text-center text-sm text-slate-500">Loading accounts...</div>
-        ) : merged.length === 0 ? (
-          <div className="p-12 text-center">
-            <p className="text-sm font-medium text-slate-100">No Minecraft accounts yet</p>
-            <p className="mt-1 text-sm text-slate-500">
-              Create your first account to get started, or ask an admin to assign one to you.
-            </p>
-          </div>
-        ) : (
-          <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-800 bg-slate-900/60 text-xs uppercase text-slate-500">
-              <tr>
-                <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Server</th>
-                <th className="px-4 py-3 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-800">
-              {merged.map((account) => {
-                const status = account.live?.status ?? account.status;
-                const busy = busyIds.has(account.id);
-                return (
-                  <tr key={account.id}>
-                    <td className="px-4 py-3 font-medium text-slate-100">{account.name}</td>
-                    <td className="px-4 py-3">
-                      <StatusBadge status={status} />
-                    </td>
-                    <td className="px-4 py-3 text-slate-500">
-                      {account.serverHost}:{account.serverPort}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          disabled={busy || status === "ONLINE" || status === "CONNECTING"}
-                          onClick={() => void runAction(account.id, "start")}
-                          className="btn-secondary px-2.5 py-1 text-xs"
-                        >
-                          Start
-                        </button>
-                        <button
-                          disabled={busy || status === "OFFLINE"}
-                          onClick={() => void runAction(account.id, "stop")}
-                          className="btn-secondary px-2.5 py-1 text-xs"
-                        >
-                          Stop
-                        </button>
-                        <button
-                          disabled={busy}
-                          onClick={() => void runAction(account.id, "restart")}
-                          className="btn-secondary px-2.5 py-1 text-xs"
-                        >
-                          Restart
-                        </button>
-                        <Link
-                          to={`/accounts/${account.id}`}
-                          className="rounded-md bg-slate-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-600"
-                        >
-                          Console
-                        </Link>
-                        <button
-                          disabled={busy}
-                          onClick={() => void deleteAccount(account.id, account.name)}
-                          className="btn-danger px-2.5 py-1 text-xs"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {accounts === null ? (
+        <div className="card p-10 text-center text-sm" style={{ color: "var(--text-subtle)" }}>
+          Loading accounts…
+        </div>
+      ) : merged.length === 0 ? (
+        <div className="card p-14 text-center">
+          <p className="text-sm font-medium" style={{ color: "var(--text)" }}>
+            No Minecraft accounts yet
+          </p>
+          <p className="mx-auto mt-1 max-w-sm text-sm" style={{ color: "var(--text-muted)" }}>
+            Create your first account to get started, or ask an admin to assign one to you.
+          </p>
+          <button onClick={() => setDialogOpen(true)} className="btn btn-secondary btn-sm mt-4">
+            + New account
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2.5">
+          {merged.map((account) => {
+            const status = account.live?.status ?? account.status;
+            const displayName = account.live?.name ?? account.name;
+            const busy = busyIds.has(account.id);
+            return (
+              <div
+                key={account.id}
+                className="card card-hover flex flex-wrap items-center gap-x-4 gap-y-3 p-4"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2.5">
+                    <span className="truncate font-medium" style={{ color: "var(--text)" }}>
+                      {displayName}
+                    </span>
+                    <StatusBadge status={status} />
+                  </div>
+                  <p className="mt-0.5 truncate text-xs" style={{ color: "var(--text-subtle)" }}>
+                    {account.serverHost}:{account.serverPort}
+                    {account.minecraftVersion ? ` · ${account.minecraftVersion}` : " · auto"}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    disabled={busy || status === "ONLINE" || status === "CONNECTING"}
+                    onClick={() => void runAction(account.id, "start")}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    Start
+                  </button>
+                  <button
+                    disabled={busy || status === "OFFLINE"}
+                    onClick={() => void runAction(account.id, "stop")}
+                    className="btn btn-secondary btn-sm"
+                  >
+                    Stop
+                  </button>
+                  <button
+                    disabled={busy}
+                    onClick={() => void runAction(account.id, "restart")}
+                    className="btn btn-ghost btn-sm"
+                  >
+                    Restart
+                  </button>
+                  <Link to={`/accounts/${account.id}`} className="btn btn-primary btn-sm">
+                    Console
+                  </Link>
+                  <button
+                    disabled={busy}
+                    onClick={() => void deleteAccount(account.id, displayName)}
+                    className="btn btn-danger btn-sm"
+                    title="Delete account"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {dialogOpen && (
         <CreateAccountDialog
@@ -184,16 +189,18 @@ export function DashboardPage() {
   );
 }
 
-function SummaryCard({ label, value, tone }: { label: string; value: number; tone: "emerald" | "slate" | "red" }) {
-  const toneClasses = {
-    emerald: "text-emerald-400",
-    slate: "text-slate-300",
-    red: "text-red-400",
-  }[tone];
+function StatCard({ label, value, accent }: { label: string; value: number; accent: string }) {
   return (
-    <div className="card p-5">
-      <p className="text-sm text-slate-500">{label}</p>
-      <p className={`mt-1 text-2xl font-semibold ${toneClasses}`}>{value}</p>
+    <div className="card p-4">
+      <div className="flex items-center gap-2">
+        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accent }} />
+        <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+          {label}
+        </p>
+      </div>
+      <p className="mt-2 text-2xl font-semibold tabular-nums" style={{ color: "var(--text)" }}>
+        {value}
+      </p>
     </div>
   );
 }

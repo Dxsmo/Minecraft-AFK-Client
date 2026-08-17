@@ -57,34 +57,38 @@ export function UsersPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold text-slate-100">Users</h1>
-        <p className="text-sm text-slate-500">Create users and manage their access</p>
+        <h1 className="text-xl font-semibold" style={{ color: "var(--text)" }}>
+          Users
+        </h1>
+        <p className="mt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
+          Create users and manage their access
+        </p>
       </div>
 
-      {error && <p className="rounded-md bg-red-950 px-3 py-2 text-sm text-red-400">{error}</p>}
+      {error && <p className="alert-error">{error}</p>}
 
       <form onSubmit={handleCreate} className="card flex flex-wrap items-end gap-3 p-4">
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-300">Username</label>
+          <label className="label">Username</label>
           <input
             required
             value={form.username}
             onChange={(e) => setForm({ ...form, username: e.target.value })}
-            className="input w-40"
+            className="input w-44"
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-300">Password</label>
+          <label className="label">Password</label>
           <input
             required
             type="password"
             value={form.password}
             onChange={(e) => setForm({ ...form, password: e.target.value })}
-            className="input w-40"
+            className="input w-44"
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-300">Role</label>
+          <label className="label">Role</label>
           <select
             value={form.role}
             onChange={(e) => setForm({ ...form, role: e.target.value as "ADMIN" | "USER" })}
@@ -94,49 +98,66 @@ export function UsersPage() {
             <option value="ADMIN">Admin</option>
           </select>
         </div>
-        <button type="submit" disabled={creating} className="btn-primary">
-          {creating ? "Creating..." : "Add user"}
+        <button type="submit" disabled={creating} className="btn btn-primary">
+          {creating ? "Creating…" : "Add user"}
         </button>
       </form>
 
       <div className="card overflow-hidden">
         <table className="w-full text-left text-sm">
-          <thead className="border-b border-slate-800 bg-slate-900/60 text-xs uppercase text-slate-500">
-            <tr>
-              <th className="px-4 py-3 font-medium">Username</th>
-              <th className="px-4 py-3 font-medium">Role</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              <th className="px-4 py-3 font-medium">Last login</th>
-              <th className="px-4 py-3 font-medium">Actions</th>
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--border)" }}>
+              <Th>Username</Th>
+              <Th>Role</Th>
+              <Th>Status</Th>
+              <Th>Last login</Th>
+              <Th>Actions</Th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-800">
+          <tbody>
             {(users ?? []).map((u) => (
-              <tr key={u.id}>
-                <td className="px-4 py-3 font-medium text-slate-100">{u.username}</td>
-                <td className="px-4 py-3 text-slate-400">{u.role}</td>
-                <td className="px-4 py-3">
-                  <span className={u.status === "ACTIVE" ? "text-emerald-400" : "text-slate-500"}>{u.status}</span>
-                </td>
-                <td className="px-4 py-3 text-slate-500">
-                  {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : "Never"}
-                </td>
-                <td className="px-4 py-3">
-                  <div className="flex gap-2">
-                    <button onClick={() => void toggleStatus(u)} className="btn-secondary text-xs">
+              <tr key={u.id} style={{ borderTop: "1px solid var(--border)" }}>
+                <Td><span style={{ color: "var(--text)" }} className="font-medium">{u.username}</span></Td>
+                <Td>{u.role}</Td>
+                <Td>
+                  <span style={{ color: u.status === "ACTIVE" ? "#34d399" : "var(--text-subtle)" }}>{u.status}</span>
+                </Td>
+                <Td>{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : "Never"}</Td>
+                <Td>
+                  <div className="flex gap-1.5">
+                    <button onClick={() => void toggleStatus(u)} className="btn btn-secondary btn-sm">
                       {u.status === "ACTIVE" ? "Disable" : "Enable"}
                     </button>
-                    <button onClick={() => void remove(u)} className="btn-danger text-xs">
+                    <button onClick={() => void remove(u)} className="btn btn-danger btn-sm">
                       Delete
                     </button>
                   </div>
-                </td>
+                </Td>
               </tr>
             ))}
           </tbody>
         </table>
-        {users?.length === 0 && <div className="p-8 text-center text-sm text-slate-500">No users yet.</div>}
+        {users?.length === 0 && (
+          <div className="p-8 text-center text-sm" style={{ color: "var(--text-subtle)" }}>
+            No users yet.
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+function Th({ children }: { children: React.ReactNode }) {
+  return (
+    <th className="px-4 py-3 text-xs font-medium uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
+      {children}
+    </th>
+  );
+}
+function Td({ children }: { children: React.ReactNode }) {
+  return (
+    <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
+      {children}
+    </td>
   );
 }

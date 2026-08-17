@@ -1,20 +1,19 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { api, ApiError } from "../lib/api";
 import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
 
+type AuthType = "OFFLINE" | "MICROSOFT";
+
 export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [form, setForm] = useState({
-    name: "",
-    serverHost: "",
-    serverPort: 25565,
-    minecraftVersion: AUTO_DETECT_VERSION,
-    authType: "OFFLINE" as "OFFLINE" | "MICROSOFT",
-    credentialsSecret: "",
-    credentialsPassword: "",
-    afkEnabled: true,
-    movementEnabled: false,
-    autoReconnect: true,
-  });
+  const [authType, setAuthType] = useState<AuthType>("OFFLINE");
+  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [serverHost, setServerHost] = useState("");
+  const [serverPort, setServerPort] = useState(25565);
+  const [minecraftVersion, setMinecraftVersion] = useState(AUTO_DETECT_VERSION);
+  const [afkEnabled, setAfkEnabled] = useState(true);
+  const [movementEnabled, setMovementEnabled] = useState(false);
+  const [autoReconnect, setAutoReconnect] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -24,9 +23,18 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
     setSubmitting(true);
     try {
       await api.post("/minecraft/accounts", {
-        ...form,
-        credentialsSecret: form.authType === "MICROSOFT" ? form.credentialsSecret || null : null,
-        credentialsPassword: form.authType === "MICROSOFT" ? form.credentialsPassword || null : null,
+        // Offline: the username is also the account name. Microsoft: no name is
+        // sent — the server auto-names it after the real in-game username once
+        // the bot signs in.
+        name: authType === "OFFLINE" ? username : undefined,
+        authType,
+        credentialsSecret: authType === "MICROSOFT" ? email : undefined,
+        serverHost,
+        serverPort,
+        minecraftVersion,
+        afkEnabled,
+        movementEnabled,
+        autoReconnect,
       });
       onCreated();
     } catch (err) {
@@ -37,26 +45,64 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
-      <div className="card w-full max-w-md p-6">
-        <h2 className="text-base font-semibold text-slate-100">New Minecraft account</h2>
-        <form onSubmit={handleSubmit} className="mt-4 space-y-3">
-          <Field label="Bot name">
-            <input
-              required
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              className="input"
-              placeholder="Bot_01"
-            />
-          </Field>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: "rgba(0,0,0,0.6)" }}>
+      <div className="card w-full max-w-md p-6" style={{ boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+        <h2 className="text-base font-semibold" style={{ color: "var(--text)" }}>
+          New Minecraft account
+        </h2>
+        <p className="mt-0.5 text-xs" style={{ color: "var(--text-subtle)" }}>
+          Account credentials are set once and can't be edited later.
+        </p>
+
+        <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+          <div>
+            <label className="label">Account type</label>
+            <div
+              className="grid grid-cols-2 gap-1 rounded-lg p-1"
+              style={{ backgroundColor: "var(--bg-elev)", border: "1px solid var(--border-strong)" }}
+            >
+              <SegButton active={authType === "OFFLINE"} onClick={() => setAuthType("OFFLINE")}>
+                Offline
+              </SegButton>
+              <SegButton active={authType === "MICROSOFT"} onClick={() => setAuthType("MICROSOFT")}>
+                Microsoft
+              </SegButton>
+            </div>
+          </div>
+
+          {authType === "OFFLINE" ? (
+            <Field label="Minecraft username">
+              <input
+                required
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="input"
+                placeholder="Bot_01"
+                pattern="[a-zA-Z0-9_\-]+"
+                minLength={2}
+                maxLength={32}
+              />
+            </Field>
+          ) : (
+            <Field label="Microsoft account email">
+              <input
+                required
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="input"
+                placeholder="bot@example.com"
+              />
+            </Field>
+          )}
+
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
               <Field label="Server host">
                 <input
                   required
-                  value={form.serverHost}
-                  onChange={(e) => setForm({ ...form, serverHost: e.target.value })}
+                  value={serverHost}
+                  onChange={(e) => setServerHost(e.target.value)}
                   className="input"
                   placeholder="play.example.com"
                 />
@@ -65,16 +111,17 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
             <Field label="Port">
               <input
                 type="number"
-                value={form.serverPort}
-                onChange={(e) => setForm({ ...form, serverPort: Number(e.target.value) })}
+                value={serverPort}
+                onChange={(e) => setServerPort(Number(e.target.value))}
                 className="input"
               />
             </Field>
           </div>
+
           <Field label="Minecraft version">
             <select
-              value={form.minecraftVersion}
-              onChange={(e) => setForm({ ...form, minecraftVersion: e.target.value })}
+              value={minecraftVersion}
+              onChange={(e) => setMinecraftVersion(e.target.value)}
               className="input"
             >
               <option value={AUTO_DETECT_VERSION}>Auto-detect (recommended)</option>
@@ -85,76 +132,21 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
               ))}
             </select>
           </Field>
-          <Field label="Auth type">
-            <select
-              value={form.authType}
-              onChange={(e) => setForm({ ...form, authType: e.target.value as "OFFLINE" | "MICROSOFT" })}
-              className="input"
-            >
-              <option value="OFFLINE">Offline</option>
-              <option value="MICROSOFT">Microsoft</option>
-            </select>
-          </Field>
 
-          {form.authType === "MICROSOFT" && (
-            <>
-              <Field label="Microsoft account email">
-                <input
-                  type="email"
-                  required
-                  value={form.credentialsSecret}
-                  onChange={(e) => setForm({ ...form, credentialsSecret: e.target.value })}
-                  className="input"
-                  placeholder="bot@example.com"
-                />
-              </Field>
-              <Field label="Microsoft account password">
-                <input
-                  type="password"
-                  required
-                  value={form.credentialsPassword}
-                  onChange={(e) => setForm({ ...form, credentialsPassword: e.target.value })}
-                  className="input"
-                />
-              </Field>
-            </>
-          )}
-
-          <div className="flex items-center gap-4 pt-1 text-sm text-slate-300">
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={form.afkEnabled}
-                onChange={(e) => setForm({ ...form, afkEnabled: e.target.checked })}
-              />
-              AFK
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={form.movementEnabled}
-                onChange={(e) => setForm({ ...form, movementEnabled: e.target.checked })}
-              />
-              Movement
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={form.autoReconnect}
-                onChange={(e) => setForm({ ...form, autoReconnect: e.target.checked })}
-              />
-              Auto-reconnect
-            </label>
+          <div className="flex flex-wrap gap-x-5 gap-y-2 pt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
+            <Toggle checked={afkEnabled} onChange={setAfkEnabled} label="AFK" />
+            <Toggle checked={movementEnabled} onChange={setMovementEnabled} label="Movement" />
+            <Toggle checked={autoReconnect} onChange={setAutoReconnect} label="Auto-reconnect" />
           </div>
 
-          {error && <p className="rounded-md bg-red-950 px-3 py-2 text-sm text-red-400">{error}</p>}
+          {error && <p className="alert-error">{error}</p>}
 
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="btn-secondary">
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose} className="btn btn-ghost">
               Cancel
             </button>
-            <button type="submit" disabled={submitting} className="btn-primary">
-              {submitting ? "Creating..." : "Create account"}
+            <button type="submit" disabled={submitting} className="btn btn-primary">
+              {submitting ? "Creating…" : "Create account"}
             </button>
           </div>
         </form>
@@ -163,11 +155,37 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function SegButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-md py-1.5 text-sm font-medium transition-colors"
+      style={
+        active
+          ? { backgroundColor: "var(--surface-hover)", color: "var(--text)" }
+          : { color: "var(--text-subtle)" }
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <label className="mb-1 block text-xs font-medium text-slate-300">{label}</label>
+      <label className="label">{label}</label>
       {children}
     </div>
+  );
+}
+
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="accent-emerald-500" />
+      {label}
+    </label>
   );
 }

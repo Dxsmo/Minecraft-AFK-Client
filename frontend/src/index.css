@@ -1,34 +1,215 @@
 @import "tailwindcss";
 
+/*
+ * Design system — a restrained, modern dark theme.
+ *
+ * Neutral (zinc) base rather than blue-tinted slate, a single near-white
+ * primary action for a clean SaaS feel, and colour reserved for meaning
+ * (emerald = online, amber = connecting, red = error). Everything is driven by
+ * the CSS variables below so the palette can be tweaked in one place.
+ */
 :root {
   color-scheme: dark;
+
+  --bg: #0a0a0b;
+  --bg-elev: #121214;
+  --surface: #151517;
+  --surface-hover: #1c1c20;
+  --border: #26262a;
+  --border-strong: #33333a;
+
+  --text: #ececee;
+  --text-muted: #9a9aa3;
+  --text-subtle: #6a6a72;
+
+  --accent: #10b981; /* emerald-500, used sparingly for "active/online" */
+  --accent-soft: rgba(16, 185, 129, 0.14);
+
+  --danger: #f87171;
+  --warning: #fbbf24;
+}
+
+* {
+  border-color: var(--border);
 }
 
 body {
-  @apply bg-slate-950 text-slate-100 antialiased;
+  background-color: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
-/* Terminal-style console, intentionally distinct from the rest of the app */
-.console-output {
-  @apply bg-black text-slate-200 font-mono text-sm rounded-lg p-4 overflow-y-auto border border-slate-800;
+/* Subtle depth for full-page auth screens. */
+.app-aurora {
+  background:
+    radial-gradient(55rem 38rem at 50% -12rem, rgba(16, 185, 129, 0.08), transparent 70%),
+    var(--bg);
 }
 
-.input {
-  @apply w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-slate-500 focus:ring-1 focus:ring-slate-500;
+@layer components {
+  .card {
+    background-color: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 0.85rem;
+  }
+
+  .card-hover {
+    transition: border-color 0.15s ease, background-color 0.15s ease;
+  }
+  .card-hover:hover {
+    border-color: var(--border-strong);
+    background-color: var(--surface-hover);
+  }
+
+  .input {
+    width: 100%;
+    border-radius: 0.6rem;
+    border: 1px solid var(--border-strong);
+    background-color: var(--bg-elev);
+    padding: 0.5rem 0.7rem;
+    font-size: 0.875rem;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .input::placeholder {
+    color: var(--text-subtle);
+  }
+  .input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  select.input option {
+    background-color: var(--bg-elev);
+    color: var(--text);
+  }
+
+  .label {
+    display: block;
+    margin-bottom: 0.35rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--text-muted);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    border-radius: 0.6rem;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, color 0.15s ease;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .btn-primary {
+    background-color: #fafafa;
+    color: #0a0a0b;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: #ffffff;
+  }
+
+  .btn-secondary {
+    background-color: var(--bg-elev);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background-color: var(--surface-hover);
+    border-color: #43434c;
+  }
+
+  .btn-ghost {
+    background-color: transparent;
+    color: var(--text-muted);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background-color: var(--surface-hover);
+    color: var(--text);
+  }
+
+  .btn-danger {
+    background-color: transparent;
+    border: 1px solid rgba(248, 113, 113, 0.28);
+    color: var(--danger);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background-color: rgba(248, 113, 113, 0.12);
+    border-color: rgba(248, 113, 113, 0.5);
+  }
+
+  .btn-sm {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.78rem;
+    border-radius: 0.5rem;
+  }
+
+  .alert-error {
+    border-radius: 0.6rem;
+    border: 1px solid rgba(248, 113, 113, 0.25);
+    background-color: rgba(248, 113, 113, 0.08);
+    padding: 0.55rem 0.8rem;
+    font-size: 0.85rem;
+    color: #fca5a5;
+  }
+  .alert-success {
+    border-radius: 0.6rem;
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    background-color: rgba(16, 185, 129, 0.08);
+    padding: 0.55rem 0.8rem;
+    font-size: 0.85rem;
+    color: #6ee7b7;
+  }
+
+  .nav-idle {
+    color: var(--text-muted);
+  }
+  .nav-idle:hover {
+    background-color: var(--surface-hover);
+    color: var(--text);
+  }
+  .nav-active {
+    background-color: var(--surface-hover);
+    color: var(--text);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+
+  /* Terminal-style console, intentionally distinct from the rest of the app. */
+  .console-output {
+    background-color: #060607;
+    color: #d4d4d8;
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    font-size: 0.82rem;
+    line-height: 1.55;
+    border-radius: 0.75rem;
+    border: 1px solid var(--border);
+    padding: 0.9rem 1rem;
+    overflow-y: auto;
+  }
 }
 
-.btn-primary {
-  @apply rounded-md bg-slate-200 px-4 py-2 text-sm font-medium text-slate-900 hover:bg-white disabled:opacity-50;
+/* Slim, unobtrusive scrollbars that match the theme. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
-
-.btn-secondary {
-  @apply rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40;
+::-webkit-scrollbar-thumb {
+  background-color: #2c2c31;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
-
-.btn-danger {
-  @apply rounded-md border border-red-900 bg-red-950 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-900/60 disabled:opacity-40;
-}
-
-.card {
-  @apply rounded-xl border border-slate-800 bg-slate-900;
+::-webkit-scrollbar-thumb:hover {
+  background-color: #3a3a42;
 }
