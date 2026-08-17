@@ -14,6 +14,10 @@ export const AUTO_DETECT_VERSION = "";
  * package bundled with the backend). Newest first for a convenient dropdown.
  */
 export const MINECRAFT_VERSIONS = [
+  "26.2",
+  "26.1.2",
+  "26.1.1",
+  "26.1",
   "1.21.11",
   "1.21.10",
   "1.21.9",

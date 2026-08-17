@@ -32,7 +32,7 @@ Minecraft Server(s)
 | Layer     | Choice                                                        |
 |-----------|----------------------------------------------------------------|
 | Backend   | Node.js 20+, TypeScript, Fastify, `@fastify/websocket`         |
-| Minecraft | Mineflayer                                                     |
+| Minecraft | Mineflayer (pinned to a specific GitHub commit, see below)     |
 | Database  | SQLite via Prisma ORM                                          |
 | Auth      | Argon2id password hashing, **server-side sessions** (cookie + DB), CSRF double-submit cookie |
 | Logging   | Pino (structured JSON), secrets redacted                       |
@@ -203,11 +203,47 @@ in the tab list). To avoid getting stuck showing `CONNECTING...`
 indefinitely in that case, `MinecraftClient` also treats the mandatory
 initial position-sync packet (`forcedMove`) as sufficient evidence of a
 successful join — whichever of `spawn`/`forcedMove` arrives first marks
-the client `ONLINE`. Separately, a connection attempt is only abandoned
-and retried once **no packets at all** have been received from the
-server for 90 seconds (not a fixed timer from the start of the attempt),
-so a server that's slowly working through a join queue but still
-exchanging keep-alives with us isn't prematurely disconnected.
+the client `ONLINE`. A connection attempt is abandoned and retried if
+either (a) **no packets at all** have been received from the server for
+90 seconds, or (b) the attempt has been running for more than 3 minutes
+in total regardless of packet activity — the latter specifically catches
+servers whose anti-bot/verification systems hold a connection in limbo
+indefinitely (still exchanging keep-alives) without ever releasing it
+into actual play.
+
+### Mineflayer version pin (tracking new Minecraft releases)
+
+Mineflayer's last npm release (`4.37.1`) does not yet support every very
+recent Minecraft version (e.g. the `26.x` release line) — protocol
+support for new versions typically lands on the project's `master`
+branch on GitHub before it's cut into an npm release. To get support for
+the newest versions without waiting on an npm release, `backend/package.json`
+pins Mineflayer directly to a specific GitHub commit instead of an npm
+version range:
+
+```
+"mineflayer": "github:PrismarineJS/mineflayer#<commit-sha>"
+```
+
+**To update this pin** (e.g. once a new Minecraft version is released and
+support is merged upstream): check
+[PrismarineJS/mineflayer](https://github.com/PrismarineJS/mineflayer) for
+the latest relevant commit on `master`, update the SHA in
+`backend/package.json`, then run `npm install` in `backend/` and rebuild.
+Pinning an exact commit (rather than tracking `master` directly) keeps
+builds reproducible — `master` can change under you at any time otherwise.
+
+**Important caveat:** getting Mineflayer to recognize a server's protocol
+version is necessary but not always sufficient to successfully join.
+Some servers run anti-bot/verification systems (common on public survival
+servers) that hold *any* automated/headless client in a "limbo" state
+indefinitely — visible in the player list, but never actually completing
+the join sequence — regardless of which bot library or protocol version
+is used. If a specific account/server combination consistently times out
+after "Server requested a resource pack" with no further progress even
+after a version update, this is the most likely explanation, and it's not
+something fixable from the client side. Check whether the server
+documents any bot-verification requirements before assuming it's a bug.
 
 ### AFK / Movement behavior system
 

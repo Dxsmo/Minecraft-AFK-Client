@@ -191,9 +191,12 @@ case a schema migration needs to be rolled back.
 | Symptom | Likely cause / fix |
 |---|---|
 | `docker compose up` fails building `backend` (argon2) | Native module build tools missing — the provided `Dockerfile` installs `python3 make g++` in the build stage; if building outside Docker, install those manually. |
+| `npm install`/`docker compose build` fails fetching `mineflayer` | The backend pins Mineflayer to a specific GitHub commit (see README "Mineflayer version pin") instead of an npm version — this requires outbound network access to `github.com` during install/build, in addition to the npm registry. If your build environment blocks direct git access, this step will fail. |
 | Login always returns 401 | Check `SESSION_COOKIE_SECURE` — if `true` but you're testing over plain HTTP, the cookie won't be sent back. Use `false` only for local HTTP dev. |
 | `403 Invalid or missing CSRF token` | The frontend must read the non-HttpOnly `afk_csrf` cookie and send it as `x-csrf-token` on mutating requests — this is already handled by `frontend/src/lib/api.ts`; if calling the API directly (e.g. via curl), you must do the same. |
 | Bot immediately disconnects with `RECONNECTING` looping | Check `serverHost`/`serverPort`/`minecraftVersion` match the target server; view the account's console for the exact kick/error reason. |
+| `Server version 'X' is not supported` | Mineflayer doesn't yet support that Minecraft version. Check the README's "Mineflayer version pin" section for how to update to a newer commit that adds support, if one exists upstream. |
+| Bot gets stuck on `CONNECTING...`/`RECONNECTING` past "Server requested a resource pack" with no further progress, even with a supported version | Likely an anti-bot/verification system on the server holding automated clients in limbo — not fixable client-side. See the README's "Mineflayer version pin" section for details. |
 | Bot can run `/gamemode` etc. but not other commands | Expected — the Minecraft server's own permission system still applies; grant the bot account OP or the relevant permission-plugin node on the server side. |
 | Caddy won't issue a certificate | Ports 80/443 must be reachable from the internet for HTTP-01 challenge, or use Cloudflare DNS-01/Origin Certificate instead (see section 5). |
 | High memory usage on the Pi | Each connected Mineflayer bot uses a modest but non-trivial amount of memory; on 8 GB you can comfortably run several dozen bots, but monitor via `/api/system/status` and `docker stats`. |
