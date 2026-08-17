@@ -46,6 +46,9 @@ function baseConfig(overrides: Partial<ClientRuntimeConfig> = {}): ClientRuntime
     movementEnabled: false,
     afkIntervalSeconds: 30,
     autoReconnect: true,
+    autoCommandEnabled: false,
+    autoCommandText: "",
+    autoCommandIntervalMinutes: 5,
     ...overrides,
   };
 }

@@ -49,7 +49,7 @@ export default async function authRoutes(app: FastifyInstance) {
         return;
       }
 
-      const { sessionId, csrfToken, expiresAt } = await createSession(user.id, {
+      const { sessionId, csrfToken } = await createSession(user.id, {
         userAgent: req.headers["user-agent"],
         ipAddress: req.ip,
       });
@@ -57,10 +57,15 @@ export default async function authRoutes(app: FastifyInstance) {
       await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
       await recordAuditLog({ userId: user.id, action: "USER_LOGIN", targetType: "User", targetId: user.id });
 
+      // No `expires`/`maxAge` set here on purpose: these become browser
+      // *session* cookies, so closing the browser logs the user out, in
+      // addition to the server-side session being wiped on every backend
+      // restart (see server.ts). The DB-side `expiresAt` TTL still applies
+      // as a defense-in-depth absolute expiry.
       reply
-        .setCookie(config.session.cookieName, sessionId, { ...cookieOpts, expires: expiresAt })
+        .setCookie(config.session.cookieName, sessionId, cookieOpts)
         // Non-httpOnly so the SPA can read it and echo it back as a CSRF header.
-        .setCookie("afk_csrf", csrfToken, { ...cookieOpts, httpOnly: false, expires: expiresAt })
+        .setCookie("afk_csrf", csrfToken, { ...cookieOpts, httpOnly: false })
         .send({ id: user.id, username: user.username, role: user.role });
     },
   );
@@ -99,15 +104,15 @@ export default async function authRoutes(app: FastifyInstance) {
       await prisma.user.update({ where: { id: user.id }, data: { passwordHash } });
       await destroyAllUserSessions(user.id);
 
-      const { sessionId, csrfToken, expiresAt } = await createSession(user.id, {
+      const { sessionId, csrfToken } = await createSession(user.id, {
         userAgent: req.headers["user-agent"],
         ipAddress: req.ip,
       });
       await recordAuditLog({ userId: user.id, action: "USER_CHANGE_PASSWORD", targetType: "User", targetId: user.id });
 
       reply
-        .setCookie(config.session.cookieName, sessionId, { ...cookieOpts, expires: expiresAt })
-        .setCookie("afk_csrf", csrfToken, { ...cookieOpts, httpOnly: false, expires: expiresAt })
+        .setCookie(config.session.cookieName, sessionId, cookieOpts)
+        .setCookie("afk_csrf", csrfToken, { ...cookieOpts, httpOnly: false })
         .send({ ok: true });
     },
   );

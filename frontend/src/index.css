@@ -1,26 +1,34 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
-}
-
-.dark body {
-  @apply bg-slate-950 text-slate-100;
+  @apply bg-slate-950 text-slate-100 antialiased;
 }
 
 /* Terminal-style console, intentionally distinct from the rest of the app */
 .console-output {
-  @apply bg-slate-950 text-slate-200 font-mono text-sm rounded-lg p-4 overflow-y-auto;
+  @apply bg-black text-slate-200 font-mono text-sm rounded-lg p-4 overflow-y-auto border border-slate-800;
 }
 
 .input {
-  @apply w-full rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500 focus:ring-1 focus:ring-slate-500;
+  @apply w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500;
+}
+
+.btn-primary {
+  @apply rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50;
 }
 
 .btn-secondary {
-  @apply rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50;
+  @apply rounded-md border border-slate-700 bg-slate-800 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-700 disabled:opacity-40;
+}
+
+.btn-danger {
+  @apply rounded-md border border-red-900 bg-red-950 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-900/60 disabled:opacity-40;
+}
+
+.card {
+  @apply rounded-xl border border-slate-800 bg-slate-900;
 }

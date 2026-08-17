@@ -69,6 +69,16 @@ export async function destroyAllUserSessions(userId: string): Promise<void> {
   await prisma.session.deleteMany({ where: { userId } });
 }
 
+/**
+ * Wipes every session on the server. Called once at process startup so a
+ * backend restart always forces everyone to log in again (in addition to
+ * the login/change-password cookies being non-persistent browser-session
+ * cookies, which handle the "closing the browser" case).
+ */
+export async function clearAllSessions(): Promise<void> {
+  await prisma.session.deleteMany({});
+}
+
 /** Periodically clears expired sessions to keep the table small on the Pi. */
 export async function pruneExpiredSessions(): Promise<void> {
   await prisma.session.deleteMany({ where: { expiresAt: { lt: new Date() } } });

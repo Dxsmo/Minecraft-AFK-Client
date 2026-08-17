@@ -37,14 +37,16 @@ export function SettingsPage() {
   return (
     <div className="max-w-md space-y-6">
       <div>
-        <h1 className="text-xl font-semibold text-slate-900">Settings</h1>
-        <p className="text-sm text-slate-500">Signed in as {user?.username} ({user?.role})</p>
+        <h1 className="text-xl font-semibold text-slate-100">Settings</h1>
+        <p className="text-sm text-slate-500">
+          Signed in as {user?.username} ({user?.role})
+        </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-3 rounded-xl border border-slate-200 bg-white p-5">
-        <h2 className="text-sm font-semibold text-slate-900">Change password</h2>
+      <form onSubmit={handleSubmit} className="card space-y-3 p-5">
+        <h2 className="text-sm font-semibold text-slate-100">Change password</h2>
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-700">Current password</label>
+          <label className="mb-1 block text-xs font-medium text-slate-300">Current password</label>
           <input
             type="password"
             required
@@ -54,7 +56,7 @@ export function SettingsPage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-700">New password</label>
+          <label className="mb-1 block text-xs font-medium text-slate-300">New password</label>
           <input
             type="password"
             required
@@ -65,7 +67,7 @@ export function SettingsPage() {
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-medium text-slate-700">Confirm new password</label>
+          <label className="mb-1 block text-xs font-medium text-slate-300">Confirm new password</label>
           <input
             type="password"
             required
@@ -75,14 +77,10 @@ export function SettingsPage() {
           />
         </div>
 
-        {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
-        {success && <p className="rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">Password updated</p>}
+        {error && <p className="rounded-md bg-red-950 px-3 py-2 text-sm text-red-400">{error}</p>}
+        {success && <p className="rounded-md bg-emerald-950 px-3 py-2 text-sm text-emerald-400">Password updated</p>}
 
-        <button
-          type="submit"
-          disabled={saving}
-          className="w-full rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-        >
+        <button type="submit" disabled={saving} className="btn-primary w-full">
           {saving ? "Saving..." : "Update password"}
         </button>
       </form>

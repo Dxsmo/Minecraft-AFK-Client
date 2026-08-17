@@ -1,4 +1,5 @@
 import "dotenv/config";
+import path from "node:path";
 import { z } from "zod";
 
 /**
@@ -51,6 +52,12 @@ export const config = {
   publicOrigin: env.PUBLIC_ORIGIN,
 
   databaseUrl: env.DATABASE_URL,
+
+  // Directory for persisted runtime data: SQLite DB lives here (see
+  // DATABASE_URL) and so does the per-account Microsoft auth token cache
+  // (backend/data/mc-auth-cache/<accountId>), so both survive container
+  // restarts via the same Docker volume mount.
+  dataDir: path.resolve(process.cwd(), "data"),
 
   session: {
     secret: env.SESSION_SECRET,

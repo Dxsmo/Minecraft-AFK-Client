@@ -43,13 +43,17 @@ export default async function accountsRoutes(app: FastifyInstance) {
     reply.send(await getConsoleLogs(id, limit ? Number(limit) : undefined));
   });
 
-  // ---- Admin-only management ----
+  // ---- Management ----
+  // Creating an account is open to any authenticated user (they become the
+  // sole assignee automatically); editing/deleting an account is allowed for
+  // admins OR any user already assigned to it. Granting *other* users access
+  // (the /assignments endpoint below) stays admin-only by design.
 
-  app.post("/api/minecraft/accounts", { preHandler: [app.requireAdmin, app.requireCsrf] }, async (req, reply) => {
+  app.post("/api/minecraft/accounts", { preHandler: app.requireCsrf }, async (req, reply) => {
     const body = parseOrReject(createAccountSchema, req.body, reply);
     if (!body) return;
 
-    const account = await accountsService.createAccount(body).catch((err) => {
+    const account = await accountsService.createAccount(body, req.session!).catch((err) => {
       if (err.code === "P2002") {
         reply.code(409).send({ error: "Account name already exists" });
         return null;
@@ -71,10 +75,16 @@ export default async function accountsRoutes(app: FastifyInstance) {
     reply.code(201).send(account);
   });
 
-  app.patch("/api/minecraft/accounts/:id", { preHandler: [app.requireAdmin, app.requireCsrf] }, async (req, reply) => {
+  app.patch("/api/minecraft/accounts/:id", { preHandler: app.requireCsrf }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = parseOrReject(updateAccountSchema, req.body, reply);
     if (!body) return;
+
+    const allowed = await accountsService.canAccessAccount(req.session!, id);
+    if (!allowed) {
+      reply.code(404).send({ error: "Account not found" });
+      return;
+    }
 
     const account = await accountsService.updateAccount(id, body).catch(() => null);
     if (!account) {
@@ -95,8 +105,13 @@ export default async function accountsRoutes(app: FastifyInstance) {
     reply.send(account);
   });
 
-  app.delete("/api/minecraft/accounts/:id", { preHandler: [app.requireAdmin, app.requireCsrf] }, async (req, reply) => {
+  app.delete("/api/minecraft/accounts/:id", { preHandler: app.requireCsrf }, async (req, reply) => {
     const { id } = req.params as { id: string };
+    const allowed = await accountsService.canAccessAccount(req.session!, id);
+    if (!allowed) {
+      reply.code(404).send({ error: "Account not found" });
+      return;
+    }
     clientManager.unregister(id);
     await accountsService.deleteAccount(id).catch(() => undefined);
     await recordAuditLog({

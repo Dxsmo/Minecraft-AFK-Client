@@ -85,6 +85,11 @@ model MinecraftAccount {
   movementEnabled    Boolean  @default(false)
   afkIntervalSeconds Int      @default(30)
   autoReconnect      Boolean  @default(true)
+  // Automatically types a configured chat message/command at a fixed interval,
+  // independent of the AFK/movement behaviors.
+  autoCommandEnabled         Boolean @default(false)
+  autoCommandText            String  @default("")
+  autoCommandIntervalMinutes Int     @default(5)
   status             ClientStatus @default(OFFLINE)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt

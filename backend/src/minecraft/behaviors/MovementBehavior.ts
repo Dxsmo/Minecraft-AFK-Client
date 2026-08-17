@@ -1,5 +1,5 @@
 import type { Bot } from "mineflayer";
-import type { Behavior } from "./Behavior.js";
+import type { Behavior, BehaviorContext } from "./Behavior.js";
 
 const STEP_INTERVAL_MS = 8000;
 const WANDER_RADIUS_TICKS = 10; // roughly how many ticks to walk before turning
@@ -14,7 +14,7 @@ export class MovementBehavior implements Behavior {
   readonly name = "movement";
   private timer: NodeJS.Timeout | null = null;
 
-  start(bot: Bot): void {
+  start(bot: Bot, _context: BehaviorContext): void {
     this.stop();
     this.timer = setInterval(() => {
       try {

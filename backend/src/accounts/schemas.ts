@@ -11,6 +11,9 @@ export const createAccountSchema = z.object({
   movementEnabled: z.boolean().default(false),
   afkIntervalSeconds: z.coerce.number().int().min(5).max(3600).default(30),
   autoReconnect: z.boolean().default(true),
+  autoCommandEnabled: z.boolean().default(false),
+  autoCommandText: z.string().max(256).default(""),
+  autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).default(5),
 });
 
 export const updateAccountSchema = createAccountSchema.partial();

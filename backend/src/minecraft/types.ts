@@ -38,6 +38,17 @@ export interface ClientRuntimeConfig {
   movementEnabled: boolean;
   afkIntervalSeconds: number;
   autoReconnect: boolean;
+  autoCommandEnabled: boolean;
+  autoCommandText: string;
+  autoCommandIntervalMinutes: number;
+}
+
+/** Microsoft device-code sign-in details, shown live in the account console/UI. */
+export interface MsaSignInPrompt {
+  verificationUri: string;
+  userCode: string;
+  message: string;
+  expiresAt: string;
 }
 
 export interface ClientStatusSnapshot {
@@ -52,4 +63,5 @@ export interface ClientStatusSnapshot {
   lastError?: string;
   reconnectAttempt: number;
   connectedSince?: string;
+  msaSignIn?: MsaSignInPrompt;
 }

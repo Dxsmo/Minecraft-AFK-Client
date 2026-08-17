@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useAccountConsole } from "../lib/sockets";
@@ -11,12 +11,14 @@ import { AccountSettingsPanel } from "../components/AccountSettingsPanel";
 export function AccountDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [account, setAccount] = useState<MinecraftAccount | null>(null);
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [command, setCommand] = useState("");
   const { logs, status, sendCommand } = useAccountConsole(id);
   const inputRef = useRef<HTMLInputElement>(null);
+  const isAdmin = user?.role === "ADMIN";
 
   async function load() {
     if (!id) return;
@@ -30,7 +32,7 @@ export function AccountDetailPage() {
 
   useEffect(() => {
     void load();
-    if (user?.role === "ADMIN") {
+    if (isAdmin) {
       void api.get<ManagedUser[]>("/users").then(setUsers).catch(() => undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -42,6 +44,17 @@ export function AccountDetailPage() {
       await api.post(`/minecraft/accounts/${id}/${action}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : `Failed to ${action}`);
+    }
+  }
+
+  async function handleDelete() {
+    if (!id || !account) return;
+    if (!confirm(`Delete Minecraft account "${account.name}"? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/minecraft/accounts/${id}`);
+      navigate("/dashboard", { replace: true });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to delete account");
     }
   }
 
@@ -58,16 +71,17 @@ export function AccountDetailPage() {
   }
 
   const liveStatus = status?.status ?? account.status;
+  const msaSignIn = status?.msaSignIn;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <Link to="/dashboard" className="text-xs font-medium text-slate-500 hover:text-slate-700">
+          <Link to="/dashboard" className="text-xs font-medium text-slate-500 hover:text-slate-300">
             &larr; Back to dashboard
           </Link>
           <div className="mt-1 flex items-center gap-3">
-            <h1 className="text-xl font-semibold text-slate-900">{account.name}</h1>
+            <h1 className="text-xl font-semibold text-slate-100">{account.name}</h1>
             <StatusBadge status={liveStatus} />
           </div>
           <p className="text-sm text-slate-500">
@@ -84,14 +98,36 @@ export function AccountDetailPage() {
           <button onClick={() => void runAction("restart")} className="btn-secondary">
             Restart
           </button>
+          <button onClick={() => void handleDelete()} className="btn-danger">
+            Delete
+          </button>
         </div>
       </div>
 
-      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {error && <p className="rounded-md bg-red-950 px-3 py-2 text-sm text-red-400">{error}</p>}
+
+      {msaSignIn && (
+        <div className="rounded-xl border border-amber-800 bg-amber-950/40 p-4 text-sm">
+          <p className="font-semibold text-amber-300">Microsoft sign-in required</p>
+          <p className="mt-1 text-amber-200/90">
+            Open{" "}
+            <a
+              href={msaSignIn.verificationUri}
+              target="_blank"
+              rel="noreferrer"
+              className="font-medium text-amber-300 underline"
+            >
+              {msaSignIn.verificationUri}
+            </a>{" "}
+            and enter the code below to authorize this bot account.
+          </p>
+          <p className="mt-2 text-2xl font-bold tracking-widest text-amber-200">{msaSignIn.userCode}</p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-3">
-          <h2 className="text-sm font-semibold text-slate-900">Live Console</h2>
+          <h2 className="text-sm font-semibold text-slate-100">Live Console</h2>
           <ConsoleView logs={logs} />
           <form onSubmit={handleSendCommand} className="flex gap-2">
             <input
@@ -101,7 +137,7 @@ export function AccountDetailPage() {
               placeholder="/gamemode creative"
               className="input font-mono"
             />
-            <button type="submit" className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:opacity-90">
+            <button type="submit" className="btn-primary">
               Send
             </button>
           </form>
@@ -109,9 +145,9 @@ export function AccountDetailPage() {
 
         <div className="space-y-4">
           {status && (
-            <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm">
-              <h3 className="mb-2 font-semibold text-slate-900">Live info</h3>
-              <dl className="space-y-1 text-slate-600">
+            <div className="card p-4 text-sm">
+              <h3 className="mb-2 font-semibold text-slate-100">Live info</h3>
+              <dl className="space-y-1 text-slate-400">
                 {status.health !== undefined && <Row label="Health" value={`${status.health}/20`} />}
                 {status.food !== undefined && <Row label="Food" value={`${status.food}/20`} />}
                 {status.position && (
@@ -126,9 +162,7 @@ export function AccountDetailPage() {
             </div>
           )}
 
-          {user?.role === "ADMIN" && (
-            <AccountSettingsPanel account={account} users={users} onUpdated={load} />
-          )}
+          <AccountSettingsPanel account={account} users={users} isAdmin={isAdmin} onUpdated={load} />
         </div>
       </div>
     </div>
@@ -139,7 +173,7 @@ function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-4">
       <dt className="text-slate-500">{label}</dt>
-      <dd className="text-right font-medium text-slate-900">{value}</dd>
+      <dd className="text-right font-medium text-slate-100">{value}</dd>
     </div>
   );
 }

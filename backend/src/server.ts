@@ -2,7 +2,7 @@ import { buildApp } from "./app.js";
 import { config } from "./config/config.js";
 import { logger } from "./logging/logger.js";
 import { bootstrapAdmin } from "./auth/bootstrapAdmin.js";
-import { pruneExpiredSessions } from "./auth/session.js";
+import { pruneExpiredSessions, clearAllSessions } from "./auth/session.js";
 import { clientManager } from "./minecraft/ClientManager.js";
 import { disconnectDatabase } from "./database/prisma.js";
 
@@ -10,6 +10,9 @@ const SESSION_PRUNE_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
 async function main() {
   await bootstrapAdmin();
+  // Every backend restart requires everyone to log in again (explicit
+  // product requirement), rather than resuming previously-valid sessions.
+  await clearAllSessions();
   await clientManager.loadAll();
 
   const app = await buildApp();

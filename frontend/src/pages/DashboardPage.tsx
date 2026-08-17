@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
-import { useAuth } from "../lib/auth";
 import { useDashboardSocket } from "../lib/sockets";
 import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { CreateAccountDialog } from "../components/CreateAccountDialog";
 
 export function DashboardPage() {
-  const { user } = useAuth();
   const [accounts, setAccounts] = useState<MinecraftAccount[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -57,21 +55,33 @@ export function DashboardPage() {
     }
   }
 
+  async function deleteAccount(id: string, name: string) {
+    if (!confirm(`Delete Minecraft account "${name}"? This cannot be undone.`)) return;
+    setBusyIds((prev) => new Set(prev).add(id));
+    try {
+      await api.delete(`/minecraft/accounts/${id}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to delete account");
+    } finally {
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-slate-900">Dashboard</h1>
+          <h1 className="text-xl font-semibold text-slate-100">Dashboard</h1>
           <p className="text-sm text-slate-500">Overview of all Minecraft AFK clients</p>
         </div>
-        {user?.role === "ADMIN" && (
-          <button
-            onClick={() => setDialogOpen(true)}
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:opacity-90"
-          >
-            + New account
-          </button>
-        )}
+        <button onClick={() => setDialogOpen(true)} className="btn-primary">
+          + New account
+        </button>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -80,23 +90,21 @@ export function DashboardPage() {
         <SummaryCard label="Errors" value={counts.error} tone="red" />
       </div>
 
-      {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+      {error && <p className="rounded-md bg-red-950 px-3 py-2 text-sm text-red-400">{error}</p>}
 
-      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <div className="card overflow-hidden">
         {accounts === null ? (
           <div className="p-8 text-center text-sm text-slate-500">Loading accounts...</div>
         ) : merged.length === 0 ? (
           <div className="p-12 text-center">
-            <p className="text-sm font-medium text-slate-900">No Minecraft accounts yet</p>
+            <p className="text-sm font-medium text-slate-100">No Minecraft accounts yet</p>
             <p className="mt-1 text-sm text-slate-500">
-              {user?.role === "ADMIN"
-                ? "Create your first account to get started."
-                : "Ask an admin to assign a Minecraft account to your user."}
+              Create your first account to get started, or ask an admin to assign one to you.
             </p>
           </div>
         ) : (
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500">
+            <thead className="border-b border-slate-800 bg-slate-900/60 text-xs uppercase text-slate-500">
               <tr>
                 <th className="px-4 py-3 font-medium">Name</th>
                 <th className="px-4 py-3 font-medium">Status</th>
@@ -104,13 +112,13 @@ export function DashboardPage() {
                 <th className="px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-800">
               {merged.map((account) => {
                 const status = account.live?.status ?? account.status;
                 const busy = busyIds.has(account.id);
                 return (
                   <tr key={account.id}>
-                    <td className="px-4 py-3 font-medium text-slate-900">{account.name}</td>
+                    <td className="px-4 py-3 font-medium text-slate-100">{account.name}</td>
                     <td className="px-4 py-3">
                       <StatusBadge status={status} />
                     </td>
@@ -122,30 +130,37 @@ export function DashboardPage() {
                         <button
                           disabled={busy || status === "ONLINE" || status === "CONNECTING"}
                           onClick={() => void runAction(account.id, "start")}
-                          className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                          className="btn-secondary px-2.5 py-1 text-xs"
                         >
                           Start
                         </button>
                         <button
                           disabled={busy || status === "OFFLINE"}
                           onClick={() => void runAction(account.id, "stop")}
-                          className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                          className="btn-secondary px-2.5 py-1 text-xs"
                         >
                           Stop
                         </button>
                         <button
                           disabled={busy}
                           onClick={() => void runAction(account.id, "restart")}
-                          className="rounded-md border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                          className="btn-secondary px-2.5 py-1 text-xs"
                         >
                           Restart
                         </button>
                         <Link
                           to={`/accounts/${account.id}`}
-                          className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-medium text-white hover:opacity-90"
+                          className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500"
                         >
                           Console
                         </Link>
+                        <button
+                          disabled={busy}
+                          onClick={() => void deleteAccount(account.id, account.name)}
+                          className="btn-danger px-2.5 py-1 text-xs"
+                        >
+                          Delete
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -171,12 +186,12 @@ export function DashboardPage() {
 
 function SummaryCard({ label, value, tone }: { label: string; value: number; tone: "emerald" | "slate" | "red" }) {
   const toneClasses = {
-    emerald: "text-emerald-600",
-    slate: "text-slate-600",
-    red: "text-red-600",
+    emerald: "text-emerald-400",
+    slate: "text-slate-300",
+    red: "text-red-400",
   }[tone];
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5">
+    <div className="card p-5">
       <p className="text-sm text-slate-500">{label}</p>
       <p className={`mt-1 text-2xl font-semibold ${toneClasses}`}>{value}</p>
     </div>

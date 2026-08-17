@@ -8,6 +8,7 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
     serverPort: 25565,
     minecraftVersion: "1.20.4",
     authType: "OFFLINE" as "OFFLINE" | "MICROSOFT",
+    credentialsSecret: "",
     afkEnabled: true,
     movementEnabled: false,
     afkIntervalSeconds: 30,
@@ -21,7 +22,10 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
     setError(null);
     setSubmitting(true);
     try {
-      await api.post("/minecraft/accounts", form);
+      await api.post("/minecraft/accounts", {
+        ...form,
+        credentialsSecret: form.authType === "MICROSOFT" ? form.credentialsSecret || null : null,
+      });
       onCreated();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to create account");
@@ -31,9 +35,9 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
-      <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-lg">
-        <h2 className="text-base font-semibold text-slate-900">New Minecraft account</h2>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+      <div className="card w-full max-w-md p-6">
+        <h2 className="text-base font-semibold text-slate-100">New Minecraft account</h2>
         <form onSubmit={handleSubmit} className="mt-4 space-y-3">
           <Field label="Bot name">
             <input
@@ -83,7 +87,24 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
             </select>
           </Field>
 
-          <div className="flex items-center gap-4 pt-1 text-sm text-slate-700">
+          {form.authType === "MICROSOFT" && (
+            <Field label="Microsoft account email">
+              <input
+                type="email"
+                required
+                value={form.credentialsSecret}
+                onChange={(e) => setForm({ ...form, credentialsSecret: e.target.value })}
+                className="input"
+                placeholder="bot@example.com"
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                No password needed here. After creating, start the account and a Microsoft sign-in link + code
+                will appear directly on the account page.
+              </p>
+            </Field>
+          )}
+
+          <div className="flex items-center gap-4 pt-1 text-sm text-slate-300">
             <label className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -110,21 +131,13 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
             </label>
           </div>
 
-          {error && <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+          {error && <p className="rounded-md bg-red-950 px-3 py-2 text-sm text-red-400">{error}</p>}
 
           <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-md border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
-            >
+            <button type="button" onClick={onClose} className="btn-secondary">
               Cancel
             </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-            >
+            <button type="submit" disabled={submitting} className="btn-primary">
               {submitting ? "Creating..." : "Create account"}
             </button>
           </div>
@@ -137,7 +150,7 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="mb-1 block text-xs font-medium text-slate-700">{label}</label>
+      <label className="mb-1 block text-xs font-medium text-slate-300">{label}</label>
       {children}
     </div>
   );

@@ -21,6 +21,9 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     movementEnabled: account.movementEnabled,
     afkIntervalSeconds: account.afkIntervalSeconds,
     autoReconnect: account.autoReconnect,
+    autoCommandEnabled: account.autoCommandEnabled,
+    autoCommandText: account.autoCommandText,
+    autoCommandIntervalMinutes: account.autoCommandIntervalMinutes,
   };
 }
 
@@ -82,7 +85,12 @@ export class ClientManager {
     client.on("status", (status: ClientStatusSnapshot) => {
       prisma.minecraftAccount
         .update({ where: { id: status.id }, data: { status: status.status } })
-        .catch((err) => logger.error({ err }, "Failed to persist client status"));
+        .catch((err) => {
+          // P2025 = record not found: expected/harmless when the account was
+          // just deleted while its client was still emitting a final status
+          // event (e.g. disconnect during teardown). Anything else is logged.
+          if (err?.code !== "P2025") logger.error({ err }, "Failed to persist client status");
+        });
       for (const listener of this.statusListeners) {
         try {
           listener(status);

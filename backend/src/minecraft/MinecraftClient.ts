@@ -1,14 +1,18 @@
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import mineflayer, { type Bot } from "mineflayer";
 import { BehaviorManager } from "./behaviors/BehaviorManager.js";
-import type { ClientRuntimeConfig, ClientStatus, ClientStatusSnapshot, ConsoleEvent } from "./types.js";
+import type { ClientRuntimeConfig, ClientStatus, ClientStatusSnapshot, ConsoleEvent, MsaSignInPrompt } from "./types.js";
 import { accountLogger } from "../logging/logger.js";
+import { config as appConfig } from "../config/config.js";
 import type { Logger } from "pino";
 
-const BASE_RECONNECT_DELAY_MS = 5000;
-const MAX_RECONNECT_DELAY_MS = 5 * 60 * 1000; // cap backoff at 5 minutes
-const RECONNECT_RESET_AFTER_MS = 60 * 1000; // stable connection this long resets backoff
-const MAX_RECONNECT_ATTEMPTS = 50; // hard stop to avoid literal infinite retry loops
+// Fixed-interval reconnect: every failed/dropped connection retries after
+// exactly this delay (± a little jitter to avoid a thundering herd if many
+// bots drop at once). Deliberately NOT exponential — for a 24/7 AFK bot a
+// steady, predictable retry cadence is preferred over ever-longer waits.
+const RECONNECT_DELAY_MS = 30_000;
+const RECONNECT_JITTER_MS = 2_000;
 
 /**
  * Wraps a single Mineflayer bot connection and exposes a small, explicit
@@ -23,21 +27,27 @@ export class MinecraftClient extends EventEmitter {
   private status: ClientStatus = "OFFLINE";
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
-  private stableConnectionTimer: NodeJS.Timeout | null = null;
   private manuallyStopped = false;
   private connectedSince: Date | null = null;
   private lastError: string | undefined;
+  private msaSignIn: MsaSignInPrompt | undefined;
   private readonly behaviorManager: BehaviorManager;
   private readonly log: Logger;
 
   constructor(private config: ClientRuntimeConfig) {
     super();
     this.log = accountLogger(config.id, config.name);
-    this.behaviorManager = new BehaviorManager({
-      afkEnabled: config.afkEnabled,
-      movementEnabled: config.movementEnabled,
-      afkIntervalSeconds: config.afkIntervalSeconds,
-    });
+    this.behaviorManager = new BehaviorManager(
+      {
+        afkEnabled: config.afkEnabled,
+        movementEnabled: config.movementEnabled,
+        afkIntervalSeconds: config.afkIntervalSeconds,
+        autoCommandEnabled: config.autoCommandEnabled,
+        autoCommandText: config.autoCommandText,
+        autoCommandIntervalMinutes: config.autoCommandIntervalMinutes,
+      },
+      (message) => this.emitConsole("SYSTEM", message),
+    );
   }
 
   updateConfig(config: ClientRuntimeConfig): void {
@@ -46,6 +56,9 @@ export class MinecraftClient extends EventEmitter {
       afkEnabled: config.afkEnabled,
       movementEnabled: config.movementEnabled,
       afkIntervalSeconds: config.afkIntervalSeconds,
+      autoCommandEnabled: config.autoCommandEnabled,
+      autoCommandText: config.autoCommandText,
+      autoCommandIntervalMinutes: config.autoCommandIntervalMinutes,
     });
   }
 
@@ -64,6 +77,7 @@ export class MinecraftClient extends EventEmitter {
       lastError: this.lastError,
       reconnectAttempt: this.reconnectAttempt,
       connectedSince: this.connectedSince?.toISOString(),
+      msaSignIn: this.msaSignIn,
     };
   }
 
@@ -80,6 +94,7 @@ export class MinecraftClient extends EventEmitter {
     this.clearReconnectTimer();
     this.setStatus("DISCONNECTING");
     this.teardownBot("Manual disconnect requested");
+    this.msaSignIn = undefined;
     this.setStatus("OFFLINE");
   }
 
@@ -119,15 +134,42 @@ export class MinecraftClient extends EventEmitter {
   private beginConnection(): void {
     this.setStatus(this.reconnectAttempt > 0 ? "RECONNECTING" : "CONNECTING");
     this.emitConsole("SYSTEM", `Connecting to ${this.config.serverHost}:${this.config.serverPort}...`);
+    this.msaSignIn = undefined;
 
     try {
-      const bot = mineflayer.createBot({
+      // NOTE: minecraft-protocol's TypeScript types incorrectly declare
+      // `onMsaCode`'s payload with snake_case fields, but the real runtime
+      // object from @azure/msal-node uses camelCase (verified against the
+      // installed library source). We type our callback with the actual
+      // runtime shape and cast the options object to bypass the incorrect
+      // ambient types rather than the (wrong) declared type.
+      const botOptions = {
         host: this.config.serverHost,
         port: this.config.serverPort,
         username: this.config.authType === "OFFLINE" ? this.config.name : this.config.credentialsSecret ?? this.config.name,
         version: this.config.minecraftVersion || undefined,
         auth: this.config.authType === "MICROSOFT" ? "microsoft" : "offline",
-      });
+        // Persist the Microsoft auth token cache per-account inside the data
+        // dir (Docker volume), so re-authentication is only needed once.
+        profilesFolder:
+          this.config.authType === "MICROSOFT"
+            ? path.join(appConfig.dataDir, "mc-auth-cache", this.config.id)
+            : undefined,
+        onMsaCode: (data: { verificationUri: string; userCode: string; message: string; expiresIn: number }) => {
+          this.msaSignIn = {
+            verificationUri: data.verificationUri,
+            userCode: data.userCode,
+            message: data.message,
+            expiresAt: new Date(Date.now() + data.expiresIn * 1000).toISOString(),
+          };
+          this.emitConsole(
+            "SYSTEM",
+            `Microsoft sign-in required: open ${data.verificationUri} and enter code ${data.userCode}`,
+          );
+          this.emit("status", this.getStatus());
+        },
+      };
+      const bot = mineflayer.createBot(botOptions as unknown as Parameters<typeof mineflayer.createBot>[0]);
       this.attachBotHandlers(bot);
       this.bot = bot;
     } catch (err) {
@@ -139,13 +181,10 @@ export class MinecraftClient extends EventEmitter {
     bot.once("spawn", () => {
       this.reconnectAttempt = 0;
       this.connectedSince = new Date();
+      this.msaSignIn = undefined;
       this.setStatus("ONLINE");
       this.emitConsole("SYSTEM", "Spawned into world");
       this.behaviorManager.start(bot);
-
-      this.stableConnectionTimer = setTimeout(() => {
-        this.reconnectAttempt = 0;
-      }, RECONNECT_RESET_AFTER_MS);
     });
 
     bot.on("chat", (username: string, message: string) => {
@@ -173,7 +212,6 @@ export class MinecraftClient extends EventEmitter {
 
     bot.on("end", (reason?: string) => {
       this.behaviorManager.stop();
-      if (this.stableConnectionTimer) clearTimeout(this.stableConnectionTimer);
       this.connectedSince = null;
       this.bot = null;
 
@@ -193,18 +231,9 @@ export class MinecraftClient extends EventEmitter {
       this.setStatus("OFFLINE");
       return;
     }
-    if (this.reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
-      this.emitConsole(
-        "ERROR",
-        `Giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts. Start the client manually to retry.`,
-      );
-      this.setStatus("ERROR");
-      return;
-    }
 
     this.reconnectAttempt += 1;
-    const exponential = BASE_RECONNECT_DELAY_MS * 2 ** (this.reconnectAttempt - 1);
-    const delay = Math.min(exponential, MAX_RECONNECT_DELAY_MS) + Math.floor(Math.random() * 1000);
+    const delay = RECONNECT_DELAY_MS + Math.floor(Math.random() * RECONNECT_JITTER_MS);
 
     this.setStatus("RECONNECTING");
     this.emitConsole("SYSTEM", `Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempt})...`);
@@ -224,7 +253,6 @@ export class MinecraftClient extends EventEmitter {
   private teardownBot(reason: string): void {
     this.clearReconnectTimer();
     this.behaviorManager.stop();
-    if (this.stableConnectionTimer) clearTimeout(this.stableConnectionTimer);
     if (this.bot) {
       try {
         this.bot.quit(reason);

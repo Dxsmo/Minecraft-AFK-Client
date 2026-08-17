@@ -32,6 +32,13 @@ export interface ManagedUser {
   lastLoginAt: string | null;
 }
 
+export interface MsaSignInPrompt {
+  verificationUri: string;
+  userCode: string;
+  message: string;
+  expiresAt: string;
+}
+
 export interface LiveStatus {
   id: string;
   name: string;
@@ -44,6 +51,7 @@ export interface LiveStatus {
   lastError?: string;
   reconnectAttempt: number;
   connectedSince?: string;
+  msaSignIn?: MsaSignInPrompt;
 }
 
 export interface MinecraftAccount {
@@ -57,6 +65,9 @@ export interface MinecraftAccount {
   movementEnabled: boolean;
   afkIntervalSeconds: number;
   autoReconnect: boolean;
+  autoCommandEnabled: boolean;
+  autoCommandText: string;
+  autoCommandIntervalMinutes: number;
   status: ClientStatus;
   createdAt: string;
   updatedAt: string;

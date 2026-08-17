@@ -18,6 +18,9 @@ const publicAccountSelect = {
   movementEnabled: true,
   afkIntervalSeconds: true,
   autoReconnect: true,
+  autoCommandEnabled: true,
+  autoCommandText: true,
+  autoCommandIntervalMinutes: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -55,8 +58,17 @@ export async function canAccessAccount(session: SessionContext, id: string): Pro
   return !!assignment;
 }
 
-export async function createAccount(input: CreateAccountInput) {
-  return prisma.minecraftAccount.create({ data: input, select: publicAccountSelect });
+export async function createAccount(input: CreateAccountInput, creator: SessionContext) {
+  const account = await prisma.minecraftAccount.create({ data: input, select: publicAccountSelect });
+
+  // Non-admin creators automatically get access to their own account (admins
+  // already see/manage every account regardless of assignment, so no row is
+  // needed for them). Admins can grant additional users access afterwards.
+  if (creator.user.role !== "ADMIN") {
+    await setAssignments(account.id, [creator.user.id]);
+    return (await getAccountForSession(creator, account.id))!;
+  }
+  return account;
 }
 
 export async function updateAccount(id: string, input: UpdateAccountInput) {

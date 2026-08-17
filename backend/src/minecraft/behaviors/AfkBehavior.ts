@@ -1,5 +1,5 @@
 import type { Bot } from "mineflayer";
-import type { Behavior } from "./Behavior.js";
+import type { Behavior, BehaviorContext } from "./Behavior.js";
 
 /**
  * Keeps the bot from being kicked for inactivity by periodically performing
@@ -12,7 +12,7 @@ export class AfkBehavior implements Behavior {
 
   constructor(private readonly intervalSeconds: number) {}
 
-  start(bot: Bot): void {
+  start(bot: Bot, _context: BehaviorContext): void {
     this.stop();
     this.timer = setInterval(() => {
       try {
