@@ -17,7 +17,10 @@ class FakeBot extends EventEmitter {
   setControlState = vi.fn();
   look = vi.fn();
   acceptResourcePack = vi.fn();
-  _client = new EventEmitter();
+  _client = Object.assign(new EventEmitter(), {
+    registerChannel: vi.fn(),
+    writeChannel: vi.fn(),
+  });
 }
 
 const createdBots: FakeBot[] = [];
@@ -132,12 +135,43 @@ describe("MinecraftClient state machine", () => {
     expect(events.some((e) => e.includes("should be ignored"))).toBe(false);
   });
 
-  it("auto-accepts a server resource pack instead of leaving the join blocked", () => {
-    const client = new MinecraftClient(baseConfig());
-    client.connect();
-    createdBots[0].emit("resourcePack", "https://example.com/pack.zip");
+  it("downloads and auto-accepts a server resource pack instead of leaving the join blocked", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
-    expect(createdBots[0].acceptResourcePack).toHaveBeenCalled();
+    try {
+      const client = new MinecraftClient(baseConfig());
+      client.connect();
+      createdBots[0].emit("resourcePack", "https://example.com/pack.zip");
+
+      // The download+accept happens asynchronously after the event fires.
+      await vi.waitFor(() => {
+        expect(createdBots[0].acceptResourcePack).toHaveBeenCalled();
+      });
+      expect(fetchMock).toHaveBeenCalledWith("https://example.com/pack.zip");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("still accepts the resource pack even if the download itself fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network error")));
+
+    try {
+      const client = new MinecraftClient(baseConfig());
+      client.connect();
+      createdBots[0].emit("resourcePack", "https://example.com/pack.zip");
+
+      await vi.waitFor(() => {
+        expect(createdBots[0].acceptResourcePack).toHaveBeenCalled();
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("forces a reconnect if the connection is stuck without any server activity (watchdog)", () => {

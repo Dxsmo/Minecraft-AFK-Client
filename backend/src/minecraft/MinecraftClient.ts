@@ -218,6 +218,30 @@ export class MinecraftClient extends EventEmitter {
       this.attachBotHandlers(bot);
       this.bot = bot;
 
+      // mineflayer's own "minecraft:brand" plugin-message logic (game.js)
+      // only fires once the PLAY-state 'login' packet arrives — but real
+      // vanilla clients send their brand identification during the
+      // CONFIGURATION phase instead (this moved in the 1.20.2+ protocol
+      // redesign). Some servers wait for it before ever sending
+      // finish_configuration. Send it ourselves as soon as we enter
+      // configuration state, to match real client behavior as closely as
+      // possible for servers that gate on this. Uses `.on` (not `.once`)
+      // because the state transitions through HANDSHAKING -> LOGIN before
+      // ever reaching CONFIGURATION — a `.once` listener would consume the
+      // wrong (earlier) transition and never fire again.
+      let brandSent = false;
+      bot._client.on("state", (newState: string) => {
+        if (newState !== "configuration" || brandSent) return;
+        brandSent = true;
+        try {
+          bot._client.registerChannel("minecraft:brand", ["string", []]);
+          bot._client.writeChannel("minecraft:brand", "vanilla");
+          this.emitConsole("SYSTEM", "Sent client brand identification during configuration phase");
+        } catch (err) {
+          this.log.warn({ err }, "Failed to send brand during configuration phase");
+        }
+      });
+
       // Any raw protocol packet counts as activity — this lets us
       // distinguish "the server is slowly working through an anti-bot/
       // verification queue but still talking to us" from "the connection
@@ -250,16 +274,35 @@ export class MinecraftClient extends EventEmitter {
     });
 
     // Some servers require accepting a resource/texture pack before letting
-    // the player fully join. Since this is a headless bot with no renderer,
-    // we always auto-accept immediately so the join isn't blocked waiting
-    // for a response that would otherwise never come.
+    // the player fully join, and may specifically verify that the pack was
+    // actually fetched (e.g. via their CDN's access logs) rather than just
+    // trusting the client's say-so. Since this is a headless bot with no
+    // renderer, we can't actually apply the pack, but we DO perform a real
+    // HTTP GET against the pack URL first (discarding the body) so our
+    // network behavior matches a real client as closely as possible, before
+    // telling the server we've accepted and "loaded" it.
     bot.on("resourcePack", (url: string) => {
-      this.emitConsole("SYSTEM", `Server requested a resource pack (${url}); auto-accepting...`);
-      try {
-        bot.acceptResourcePack();
-      } catch (err) {
-        this.emitConsole("WARNING", `Failed to auto-accept resource pack: ${(err as Error).message}`);
-      }
+      this.emitConsole("SYSTEM", `Server requested a resource pack (${url}); downloading and accepting...`);
+      void (async () => {
+        try {
+          const response = await fetch(url);
+          // Drain the body so the underlying connection is fully used/closed
+          // (mirrors an actual client download rather than an aborted request).
+          await response.arrayBuffer().catch(() => undefined);
+          this.emitConsole(
+            "SYSTEM",
+            `Resource pack download ${response.ok ? "completed" : `failed (HTTP ${response.status})`}`,
+          );
+        } catch (err) {
+          this.emitConsole("WARNING", `Resource pack download failed: ${(err as Error).message}`);
+        } finally {
+          try {
+            bot.acceptResourcePack();
+          } catch (err) {
+            this.emitConsole("WARNING", `Failed to accept resource pack: ${(err as Error).message}`);
+          }
+        }
+      })();
     });
 
     bot.on("chat", (username: string, message: string) => {
