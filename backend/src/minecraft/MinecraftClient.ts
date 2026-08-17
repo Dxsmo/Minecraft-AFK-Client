@@ -1,25 +1,43 @@
 import { EventEmitter } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createReadStream, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
-import type { ClientRuntimeConfig, ClientStatus, ClientStatusSnapshot, ConsoleEvent, ConsoleEventType, MsaSignInPrompt } from "./types.js";
+import type {
+  ClientRuntimeConfig,
+  ClientStatus,
+  ClientStatusSnapshot,
+  ConsoleEvent,
+  ConsoleEventType,
+  MsaSignInPrompt,
+  ProfileEvent,
+} from "./types.js";
 import { accountLogger } from "../logging/logger.js";
 import { config as appConfig } from "../config/config.js";
 import type { Logger } from "pino";
 
-// Fixed-interval reconnect: exactly 30 seconds per retry (no exponential backoff).
+// Fixed-interval reconnect: ~30 seconds per retry (no exponential backoff), as
+// requested. A little jitter avoids thundering-herd reconnects when many bots
+// drop at once.
 const RECONNECT_DELAY_MS = 30_000;
 const RECONNECT_JITTER_MS = 2_000;
 
-// Azalea bot subprocess doesn't need inactivity watchdog (it reports
-// disconnects directly), but we keep a safety timeout in case the subprocess
-// itself hangs after being spawned.
-const SUBPROCESS_HANG_TIMEOUT_MS = 5 * 60_000; // 5 minutes max for a single attempt
+// Safety net: if a spawned bot never reaches ONLINE or reports a failure within
+// this window, we treat the attempt as hung and recycle it.
+const SUBPROCESS_HANG_TIMEOUT_MS = 5 * 60_000;
 
 /**
- * Wraps the Azalea Rust bot subprocess and exposes a state machine plus
- * console/chat event streaming. One instance == one Minecraft account.
+ * Wraps the Azalea Rust bot subprocess (one per Minecraft account) and exposes
+ * a small state machine plus console/status/profile event streams.
+ *
+ * The Rust process speaks NDJSON over stdio: we send a config line then command
+ * lines, and read one JSON event per stdout line. Node owns the reconnect
+ * policy — the Rust bot simply exits when a connection ends, and we respawn it.
+ *
+ * Emitted events:
+ *   - "status"  (ClientStatusSnapshot)  status/detail changed
+ *   - "console" (ConsoleEvent)          a console line to display/persist
+ *   - "profile" (ProfileEvent)          resolved Minecraft username/uuid
  */
 export class MinecraftClient extends EventEmitter {
   private subprocess: ChildProcess | null = null;
@@ -28,14 +46,15 @@ export class MinecraftClient extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private hangTimer: NodeJS.Timeout | null = null;
   private manuallyStopped = false;
+  /** Guards against a single connection attempt being "ended" more than once. */
+  private connectionEnded = false;
   private connectedSince: Date | null = null;
   private lastError: string | undefined;
   private msaSignIn: MsaSignInPrompt | undefined;
   private readonly log: Logger;
 
-  private botName: string = "Unknown";
-  private health: number = 20;
-  private food: number = 20;
+  private health = 20;
+  private food = 20;
 
   constructor(private config: ClientRuntimeConfig) {
     super();
@@ -44,9 +63,9 @@ export class MinecraftClient extends EventEmitter {
 
   updateConfig(config: ClientRuntimeConfig): void {
     this.config = config;
-    // If the bot is online, send a Configure command to update behavior settings live.
+    // Push behavior settings to a running bot so changes take effect live.
     if (this.subprocess && this.status === "ONLINE") {
-      const cmd = {
+      this.sendToBot({
         type: "configure",
         afk_enabled: config.afkEnabled,
         movement_enabled: config.movementEnabled,
@@ -54,8 +73,7 @@ export class MinecraftClient extends EventEmitter {
         auto_command_enabled: config.autoCommandEnabled,
         auto_command_text: config.autoCommandText,
         auto_command_interval_minutes: config.autoCommandIntervalMinutes,
-      };
-      this.subprocess.stdin?.write(JSON.stringify(cmd) + "\n");
+      });
     }
   }
 
@@ -76,7 +94,7 @@ export class MinecraftClient extends EventEmitter {
   }
 
   connect(): void {
-    if (this.status !== "OFFLINE") return;
+    if (this.status !== "OFFLINE" && this.status !== "ERROR") return;
     this.manuallyStopped = false;
     this.clearReconnectTimer();
     this.reconnectAttempt = 0;
@@ -86,13 +104,17 @@ export class MinecraftClient extends EventEmitter {
   disconnect(): void {
     this.manuallyStopped = true;
     this.clearReconnectTimer();
+    this.clearHangTimer();
     this.teardownSubprocess("Manual disconnect requested");
+    this.setStatus("OFFLINE");
   }
 
   restart(): void {
     this.manuallyStopped = false;
     this.clearReconnectTimer();
+    this.clearHangTimer();
     this.teardownSubprocess("Restart requested");
+    this.reconnectAttempt = 0;
     this.attemptConnect();
   }
 
@@ -101,8 +123,7 @@ export class MinecraftClient extends EventEmitter {
       this.emitConsole("ERROR", "Bot is not online, cannot send command");
       return false;
     }
-    const cmd = { type: "chat", text: command };
-    this.subprocess.stdin?.write(JSON.stringify(cmd) + "\n");
+    this.sendToBot({ type: "chat", text: command });
     return true;
   }
 
@@ -111,95 +132,100 @@ export class MinecraftClient extends EventEmitter {
   }
 
   private attemptConnect(): void {
+    this.connectionEnded = false;
     this.reconnectAttempt++;
     this.setStatus(this.reconnectAttempt > 1 ? "RECONNECTING" : "CONNECTING");
-
-    this.log.info(
-      `Connection attempt ${this.reconnectAttempt} to ${this.config.serverHost}:${this.config.serverPort}`
-    );
-
     this.lastError = undefined;
 
-    // Find the azalea-bot binary (built during docker build, or in development at rust-bot/target/debug)
+    this.log.info(
+      `Connection attempt ${this.reconnectAttempt} to ${this.config.serverHost}:${this.config.serverPort}`,
+    );
+
     const botBinaryPath = this.findBotBinary();
     if (!botBinaryPath) {
       const err = "azalea-bot binary not found";
       this.log.error(err);
+      this.emitConsole("ERROR", err);
       this.handleConnectionFailure(err);
       return;
     }
 
+    let child: ChildProcess;
     try {
-      this.subprocess = spawn(botBinaryPath, [], { stdio: ["pipe", "pipe", "pipe"] });
-
-      // Parse NDJSON from stdout
-      const rl = readline.createInterface({
-        input: this.subprocess.stdout!,
-        crlfDelay: Infinity,
+      // RUST_LOG=error keeps Azalea's own logging off stdout so it can't
+      // interfere with the NDJSON protocol (any stray line is ignored anyway).
+      child = spawn(botBinaryPath, [], {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, RUST_LOG: "error" },
       });
-
-      rl.on("line", (line) => {
-        try {
-          const event = JSON.parse(line);
-          this.handleRustBotEvent(event);
-        } catch (err) {
-          this.log.warn({ err, line }, "Failed to parse bot event");
-        }
-      });
-
-      // Log stderr
-      this.subprocess.stderr?.on("data", (data) => {
-        this.log.debug({ data: data.toString() }, "Bot stderr");
-      });
-
-      // Subprocess exit = connection ended
-      this.subprocess.on("exit", (code, signal) => {
-        this.log.info({ code, signal }, "Bot subprocess exited");
-        if (!this.manuallyStopped) {
-          this.handleConnectionFailure(`Subprocess exited with code ${code}`);
-        } else {
-          this.teardownSubprocess("Subprocess exited (after manual stop)");
-        }
-      });
-
-      this.subprocess.on("error", (err) => {
-        this.log.error(err, "Bot subprocess error");
-        this.handleConnectionFailure(err.message);
-      });
-
-      // Send initial config
-      const cacheDir = path.join(appConfig.dataDir, "bot-cache", this.config.id);
-      const minecraftVersion = this.config.minecraftVersion || "";
-
-      const config = {
-        host: this.config.serverHost,
-        port: this.config.serverPort,
-        auth_type: this.config.authType === "MICROSOFT" ? "microsoft" : "offline",
-        username: this.config.name,
-        email: this.config.credentialsSecret,
-        cache_dir: cacheDir,
-        afk_enabled: this.config.afkEnabled,
-        movement_enabled: this.config.movementEnabled,
-        afk_interval_seconds: this.config.afkIntervalSeconds,
-        auto_command_enabled: this.config.autoCommandEnabled,
-        auto_command_text: this.config.autoCommandText,
-        auto_command_interval_minutes: this.config.autoCommandIntervalMinutes,
-      };
-
-      this.subprocess.stdin!.write(JSON.stringify(config) + "\n");
-
-      // Safety timeout: if subprocess hasn't reached ONLINE or failed after this long, kill it.
-      this.hangTimer = setTimeout(() => {
-        if (this.status === "CONNECTING" || this.status === "RECONNECTING") {
-          this.log.warn("Bot subprocess hang timeout, killing process");
-          this.handleConnectionFailure("Connection timed out (subprocess hang)");
-        }
-      }, SUBPROCESS_HANG_TIMEOUT_MS);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err }, `Failed to spawn bot subprocess: ${message}`);
       this.handleConnectionFailure(message);
+      return;
     }
+
+    this.subprocess = child;
+
+    const rl = readline.createInterface({ input: child.stdout!, crlfDelay: Infinity });
+    rl.on("line", (line) => {
+      if (child !== this.subprocess) return; // ignore a superseded process
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      try {
+        this.handleRustBotEvent(JSON.parse(trimmed));
+      } catch (err) {
+        // Non-JSON line (e.g. a stray log): safe to ignore.
+        this.log.debug({ err, line: trimmed }, "Ignoring non-JSON bot output");
+      }
+    });
+
+    child.stderr?.on("data", (data) => {
+      if (child !== this.subprocess) return;
+      this.log.debug({ data: data.toString() }, "Bot stderr");
+    });
+
+    child.on("exit", (code, signal) => {
+      if (child !== this.subprocess) return; // superseded process exiting
+      this.log.info({ code, signal }, "Bot subprocess exited");
+      if (this.manuallyStopped) {
+        this.teardownSubprocess("Subprocess exited after manual stop");
+      } else {
+        this.handleConnectionFailure(
+          code === 0 ? "Connection ended" : `Bot exited with code ${code ?? "?"}`,
+        );
+      }
+    });
+
+    child.on("error", (err) => {
+      if (child !== this.subprocess) return;
+      this.log.error(err, "Bot subprocess error");
+      this.handleConnectionFailure(err.message);
+    });
+
+    // Send the initial config line.
+    const cacheDir = path.join(appConfig.dataDir, "bot-cache", this.config.id);
+    this.sendToBot({
+      host: this.config.serverHost,
+      port: this.config.serverPort,
+      auth_type: this.config.authType === "MICROSOFT" ? "microsoft" : "offline",
+      username: this.config.name,
+      email: this.config.credentialsSecret,
+      cache_dir: cacheDir,
+      afk_enabled: this.config.afkEnabled,
+      movement_enabled: this.config.movementEnabled,
+      afk_interval_seconds: this.config.afkIntervalSeconds,
+      auto_command_enabled: this.config.autoCommandEnabled,
+      auto_command_text: this.config.autoCommandText,
+      auto_command_interval_minutes: this.config.autoCommandIntervalMinutes,
+    });
+
+    this.hangTimer = setTimeout(() => {
+      if (this.status === "CONNECTING" || this.status === "RECONNECTING") {
+        this.log.warn("Bot subprocess hang timeout, recycling");
+        this.handleConnectionFailure("Connection timed out");
+      }
+    }, SUBPROCESS_HANG_TIMEOUT_MS);
   }
 
   private handleRustBotEvent(event: Record<string, unknown>): void {
@@ -212,83 +238,74 @@ export class MinecraftClient extends EventEmitter {
           user_code: string;
           expires_in: number;
         };
-        const expiresAt = new Date(Date.now() + expires_in * 1000).toISOString();
         this.msaSignIn = {
           verificationUri: verification_uri,
           userCode: user_code,
           message: `Visit ${verification_uri} and enter code ${user_code}`,
-          expiresAt,
+          expiresAt: new Date(Date.now() + expires_in * 1000).toISOString(),
         };
-        this.emitConsole("SYSTEM", `MSA Sign-in required: ${verification_uri} (code: ${user_code})`);
+        this.emitConsole("SYSTEM", `Microsoft sign-in required: ${verification_uri} (code: ${user_code})`);
+        this.emitStatus();
         break;
       }
 
-      case "login": {
-        this.log.info("Bot received login packet");
-        this.emitConsole("SYSTEM", "Logged in to server (login packet received)");
+      case "profile": {
+        const { username, uuid } = event as { username: string; uuid: string };
+        this.log.info({ username, uuid }, "Resolved Minecraft profile");
+        this.emitConsole("SYSTEM", `Authenticated as ${username}`);
+        this.emit("profile", { minecraftAccountId: this.config.id, username, uuid } as ProfileEvent);
         break;
       }
 
-      case "spawn": {
+      case "login":
+        this.emitConsole("SYSTEM", "Logged in, joining world...");
+        break;
+
+      case "spawn":
         this.clearHangTimer();
-        this.setStatus("ONLINE");
         this.connectedSince = new Date();
         this.msaSignIn = undefined;
         this.lastError = undefined;
-        this.log.info("Bot spawned successfully");
+        this.reconnectAttempt = 0;
+        this.setStatus("ONLINE");
         this.emitConsole("SYSTEM", "Spawned into the world");
         break;
-      }
 
       case "chat": {
         const { sender, message } = event as { sender: string | null; message: string };
-        if (sender) {
-          this.emitConsole("CHAT", `[${sender}]: ${message}`);
-        } else {
-          this.emitConsole("SERVER_MESSAGE", message);
-        }
+        if (sender) this.emitConsole("CHAT", `<${sender}> ${message}`);
+        else this.emitConsole("SERVER_MESSAGE", message);
         break;
       }
 
+      case "behavior_log":
+        this.emitConsole("SYSTEM", String((event as { message: string }).message));
+        break;
+
+      case "warning":
+        this.emitConsole("WARNING", String((event as { message: string }).message));
+        break;
+
       case "disconnect": {
-        const reason = (event as { reason?: string }).reason;
-        this.log.info({ reason }, "Bot disconnected");
-        this.emitConsole("SYSTEM", `Disconnected: ${reason || "unknown reason"}`);
-        if (!this.manuallyStopped) {
-          this.handleConnectionFailure(reason || "Disconnected");
-        } else {
-          this.teardownSubprocess("Disconnected after manual stop");
-        }
+        const reason = (event as { reason?: string | null }).reason ?? "unknown reason";
+        this.emitConsole("SYSTEM", `Disconnected: ${reason}`);
+        // The subprocess will exit right after; the exit handler drives the
+        // reconnect. We record the reason for display.
+        this.lastError = reason;
         break;
       }
 
       case "connection_failed": {
-        const error = (event as { error: string }).error;
-        this.log.warn({ error }, "Connection failed");
+        const error = String((event as { error: string }).error);
         this.emitConsole("ERROR", `Connection failed: ${error}`);
         this.handleConnectionFailure(error);
         break;
       }
 
-      case "warning": {
-        const message = (event as { message: string }).message;
-        this.log.warn(message);
-        this.emitConsole("WARNING", message);
-        break;
-      }
-
       case "fatal_error": {
-        const error = (event as { error: string }).error;
-        this.log.error({ error }, "Fatal bot error");
+        const error = String((event as { error: string }).error);
         this.emitConsole("ERROR", `Fatal error: ${error}`);
         this.handleConnectionFailure(error);
-        break;
-      }
-
-      case "behavior_log": {
-        const message = (event as { message: string }).message;
-        this.log.debug(message);
-        this.emitConsole("SYSTEM", `[Behavior] ${message}`);
         break;
       }
 
@@ -298,66 +315,74 @@ export class MinecraftClient extends EventEmitter {
   }
 
   private handleConnectionFailure(reason: string): void {
+    if (this.connectionEnded) return;
+    this.connectionEnded = true;
     this.lastError = reason;
     this.clearHangTimer();
-    this.teardownSubprocess(`Connection failed: ${reason}`);
+    this.teardownSubprocess(`Connection ended: ${reason}`);
 
     if (this.manuallyStopped) {
       this.setStatus("OFFLINE");
       return;
     }
 
-    // Schedule a reconnect
-    const delay = RECONNECT_DELAY_MS + Math.random() * RECONNECT_JITTER_MS;
-    this.log.info(
-      { delay, attempt: this.reconnectAttempt },
-      `Reconnecting in ${Math.round(delay / 1000)}s`
-    );
-    this.emitConsole("SYSTEM", `Will reconnect in ${Math.round(delay / 1000)}s (attempt ${this.reconnectAttempt})...`);
+    if (!this.config.autoReconnect) {
+      this.emitConsole("WARNING", "Auto-reconnect is disabled; staying offline.");
+      this.setStatus("ERROR");
+      return;
+    }
 
-    this.reconnectTimer = setTimeout(() => {
-      this.attemptConnect();
-    }, delay);
+    const delay = RECONNECT_DELAY_MS + Math.random() * RECONNECT_JITTER_MS;
+    const seconds = Math.round(delay / 1000);
+    this.setStatus("RECONNECTING");
+    this.emitConsole("SYSTEM", `Reconnecting in ${seconds}s (attempt ${this.reconnectAttempt + 1})...`);
+    this.log.info({ delay, attempt: this.reconnectAttempt }, `Reconnecting in ${seconds}s`);
+
+    this.reconnectTimer = setTimeout(() => this.attemptConnect(), delay);
   }
 
   private teardownSubprocess(reason: string): void {
-    if (this.subprocess) {
-      this.log.debug(reason);
-
-      // Try graceful disconnect first
-      if (this.subprocess.stdin && !this.subprocess.stdin.destroyed) {
-        try {
-          this.subprocess.stdin.write(JSON.stringify({ type: "disconnect" }) + "\n");
-        } catch (err) {
-          this.log.debug("Failed to write disconnect command");
-        }
-      }
-
-      // Give subprocess a moment to exit gracefully
-      setTimeout(() => {
-        if (this.subprocess && !this.subprocess.killed) {
-          this.subprocess.kill("SIGTERM");
-          setTimeout(() => {
-            if (this.subprocess && !this.subprocess.killed) {
-              this.subprocess.kill("SIGKILL");
-            }
-          }, 1000);
-        }
-      }, 500);
-
-      this.subprocess = null;
-    }
-
+    const child = this.subprocess;
+    this.subprocess = null;
     this.connectedSince = null;
     this.msaSignIn = undefined;
+    if (!child) return;
+
+    this.log.debug(reason);
+    try {
+      if (child.stdin && !child.stdin.destroyed) {
+        child.stdin.write(JSON.stringify({ type: "disconnect" }) + "\n");
+      }
+    } catch {
+      /* stdin may already be gone */
+    }
+
+    // Give the bot a moment to exit gracefully, then force it.
+    setTimeout(() => {
+      if (!child.killed) child.kill("SIGTERM");
+      setTimeout(() => {
+        if (!child.killed) child.kill("SIGKILL");
+      }, 1500);
+    }, 500);
+  }
+
+  private sendToBot(payload: Record<string, unknown>): void {
+    try {
+      this.subprocess?.stdin?.write(JSON.stringify(payload) + "\n");
+    } catch (err) {
+      this.log.debug({ err }, "Failed to write to bot stdin");
+    }
   }
 
   private setStatus(newStatus: ClientStatus): void {
-    if (this.status !== newStatus) {
-      this.log.debug(`Status: ${this.status} -> ${newStatus}`);
-      this.status = newStatus;
-      this.emit("statusChanged", newStatus);
-    }
+    if (this.status === newStatus) return;
+    this.log.debug(`Status: ${this.status} -> ${newStatus}`);
+    this.status = newStatus;
+    this.emitStatus();
+  }
+
+  private emitStatus(): void {
+    this.emit("status", this.getStatus());
   }
 
   private clearReconnectTimer(): void {
@@ -383,18 +408,18 @@ export class MinecraftClient extends EventEmitter {
     } as ConsoleEvent);
   }
 
+  /** Locate the compiled azalea-bot binary (Docker image or local dev build). */
   private findBotBinary(): string | null {
-    // In Docker, the binary is at /app/azalea-bot (copied in Dockerfile)
-    if (existsSync("/app/azalea-bot")) return "/app/azalea-bot";
-
-    // In development, the binary is at rust-bot/target/debug/azalea-bot relative to cwd
-    const devPath = path.join(process.cwd(), "rust-bot", "target", "debug", "azalea-bot");
-    if (existsSync(devPath)) return devPath;
-
-    // On Windows dev
-    const devPathExe = devPath + ".exe";
-    if (existsSync(devPathExe)) return devPathExe;
-
+    const candidates = [
+      "/app/azalea-bot",
+      path.join(process.cwd(), "rust-bot", "target", "release", "azalea-bot"),
+      path.join(process.cwd(), "rust-bot", "target", "debug", "azalea-bot"),
+      path.join(process.cwd(), "..", "rust-bot", "target", "release", "azalea-bot"),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
+      if (existsSync(candidate + ".exe")) return candidate + ".exe";
+    }
     return null;
   }
 }

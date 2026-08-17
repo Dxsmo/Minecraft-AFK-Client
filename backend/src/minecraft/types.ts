@@ -25,6 +25,13 @@ export interface ConsoleEvent {
   timestamp: string;
 }
 
+/** Emitted once the Rust bot resolves the real Minecraft profile (username/uuid). */
+export interface ProfileEvent {
+  minecraftAccountId: string;
+  username: string;
+  uuid: string;
+}
+
 export interface ClientRuntimeConfig {
   id: string;
   name: string;

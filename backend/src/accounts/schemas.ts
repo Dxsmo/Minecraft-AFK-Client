@@ -9,15 +9,20 @@ import { z } from "zod";
  */
 export const createAccountSchema = z
   .object({
-    name: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_-]+$/),
-    // Empty string means "auto-detect" (mineflayer negotiates the protocol
-    // version by pinging the server first) — see MinecraftClient.ts.
+    // Optional: for Microsoft accounts the display name is auto-derived and then
+    // replaced with the real in-game username after the first sign-in. For
+    // offline accounts the frontend always provides it (it doubles as the
+    // join username).
+    name: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+    // Empty string means "auto-detect" (the bot negotiates the protocol version
+    // with the server) — see MinecraftClient.ts.
     minecraftVersion: z.string().max(16).default(""),
     serverHost: z.string().min(1).max(255),
     serverPort: z.coerce.number().int().min(1).max(65535).default(25565),
     authType: z.enum(["OFFLINE", "MICROSOFT"]).default("OFFLINE"),
+    // Microsoft account email. Used as the identity for the device-code sign-in
+    // and its token cache. Never exposed back to the frontend.
     credentialsSecret: z.string().max(320).nullable().optional(),
-    credentialsPassword: z.string().max(256).nullable().optional(),
     afkEnabled: z.boolean().default(true),
     movementEnabled: z.boolean().default(false),
     afkIntervalSeconds: z.coerce.number().int().min(5).max(3600).default(30),
@@ -26,9 +31,13 @@ export const createAccountSchema = z
     autoCommandText: z.string().max(256).default(""),
     autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).default(5),
   })
-  .refine((data) => data.authType !== "MICROSOFT" || (!!data.credentialsSecret && !!data.credentialsPassword), {
-    message: "Microsoft accounts require both an email and a password",
+  .refine((data) => data.authType !== "MICROSOFT" || !!data.credentialsSecret, {
+    message: "Microsoft accounts require an account email",
     path: ["credentialsSecret"],
+  })
+  .refine((data) => data.authType !== "OFFLINE" || !!data.name, {
+    message: "A username is required",
+    path: ["name"],
   });
 
 /**
