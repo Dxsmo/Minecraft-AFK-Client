@@ -1,0 +1,39 @@
+# Caddyfile served by the "web" container.
+#
+# SITE_ADDRESS controls what Caddy listens on:
+#   - Local/dev or when Cloudflare terminates TLS (Flexible/Full mode): ":80"
+#   - Production with your own domain (Caddy auto-HTTPS via Let's Encrypt):
+#       SITE_ADDRESS=afk.example.com
+#     (requires ports 80+443 reachable from the internet, or use Cloudflare
+#     "Full (strict)" mode with a Cloudflare Origin Certificate instead —
+#     see docs/DEPLOYMENT.md)
+{$SITE_ADDRESS}
+
+encode gzip zstd
+log {
+	output stdout
+	format console
+}
+
+# API + WebSocket traffic goes to the backend container.
+handle /api/* {
+	reverse_proxy backend:4000
+}
+handle /ws/* {
+	reverse_proxy backend:4000
+}
+
+# Everything else is the React SPA static build, with client-side routing
+# fallback to index.html.
+handle {
+	root * /srv
+	try_files {path} /index.html
+	file_server
+}
+
+# Basic hardening headers (defense in depth in addition to backend headers).
+header {
+	X-Frame-Options "SAMEORIGIN"
+	X-Content-Type-Options "nosniff"
+	Referrer-Policy "no-referrer"
+}

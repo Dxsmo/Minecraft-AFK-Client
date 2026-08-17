@@ -1,0 +1,28 @@
+[Unit]
+Description=Minecraft AFK Client Management Service (backend)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust to the actual deployment path on the Raspberry Pi.
+WorkingDirectory=/opt/afk-service/backend
+EnvironmentFile=/opt/afk-service/backend/.env
+ExecStart=/usr/bin/node /opt/afk-service/backend/dist/server.js
+Restart=on-failure
+RestartSec=5
+
+# Run as a dedicated, unprivileged system user (see docs/DEPLOYMENT.md).
+User=afkservice
+Group=afkservice
+
+# Basic hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/afk-service/backend/data
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
