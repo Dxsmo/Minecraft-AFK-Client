@@ -11,6 +11,7 @@ import authRoutes from "./auth/routes.js";
 import usersRoutes from "./users/routes.js";
 import accountsRoutes from "./accounts/routes.js";
 import systemRoutes from "./api/systemRoutes.js";
+import auditLogRoutes from "./api/auditLogRoutes.js";
 import registerWebsocketRoutes from "./websocket/routes.js";
 
 export async function buildApp() {
@@ -47,6 +48,7 @@ export async function buildApp() {
   await app.register(usersRoutes);
   await app.register(accountsRoutes);
   await app.register(systemRoutes);
+  await app.register(auditLogRoutes);
   await app.register(registerWebsocketRoutes);
 
   app.get("/api/health", async () => ({ status: "ok" }));
