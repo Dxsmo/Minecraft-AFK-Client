@@ -14,11 +14,18 @@ import type { Logger } from "pino";
 const RECONNECT_DELAY_MS = 30_000;
 const RECONNECT_JITTER_MS = 2_000;
 
-// Safety net: if a connection attempt never reaches "spawn" within this
-// window (e.g. the server hangs waiting for something the bot never
-// responds to), we forcibly abandon it and reconnect, instead of getting
-// stuck showing "CONNECTING..." forever.
-const CONNECTION_TIMEOUT_MS = 45_000;
+// Safety net: some servers (particularly ones behind anti-bot/verification
+// systems) hold a connecting client in a "limbo" state for a while before
+// fully releasing them into the world, during which they may still be
+// visible to other players (e.g. in the tab list) even though mineflayer
+// hasn't reached its normal "spawn" event yet. Rather than using one fixed
+// timer from the start of the connection attempt (which would abandon a
+// connection that is still slowly progressing), we track the timestamp of
+// the last packet received from the server and only give up once NO
+// packets at all have arrived for this long — i.e. the connection is truly
+// dead, not just slow.
+const INACTIVITY_TIMEOUT_MS = 90_000;
+const INACTIVITY_CHECK_INTERVAL_MS = 5_000;
 
 /**
  * Wraps a single Mineflayer bot connection and exposes a small, explicit
@@ -34,6 +41,8 @@ export class MinecraftClient extends EventEmitter {
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private connectionWatchdog: NodeJS.Timeout | null = null;
+  private lastActivityAt = 0;
+  private onlineSignalReceived = false;
   private manuallyStopped = false;
   private connectedSince: Date | null = null;
   private lastError: string | undefined;
@@ -142,6 +151,8 @@ export class MinecraftClient extends EventEmitter {
     this.setStatus(this.reconnectAttempt > 0 ? "RECONNECTING" : "CONNECTING");
     this.emitConsole("SYSTEM", `Connecting to ${this.config.serverHost}:${this.config.serverPort}...`);
     this.msaSignIn = undefined;
+    this.onlineSignalReceived = false;
+    this.lastActivityAt = Date.now();
 
     try {
       // NOTE: minecraft-protocol's TypeScript types incorrectly declare
@@ -187,22 +198,32 @@ export class MinecraftClient extends EventEmitter {
       this.attachBotHandlers(bot);
       this.bot = bot;
 
-      this.connectionWatchdog = setTimeout(() => this.handleStuckConnection(), CONNECTION_TIMEOUT_MS);
+      // Any raw protocol packet counts as activity — this lets us
+      // distinguish "the server is slowly working through an anti-bot/
+      // verification queue but still talking to us" from "the connection
+      // is actually dead", instead of giving up after one fixed timeout.
+      bot._client.on("packet", () => {
+        this.lastActivityAt = Date.now();
+      });
+
+      this.connectionWatchdog = setInterval(() => this.checkForStuckConnection(), INACTIVITY_CHECK_INTERVAL_MS);
     } catch (err) {
       this.handleFatalError(err as Error);
     }
   }
 
   private attachBotHandlers(bot: Bot): void {
-    bot.once("spawn", () => {
-      this.clearConnectionWatchdog();
-      this.reconnectAttempt = 0;
-      this.connectedSince = new Date();
-      this.msaSignIn = undefined;
-      this.setStatus("ONLINE");
-      this.emitConsole("SYSTEM", "Spawned into world");
-      this.behaviorManager.start(bot);
-    });
+    // mineflayer's built-in 'spawn' event only fires after receiving an
+    // 'update_health' packet, which some servers (especially ones with
+    // anti-bot/verification systems, or that simply never resend default
+    // full health) may delay indefinitely or never send at all — even
+    // though the player has already fully joined and is visible to others
+    // in the tab list. 'forcedMove' fires when the mandatory initial
+    // position/teleport packet is processed, which every server must send
+    // to place a player in any world, making it a more reliable signal.
+    // Whichever of the two fires first is treated as "we're online".
+    bot.once("spawn", () => this.handleOnlineSignal(bot, "Spawned into world"));
+    bot.once("forcedMove", () => this.handleOnlineSignal(bot, "Position synced, considering client online"));
 
     bot.on("login", () => {
       this.emitConsole("SYSTEM", "Login accepted by server, waiting to spawn...");
@@ -286,17 +307,42 @@ export class MinecraftClient extends EventEmitter {
   }
 
   /**
-   * Called when a connection attempt has been stuck without reaching
-   * "spawn" for too long (e.g. the server never responded to something,
-   * or the TCP connection silently died without emitting 'end'). Forces a
-   * clean teardown and reconnect so the UI never gets stuck showing
-   * "CONNECTING..." indefinitely.
+   * Marks the client as fully connected. Called from whichever of 'spawn'
+   * or 'forcedMove' fires first (see attachBotHandlers) so a delayed/
+   * missing health packet from the server can no longer leave the client
+   * stuck showing "CONNECTING..." forever despite having actually joined.
    */
-  private handleStuckConnection(): void {
-    if (this.status !== "CONNECTING" && this.status !== "RECONNECTING") return;
-    this.log.warn("Connection attempt timed out before spawning; forcing reconnect");
-    this.emitConsole("WARNING", `No response from server after ${CONNECTION_TIMEOUT_MS / 1000}s, retrying...`);
+  private handleOnlineSignal(bot: Bot, message: string): void {
+    if (this.onlineSignalReceived) return;
+    this.onlineSignalReceived = true;
 
+    this.clearConnectionWatchdog();
+    this.reconnectAttempt = 0;
+    this.connectedSince = new Date();
+    this.msaSignIn = undefined;
+    this.setStatus("ONLINE");
+    this.emitConsole("SYSTEM", message);
+    this.behaviorManager.start(bot);
+  }
+
+  /**
+   * Periodically checked while a connection attempt is in progress. Only
+   * forces a reconnect once NO packets at all have been received from the
+   * server for a long time — i.e. the connection is genuinely dead, rather
+   * than just slowly working through a join queue/verification step that
+   * still exchanges keep-alives and other packets with us.
+   */
+  private checkForStuckConnection(): void {
+    if (this.status !== "CONNECTING" && this.status !== "RECONNECTING") {
+      this.clearConnectionWatchdog();
+      return;
+    }
+    if (Date.now() - this.lastActivityAt < INACTIVITY_TIMEOUT_MS) return;
+
+    this.log.warn("No packets received from server for too long; forcing reconnect");
+    this.emitConsole("WARNING", `No response from server after ${INACTIVITY_TIMEOUT_MS / 1000}s, retrying...`);
+
+    this.clearConnectionWatchdog();
     const staleBot = this.bot;
     this.bot = null;
     this.connectedSince = null;
@@ -336,7 +382,7 @@ export class MinecraftClient extends EventEmitter {
 
   private clearConnectionWatchdog(): void {
     if (this.connectionWatchdog) {
-      clearTimeout(this.connectionWatchdog);
+      clearInterval(this.connectionWatchdog);
       this.connectionWatchdog = null;
     }
   }

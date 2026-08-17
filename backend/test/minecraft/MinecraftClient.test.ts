@@ -17,6 +17,7 @@ class FakeBot extends EventEmitter {
   setControlState = vi.fn();
   look = vi.fn();
   acceptResourcePack = vi.fn();
+  _client = new EventEmitter();
 }
 
 const createdBots: FakeBot[] = [];
@@ -139,21 +140,54 @@ describe("MinecraftClient state machine", () => {
     expect(createdBots[0].acceptResourcePack).toHaveBeenCalled();
   });
 
-  it("forces a reconnect if the connection is stuck without spawning (watchdog)", () => {
+  it("forces a reconnect if the connection is stuck without any server activity (watchdog)", () => {
     vi.useFakeTimers();
     try {
       const client = new MinecraftClient(baseConfig({ autoReconnect: true }));
       client.connect();
       expect(client.getStatus().status).toBe("CONNECTING");
 
-      // Never emit 'spawn' — simulate a hung connection — and advance past
-      // the connection watchdog timeout.
-      vi.advanceTimersByTime(46_000);
+      // Never emit 'spawn'/'forcedMove' or any packet activity — simulate a
+      // fully hung connection — and advance past the inactivity timeout.
+      vi.advanceTimersByTime(95_000);
 
       expect(client.getStatus().status).toBe("RECONNECTING");
       expect(createdBots[0].quit).toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not give up while the server keeps sending packets, even past the old fixed timeout", () => {
+    vi.useFakeTimers();
+    try {
+      const client = new MinecraftClient(baseConfig({ autoReconnect: true }));
+      client.connect();
+
+      // Simulate a server that is slow (e.g. an anti-bot verification queue)
+      // but still exchanging packets with us every 20s, well past what used
+      // to be a fixed 45s giveup — this should NOT trigger a reconnect.
+      for (let i = 0; i < 4; i++) {
+        vi.advanceTimersByTime(20_000);
+        createdBots[0]._client.emit("packet", {});
+      }
+
+      expect(client.getStatus().status).toBe("CONNECTING");
+      expect(createdBots[0].quit).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats 'forcedMove' (position sync) as sufficient to go ONLINE even without 'spawn'", () => {
+    const client = new MinecraftClient(baseConfig());
+    client.connect();
+    expect(client.getStatus().status).toBe("CONNECTING");
+
+    // Some servers never send an update_health packet (which normally
+    // drives mineflayer's 'spawn' event), even though the player has
+    // actually joined — 'forcedMove' should be enough on its own.
+    createdBots[0].emit("forcedMove");
+    expect(client.getStatus().status).toBe("ONLINE");
   });
 });

@@ -191,11 +191,23 @@ frontend — only account metadata and live status are exposed.
 If the target server requires accepting a resource pack before letting a
 player fully join, `MinecraftClient` automatically accepts it on the
 bot's behalf (there's no renderer to actually download/display it, so
-there's nothing to prompt a human for). A connection attempt that never
-reaches "spawn" within 45 seconds for any reason (stuck resource pack
-handshake, unresponsive server, a TCP connection that silently died) is
-automatically abandoned and retried, so the dashboard never gets stuck
-showing "CONNECTING..." indefinitely.
+there's nothing to prompt a human for).
+
+### Reliable "online" detection
+
+Some servers (especially ones behind anti-bot/verification systems, or
+that simply never resend default full health) delay or never send the
+packet Mineflayer's built-in `spawn` event depends on, even though the
+account has already fully joined and is visible to other players (e.g.
+in the tab list). To avoid getting stuck showing `CONNECTING...`
+indefinitely in that case, `MinecraftClient` also treats the mandatory
+initial position-sync packet (`forcedMove`) as sufficient evidence of a
+successful join — whichever of `spawn`/`forcedMove` arrives first marks
+the client `ONLINE`. Separately, a connection attempt is only abandoned
+and retried once **no packets at all** have been received from the
+server for 90 seconds (not a fixed timer from the start of the attempt),
+so a server that's slowly working through a join queue but still
+exchanging keep-alives with us isn't prematurely disconnected.
 
 ### AFK / Movement behavior system
 
