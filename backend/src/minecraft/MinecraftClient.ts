@@ -27,6 +27,16 @@ const RECONNECT_JITTER_MS = 2_000;
 const INACTIVITY_TIMEOUT_MS = 90_000;
 const INACTIVITY_CHECK_INTERVAL_MS = 5_000;
 
+// Hard ceiling: some servers (particularly ones with anti-bot/verification
+// "limbo" systems) keep exchanging packets like keep-alives with a
+// connecting client indefinitely without ever releasing them into actual
+// play (never sending the packets that would trigger our online-detection
+// above). Without a hard cap, such a connection would satisfy the
+// inactivity check forever and never be abandoned. This is deliberately
+// much longer than INACTIVITY_TIMEOUT_MS to give legitimate slow joins
+// (verification queues, etc.) a real chance to complete first.
+const MAX_CONNECTING_DURATION_MS = 3 * 60_000;
+
 /**
  * Wraps a single Mineflayer bot connection and exposes a small, explicit
  * state machine (OFFLINE -> CONNECTING -> ONLINE -> DISCONNECTING/RECONNECTING/ERROR)
@@ -42,6 +52,7 @@ export class MinecraftClient extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private connectionWatchdog: NodeJS.Timeout | null = null;
   private lastActivityAt = 0;
+  private connectionStartedAt = 0;
   private onlineSignalReceived = false;
   private manuallyStopped = false;
   private connectedSince: Date | null = null;
@@ -153,6 +164,7 @@ export class MinecraftClient extends EventEmitter {
     this.msaSignIn = undefined;
     this.onlineSignalReceived = false;
     this.lastActivityAt = Date.now();
+    this.connectionStartedAt = Date.now();
 
     try {
       // NOTE: minecraft-protocol's TypeScript types incorrectly declare
@@ -334,21 +346,36 @@ export class MinecraftClient extends EventEmitter {
   }
 
   /**
-   * Periodically checked while a connection attempt is in progress. Only
-   * forces a reconnect once NO packets at all have been received from the
-   * server for a long time — i.e. the connection is genuinely dead, rather
-   * than just slowly working through a join queue/verification step that
-   * still exchanges keep-alives and other packets with us.
+   * Periodically checked while a connection attempt is in progress. Forces
+   * a reconnect in either of two cases:
+   *  - No packets at all have been received from the server for a while
+   *    (INACTIVITY_TIMEOUT_MS) — the connection is genuinely dead.
+   *  - The attempt has been running for far too long in total
+   *    (MAX_CONNECTING_DURATION_MS), even if packets are still trickling
+   *    in — this catches servers whose anti-bot/verification systems hold
+   *    a connection in limbo indefinitely (still exchanging keep-alives)
+   *    without ever releasing it into actual play.
    */
   private checkForStuckConnection(): void {
     if (this.status !== "CONNECTING" && this.status !== "RECONNECTING") {
       this.clearConnectionWatchdog();
       return;
     }
-    if (Date.now() - this.lastActivityAt < INACTIVITY_TIMEOUT_MS) return;
 
-    this.log.warn("No packets received from server for too long; forcing reconnect");
-    this.emitConsole("WARNING", `No response from server after ${INACTIVITY_TIMEOUT_MS / 1000}s, retrying...`);
+    const now = Date.now();
+    const inactiveFor = now - this.lastActivityAt;
+    const connectingFor = now - this.connectionStartedAt;
+
+    let reason: string | null = null;
+    if (connectingFor >= MAX_CONNECTING_DURATION_MS) {
+      reason = `Still not fully connected after ${Math.round(MAX_CONNECTING_DURATION_MS / 1000)}s (server may be holding the connection in an anti-bot/verification queue), retrying...`;
+    } else if (inactiveFor >= INACTIVITY_TIMEOUT_MS) {
+      reason = `No response from server after ${Math.round(INACTIVITY_TIMEOUT_MS / 1000)}s, retrying...`;
+    }
+    if (!reason) return;
+
+    this.log.warn({ inactiveFor, connectingFor }, "Connection attempt stuck; forcing reconnect");
+    this.emitConsole("WARNING", reason);
 
     this.clearConnectionWatchdog();
     const staleBot = this.bot;

@@ -179,6 +179,29 @@ describe("MinecraftClient state machine", () => {
     }
   });
 
+  it("eventually forces a reconnect even if the server keeps sending packets forever (hard ceiling)", () => {
+    vi.useFakeTimers();
+    try {
+      const client = new MinecraftClient(baseConfig({ autoReconnect: true }));
+      client.connect();
+
+      // Simulate a server that holds the connection in limbo (e.g. an
+      // anti-bot system that never releases the client into play) but
+      // keeps sending keep-alive-style packets indefinitely — the
+      // inactivity check alone would never trigger, so the hard ceiling
+      // on total connecting duration must kick in instead.
+      for (let i = 0; i < 10; i++) {
+        vi.advanceTimersByTime(20_000);
+        createdBots[0]._client.emit("packet", {});
+      }
+
+      expect(client.getStatus().status).toBe("RECONNECTING");
+      expect(createdBots[0].quit).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("treats 'forcedMove' (position sync) as sufficient to go ONLINE even without 'spawn'", () => {
     const client = new MinecraftClient(baseConfig());
     client.connect();
