@@ -34,6 +34,8 @@ export interface ClientRuntimeConfig {
   authType: "OFFLINE" | "MICROSOFT";
   /** Microsoft account email, only relevant when authType === "MICROSOFT". Never exposed to the frontend. */
   credentialsSecret: string | null;
+  /** Microsoft account password, only relevant when authType === "MICROSOFT". Never exposed to the frontend. */
+  credentialsPassword: string | null;
   afkEnabled: boolean;
   movementEnabled: boolean;
   afkIntervalSeconds: number;

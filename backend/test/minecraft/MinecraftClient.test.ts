@@ -42,6 +42,7 @@ function baseConfig(overrides: Partial<ClientRuntimeConfig> = {}): ClientRuntime
     serverPort: 25565,
     authType: "OFFLINE",
     credentialsSecret: null,
+    credentialsPassword: null,
     afkEnabled: false,
     movementEnabled: false,
     afkIntervalSeconds: 30,

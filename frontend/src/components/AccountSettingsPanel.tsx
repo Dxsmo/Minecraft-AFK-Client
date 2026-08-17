@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type { ManagedUser, MinecraftAccount } from "../lib/types";
+import { MINECRAFT_VERSIONS } from "../lib/minecraftVersions";
 
 export function AccountSettingsPanel({
   account,
@@ -17,8 +18,6 @@ export function AccountSettingsPanel({
   const [movementEnabled, setMovementEnabled] = useState(account.movementEnabled);
   const [afkIntervalSeconds, setAfkIntervalSeconds] = useState(account.afkIntervalSeconds);
   const [autoReconnect, setAutoReconnect] = useState(account.autoReconnect);
-  const [authType, setAuthType] = useState(account.authType);
-  const [credentialsSecret, setCredentialsSecret] = useState("");
   const [autoCommandEnabled, setAutoCommandEnabled] = useState(account.autoCommandEnabled);
   const [autoCommandText, setAutoCommandText] = useState(account.autoCommandText);
   const [autoCommandIntervalMinutes, setAutoCommandIntervalMinutes] = useState(account.autoCommandIntervalMinutes);
@@ -27,42 +26,52 @@ export function AccountSettingsPanel({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Minecraft version has its own instantly-applied control (see below),
+  // separate from the general "Save settings" button.
+  const [version, setVersion] = useState(account.minecraftVersion);
+  const [versionSaving, setVersionSaving] = useState(false);
+  const [versionMessage, setVersionMessage] = useState<string | null>(null);
+
   async function saveSettings() {
     setSaving(true);
     setError(null);
     setMessage(null);
-
-    if (authType === "MICROSOFT" && account.authType !== "MICROSOFT" && !credentialsSecret) {
-      setError("Enter the Microsoft account email before switching to Microsoft auth.");
-      setSaving(false);
-      return;
-    }
-
     try {
       await api.patch(`/minecraft/accounts/${account.id}`, {
         afkEnabled,
         movementEnabled,
         afkIntervalSeconds,
         autoReconnect,
-        authType,
         autoCommandEnabled,
         autoCommandText,
         autoCommandIntervalMinutes,
-        // Only sent when someone actually typed something, so leaving it
-        // blank does not wipe out an already-configured Microsoft account.
-        ...(authType === "MICROSOFT" && credentialsSecret ? { credentialsSecret } : {}),
       });
       // Only admins are allowed to grant/revoke access for other users.
       if (isAdmin) {
         await api.put(`/minecraft/accounts/${account.id}/assignments`, { userIds: Array.from(assigned) });
       }
       setMessage("Settings saved");
-      setCredentialsSecret("");
       onUpdated();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to save settings");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function applyVersion(newVersion: string) {
+    setVersion(newVersion);
+    setVersionSaving(true);
+    setVersionMessage(null);
+    setError(null);
+    try {
+      await api.patch(`/minecraft/accounts/${account.id}`, { minecraftVersion: newVersion });
+      setVersionMessage(`Version set to ${newVersion}`);
+      onUpdated();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to change version");
+    } finally {
+      setVersionSaving(false);
     }
   }
 
@@ -78,36 +87,36 @@ export function AccountSettingsPanel({
     <div className="card p-4 text-sm">
       <h3 className="mb-3 font-semibold text-slate-100">Settings</h3>
 
-      <div className="space-y-2">
-        <label className="flex items-center justify-between">
-          <span className="text-slate-400">Auth type</span>
-          <select
-            value={authType}
-            onChange={(e) => setAuthType(e.target.value as "OFFLINE" | "MICROSOFT")}
-            className="input w-32"
-          >
-            <option value="OFFLINE">Offline</option>
-            <option value="MICROSOFT">Microsoft</option>
-          </select>
-        </label>
-        {authType === "MICROSOFT" && (
-          <>
-            <label className="flex items-center justify-between gap-2">
-              <span className="shrink-0 text-slate-400">Microsoft email</span>
-              <input
-                type="email"
-                value={credentialsSecret}
-                onChange={(e) => setCredentialsSecret(e.target.value)}
-                placeholder={account.authType === "MICROSOFT" ? "(unchanged)" : "bot@example.com"}
-                className="input"
-              />
-            </label>
-            <p className="text-xs text-slate-500">
-              After saving, start this account — a Microsoft sign-in link + code will appear directly above
-              the console once required.
-            </p>
-          </>
+      <label className="flex items-center justify-between gap-2">
+        <span className="shrink-0 text-slate-400">Minecraft version</span>
+        <select
+          value={version}
+          disabled={versionSaving}
+          onChange={(e) => void applyVersion(e.target.value)}
+          className="input w-32"
+        >
+          {!MINECRAFT_VERSIONS.includes(version) && <option value={version}>{version}</option>}
+          {MINECRAFT_VERSIONS.map((v) => (
+            <option key={v} value={v}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </label>
+      {versionMessage && <p className="mt-1 text-xs text-emerald-400">{versionMessage}</p>}
+      <p className="mt-1 text-xs text-slate-500">Applies immediately and restarts the client if it's online.</p>
+
+      <div className="mt-4 rounded-md border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-400">
+        <span className="font-medium text-slate-300">Auth type: {account.authType}</span>
+        {account.authType === "MICROSOFT" && (
+          <p className="mt-1">
+            Microsoft email/password are set once at creation and cannot be changed. Delete this account and
+            create a new one to use different credentials.
+          </p>
         )}
+      </div>
+
+      <div className="mt-4 space-y-2">
         <label className="flex items-center justify-between">
           <span className="text-slate-400">AFK behavior</span>
           <input type="checkbox" checked={afkEnabled} onChange={(e) => setAfkEnabled(e.target.checked)} />

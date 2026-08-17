@@ -149,6 +149,13 @@ export class MinecraftClient extends EventEmitter {
         username: this.config.authType === "OFFLINE" ? this.config.name : this.config.credentialsSecret ?? this.config.name,
         version: this.config.minecraftVersion || undefined,
         auth: this.config.authType === "MICROSOFT" ? "microsoft" : "offline",
+        // When a password is stored for this Microsoft account, prismarine-auth
+        // authenticates directly against Xbox Live with it instead of prompting
+        // a device-code sign-in. This does NOT work for accounts with 2FA /
+        // modern security features enabled — those will fail to connect and
+        // must rely on the device-code flow (i.e. leave the password empty).
+        password:
+          this.config.authType === "MICROSOFT" ? this.config.credentialsPassword ?? undefined : undefined,
         // Persist the Microsoft auth token cache per-account inside the data
         // dir (Docker volume), so re-authentication is only needed once.
         profilesFolder:

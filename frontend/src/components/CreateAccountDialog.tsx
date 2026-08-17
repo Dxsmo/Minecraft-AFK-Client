@@ -1,17 +1,18 @@
 import { useState, type FormEvent } from "react";
 import { api, ApiError } from "../lib/api";
+import { MINECRAFT_VERSIONS } from "../lib/minecraftVersions";
 
 export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [form, setForm] = useState({
     name: "",
     serverHost: "",
     serverPort: 25565,
-    minecraftVersion: "1.20.4",
+    minecraftVersion: MINECRAFT_VERSIONS[0],
     authType: "OFFLINE" as "OFFLINE" | "MICROSOFT",
     credentialsSecret: "",
+    credentialsPassword: "",
     afkEnabled: true,
     movementEnabled: false,
-    afkIntervalSeconds: 30,
     autoReconnect: true,
   });
   const [error, setError] = useState<string | null>(null);
@@ -25,6 +26,7 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
       await api.post("/minecraft/accounts", {
         ...form,
         credentialsSecret: form.authType === "MICROSOFT" ? form.credentialsSecret || null : null,
+        credentialsPassword: form.authType === "MICROSOFT" ? form.credentialsPassword || null : null,
       });
       onCreated();
     } catch (err) {
@@ -70,11 +72,17 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
             </Field>
           </div>
           <Field label="Minecraft version">
-            <input
+            <select
               value={form.minecraftVersion}
               onChange={(e) => setForm({ ...form, minecraftVersion: e.target.value })}
               className="input"
-            />
+            >
+              {MINECRAFT_VERSIONS.map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
           </Field>
           <Field label="Auth type">
             <select
@@ -88,20 +96,32 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
           </Field>
 
           {form.authType === "MICROSOFT" && (
-            <Field label="Microsoft account email">
-              <input
-                type="email"
-                required
-                value={form.credentialsSecret}
-                onChange={(e) => setForm({ ...form, credentialsSecret: e.target.value })}
-                className="input"
-                placeholder="bot@example.com"
-              />
-              <p className="mt-1 text-xs text-slate-500">
-                No password needed here. After creating, start the account and a Microsoft sign-in link + code
-                will appear directly on the account page.
+            <>
+              <Field label="Microsoft account email">
+                <input
+                  type="email"
+                  required
+                  value={form.credentialsSecret}
+                  onChange={(e) => setForm({ ...form, credentialsSecret: e.target.value })}
+                  className="input"
+                  placeholder="bot@example.com"
+                />
+              </Field>
+              <Field label="Microsoft account password">
+                <input
+                  type="password"
+                  required
+                  value={form.credentialsPassword}
+                  onChange={(e) => setForm({ ...form, credentialsPassword: e.target.value })}
+                  className="input"
+                />
+              </Field>
+              <p className="text-xs text-slate-500">
+                These credentials can only be set here. To change them later, delete this account and create a
+                new one. Accounts with 2FA/modern security enabled cannot sign in this way — leave the password
+                empty and use the device-code link shown on the account page instead.
               </p>
-            </Field>
+            </>
           )}
 
           <div className="flex items-center gap-4 pt-1 text-sm text-slate-300">

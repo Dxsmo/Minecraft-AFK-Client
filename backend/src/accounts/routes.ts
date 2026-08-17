@@ -95,6 +95,17 @@ export default async function accountsRoutes(app: FastifyInstance) {
     const full = await accountsService.getFullAccount(id);
     if (full) clientManager.register(full);
 
+    // Changing the Minecraft version only takes effect on the next
+    // connection, so if the client is currently connected we proactively
+    // restart it — this makes the version dropdown feel "live" instead of
+    // silently doing nothing until the user manually restarts.
+    if (body.minecraftVersion !== undefined) {
+      const liveStatus = clientManager.get(id)?.getStatus().status;
+      if (liveStatus && liveStatus !== "OFFLINE") {
+        await clientManager.restart(id);
+      }
+    }
+
     await recordAuditLog({
       userId: req.session!.user.id,
       action: "ACCOUNT_UPDATE",

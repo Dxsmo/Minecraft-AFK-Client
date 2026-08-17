@@ -28,7 +28,7 @@ export function Layout() {
                 to={item.to}
                 className={({ isActive }) =>
                   `rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                    isActive ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+                    isActive ? "bg-slate-700 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
                   }`
                 }
               >

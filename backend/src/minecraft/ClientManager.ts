@@ -17,6 +17,7 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     serverPort: account.serverPort,
     authType: account.authType,
     credentialsSecret: account.credentialsSecret,
+    credentialsPassword: account.credentialsPassword,
     afkEnabled: account.afkEnabled,
     movementEnabled: account.movementEnabled,
     afkIntervalSeconds: account.afkIntervalSeconds,

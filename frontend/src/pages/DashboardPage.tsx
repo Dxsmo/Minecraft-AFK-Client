@@ -150,7 +150,7 @@ export function DashboardPage() {
                         </button>
                         <Link
                           to={`/accounts/${account.id}`}
-                          className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500"
+                          className="rounded-md bg-slate-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-600"
                         >
                           Console
                         </Link>

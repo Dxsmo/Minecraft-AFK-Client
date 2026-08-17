@@ -154,23 +154,37 @@ Copy `.env.example` to `.env` (repo root) for Docker Compose, or to
 
 ## 6. Minecraft account configuration
 
-Admins create Minecraft accounts under **Dashboard → New account**:
+Any authenticated user can create a Minecraft account under **Dashboard →
+New account** (they're automatically the sole assignee; admins can grant
+additional users access afterwards in the account's **Settings** panel):
 
 - `name` – internal bot identifier (also used as the offline-mode
   username by default)
-- `serverHost` / `serverPort` / `minecraftVersion`
-- `authType` – `OFFLINE` (cracked/offline server) or `MICROSOFT`
+- `serverHost` / `serverPort`
+- `minecraftVersion` – selectable from a dropdown of supported releases;
+  changing it applies immediately and restarts the client if it's online
+- `authType` – `OFFLINE` (cracked/offline server) or `MICROSOFT`. For
+  `MICROSOFT`, the account **email and password are set only once at
+  creation and cannot be changed afterwards** — the update API does not
+  accept these fields at all, so changing credentials requires deleting
+  the account and creating a new one. Password-based sign-in does not
+  work for Microsoft accounts with 2FA/modern security features enabled;
+  leave the password empty in that case and use the device-code sign-in
+  link shown live on the account page instead.
 - AFK / Movement behavior toggles + AFK interval
-- `autoReconnect` – exponential backoff (5s → capped at 5 min, ±jitter),
-  gives up after 50 consecutive attempts (visible as client status
-  `ERROR`) to avoid infinite reconnect storms; can be re-started manually
-  or re-enabled at any time
-- Assign the account to one or more users in the account's **Settings**
-  panel
+- Auto-command: an optional chat message/command sent automatically at a
+  configurable interval (minutes), independent of the AFK/movement
+  behaviors — configured per account in **Settings**
+- `autoReconnect` – fixed 30s retry delay (±2s jitter) after a dropped
+  connection, retried indefinitely as long as the client isn't manually
+  stopped; can be disabled per account at any time
+- Any admin or user assigned to the account can edit its settings,
+  start/stop/restart it, and delete it entirely; only admins can grant
+  *other* users access via the assignments list
 
-Credentials (`credentialsSecret`, used for Microsoft auth) are **never**
-included in any API response sent to the frontend — only account metadata
-and live status are exposed.
+Credentials (`credentialsSecret`/`credentialsPassword`, used for
+Microsoft auth) are **never** included in any API response sent to the
+frontend — only account metadata and live status are exposed.
 
 ### AFK / Movement behavior system
 
@@ -211,7 +225,13 @@ SQLite and pruned automatically.
 
 - Argon2id password hashing (tuned for constrained hardware)
 - Server-side sessions, `HttpOnly` + `SameSite=Lax` cookies,
-  `Secure` in production
+  `Secure` in production. Cookies are browser-*session* cookies (no
+  `Expires`/`Max-Age`), so closing the browser logs the user out, and
+  every backend restart wipes all sessions server-side too — a fresh
+  login is always required after either.
+- Persistent data (users, Minecraft accounts, assignments, console/audit
+  logs) survives restarts via the SQLite file in the `backend_data`
+  Docker volume; only *sessions* are intentionally cleared on restart.
 - CSRF protection via double-submit cookie (`afk_csrf` cookie +
   `x-csrf-token` header, enforced on every mutating request)
 - Full RBAC + per-account ownership checks enforced in every API route

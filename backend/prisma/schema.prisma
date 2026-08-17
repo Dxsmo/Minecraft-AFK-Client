@@ -80,7 +80,12 @@ model MinecraftAccount {
   authType           AuthType @default(OFFLINE)
   // Credentials are stored encrypted-at-rest is out of scope for SQLite text column here,
   // but this field is NEVER exposed via the API to any client (see accounts service).
-  credentialsSecret  String?
+  // For MICROSOFT accounts, credentialsSecret holds the email and credentialsPassword
+  // holds the account password. Both are set ONLY at account creation time and are
+  // immutable afterwards (the update API does not accept these fields at all) — to
+  // change them, the account must be deleted and recreated.
+  credentialsSecret   String?
+  credentialsPassword String?
   afkEnabled         Boolean  @default(true)
   movementEnabled    Boolean  @default(false)
   afkIntervalSeconds Int      @default(30)
