@@ -5,3 +5,4 @@ data
 *.db-journal
 .env
 .git
+rust-bot/target
