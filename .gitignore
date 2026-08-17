@@ -1,8 +1,22 @@
+### Node ###
+node_modules/
+dist/
+build/
+.env
+*.local
+
+### Database ###
+backend/data/
+backend/prisma/*.db
+backend/prisma/*.db-journal
+database/*.db
+
 ### IntelliJ IDEA ###
 out/
 !**/src/main/**/out/
 !**/src/test/**/out/
 .kotlin
+.idea/
 
 ### Eclipse ###
 .apt_generated
@@ -28,3 +42,11 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+
+### Logs ###
+*.log
+npm-debug.log*
+
+### Frontend ###
+frontend/dist/
+frontend/node_modules/

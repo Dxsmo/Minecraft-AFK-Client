@@ -1,0 +1,135 @@
+// Prisma schema for the Minecraft AFK Client Management Service
+// Database: SQLite (file-based, lightweight, ideal for Raspberry Pi 5)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  USER
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum AuthType {
+  OFFLINE
+  MICROSOFT
+}
+
+enum ClientStatus {
+  OFFLINE
+  CONNECTING
+  ONLINE
+  DISCONNECTING
+  RECONNECTING
+  ERROR
+}
+
+enum ConsoleLogType {
+  SYSTEM
+  CHAT
+  SERVER_MESSAGE
+  USER_COMMAND
+  ERROR
+  WARNING
+}
+
+model User {
+  id           String     @id @default(cuid())
+  username     String     @unique
+  passwordHash String
+  role         Role       @default(USER)
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now())
+  lastLoginAt  DateTime?
+
+  sessions        Session[]
+  assignments     UserMinecraftAccount[]
+  auditLogs       AuditLog[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  csrfToken String
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  userAgent String?
+  ipAddress String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model MinecraftAccount {
+  id                 String   @id @default(cuid())
+  name               String   @unique
+  minecraftVersion   String   @default("1.20.4")
+  serverHost         String
+  serverPort         Int      @default(25565)
+  authType           AuthType @default(OFFLINE)
+  // Credentials are stored encrypted-at-rest is out of scope for SQLite text column here,
+  // but this field is NEVER exposed via the API to any client (see accounts service).
+  credentialsSecret  String?
+  afkEnabled         Boolean  @default(true)
+  movementEnabled    Boolean  @default(false)
+  afkIntervalSeconds Int      @default(30)
+  autoReconnect      Boolean  @default(true)
+  status             ClientStatus @default(OFFLINE)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  assignments UserMinecraftAccount[]
+  consoleLogs ConsoleLog[]
+}
+
+model UserMinecraftAccount {
+  id                 String @id @default(cuid())
+  userId             String
+  minecraftAccountId String
+  createdAt          DateTime @default(now())
+
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, minecraftAccountId])
+  @@index([minecraftAccountId])
+}
+
+model ConsoleLog {
+  id                 String         @id @default(cuid())
+  minecraftAccountId String
+  type               ConsoleLogType
+  message            String
+  createdAt          DateTime       @default(now())
+
+  minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+
+  @@index([minecraftAccountId, createdAt])
+}
+
+// targetType/targetId form a generic polymorphic reference (e.g. "MinecraftAccount"/"<id>" or
+// "User"/"<id>") deliberately without a DB-level FK, since the target can be different entities.
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  targetType String?
+  targetId   String?
+  details    String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+}
