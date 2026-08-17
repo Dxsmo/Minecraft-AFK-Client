@@ -51,3 +51,6 @@ npm-debug.log*
 ### Frontend ###
 frontend/dist/
 frontend/node_modules/
+
+### Rust
+backend/rust-bot/target/

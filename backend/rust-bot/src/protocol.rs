@@ -61,6 +61,10 @@ pub enum OutEvent {
         user_code: String,
         expires_in: u64,
     },
+    /// The authenticated Minecraft profile, emitted once right after building a
+    /// Microsoft account. Node uses this to auto-name the account after the
+    /// real in-game username.
+    Profile { username: String, uuid: String },
     /// Login packet received (before the player has fully spawned).
     Login,
     /// The bot has fully spawned into the world.

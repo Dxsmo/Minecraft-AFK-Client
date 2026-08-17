@@ -1,30 +1,32 @@
 //! AFK / movement / auto-command behaviors, ported from the Node.js
-//! `BehaviorManager` system to run natively inside the Rust bot process
-//! (Azalea's movement API differs enough from Mineflayer's that behaviors
-//! live here now instead of being controlled packet-by-packet from Node).
+//! `BehaviorManager` system to run natively inside the Rust bot process.
+//!
+//! Everything here is driven from `Event::Tick` (fired 20x/second by Azalea
+//! while the bot is in a loaded world). This intentionally avoids spawning any
+//! Tokio tasks: Azalea runs its ECS systems outside of a Tokio runtime context,
+//! so `tokio::spawn`/`spawn_local` from inside an event handler is unreliable.
+//! Tick-driven timing keeps behaviors simple, deterministic and cheap.
 
 use std::time::{Duration, Instant};
 
 use azalea::{Client, WalkDirection};
 use rand::Rng;
-use tokio::task::JoinHandle;
 
+use crate::emit;
 use crate::protocol::{BehaviorConfig, Config, OutEvent};
 
-const TICK_INTERVAL: Duration = Duration::from_millis(1000);
+/// How long the bot keeps walking in one direction before stopping again.
 const WALK_DURATION: Duration = Duration::from_secs(2);
-
-fn emit(event: &OutEvent) {
-    if let Ok(line) = serde_json::to_string(event) {
-        println!("{line}");
-    }
-}
+/// Minimum time between two random movement bursts.
+const MOVEMENT_INTERVAL: Duration = Duration::from_secs(8);
 
 pub struct BehaviorState {
     config: BehaviorConfig,
     last_afk_at: Instant,
     last_movement_at: Instant,
     last_auto_command_at: Instant,
+    /// When `Some`, the bot is currently walking and should stop at this time.
+    stop_walking_at: Option<Instant>,
 }
 
 impl BehaviorState {
@@ -39,103 +41,78 @@ impl BehaviorState {
                 auto_command_text: config.auto_command_text.clone(),
                 auto_command_interval_minutes: config.auto_command_interval_minutes,
             },
-            // Stagger the first fire slightly into the future rather than
-            // immediately, mirroring the Node-side behaviors' original
-            // "start on connect, first action after one interval" feel.
             last_afk_at: now,
             last_movement_at: now,
             last_auto_command_at: now,
+            stop_walking_at: None,
         }
     }
 
-    pub fn update_config(&mut self, config: &BehaviorConfig) {
-        self.config = config.clone();
+    /// Apply a live settings update (from a `Command::Configure`).
+    pub fn update_config(&mut self, config: BehaviorConfig) {
+        self.config = config;
     }
-}
 
-/// Spawns a background task that periodically checks elapsed time against
-/// each behavior's configured interval and fires the corresponding action.
-/// Checking a shared config on every tick (rather than resetting individual
-/// timers) means live `Command::Configure` updates take effect immediately
-/// without needing to restart anything.
-/// 
-/// Note: This must be called from within a Tokio LocalSet (as required by
-/// Azalea's internal ECS scheduler).
-pub fn spawn_ticker(
-    client: Client,
-    state: std::sync::Arc<parking_lot::Mutex<BehaviorState>>,
-) -> JoinHandle<()> {
-    tokio::task::spawn_local(async move {
-        let mut interval = tokio::time::interval(TICK_INTERVAL);
-        loop {
-            interval.tick().await;
-            let now = Instant::now();
+    /// Called on every `Event::Tick`. Checks each behavior's elapsed time
+    /// against its configured interval and fires the corresponding action.
+    pub fn on_tick(&mut self, bot: &Client) {
+        let now = Instant::now();
 
-            let (do_afk, do_movement, do_auto_command, auto_command_text) = {
-                let mut s = state.lock();
-                let do_afk = s.config.afk_enabled
-                    && now.duration_since(s.last_afk_at)
-                        >= Duration::from_secs(s.config.afk_interval_seconds.max(5));
-                let do_movement = s.config.movement_enabled
-                    && now.duration_since(s.last_movement_at) >= Duration::from_secs(8);
-                let do_auto_command = s.config.auto_command_enabled
-                    && !s.config.auto_command_text.trim().is_empty()
-                    && now.duration_since(s.last_auto_command_at)
-                        >= Duration::from_secs(s.config.auto_command_interval_minutes.max(1) * 60);
-
-                if do_afk {
-                    s.last_afk_at = now;
-                }
-                if do_movement {
-                    s.last_movement_at = now;
-                }
-                if do_auto_command {
-                    s.last_auto_command_at = now;
-                }
-
-                (do_afk, do_movement, do_auto_command, s.config.auto_command_text.clone())
-            };
-
-            if do_afk {
-                run_afk_tick(&client);
-            }
-            if do_movement {
-                run_movement_tick(&client);
-            }
-            if do_auto_command {
-                client.chat(&auto_command_text);
-                emit(&OutEvent::BehaviorLog {
-                    message: format!("Auto-command sent: {auto_command_text}"),
-                });
+        // Stop a previous movement burst once its duration has elapsed.
+        if let Some(stop_at) = self.stop_walking_at {
+            if now >= stop_at {
+                bot.walk(WalkDirection::None);
+                self.stop_walking_at = None;
             }
         }
-    })
-}
 
-/// Keeps the bot from being kicked for inactivity: looks in a random
-/// direction and jumps, without moving away from its current position.
-fn run_afk_tick(client: &Client) {
-    let mut rng = rand::thread_rng();
-    let yaw: f32 = rng.gen_range(-180.0..180.0);
-    let pitch: f32 = rng.gen_range(-20.0..20.0);
-    let _ = client.set_direction(yaw, pitch);
-    client.jump();
-}
+        // AFK: look somewhere random and jump. Keeps the player active without
+        // moving away from its spot, resetting most servers' AFK timers.
+        if self.config.afk_enabled {
+            let interval = Duration::from_secs(self.config.afk_interval_seconds.max(5));
+            if now.duration_since(self.last_afk_at) >= interval {
+                self.last_afk_at = now;
+                let mut rng = rand::thread_rng();
+                let yaw: f32 = rng.gen_range(-180.0..180.0);
+                let pitch: f32 = rng.gen_range(-20.0..20.0);
+                let _ = bot.set_direction(yaw, pitch);
+                bot.jump();
+            }
+        }
 
-/// Makes the bot wander a short distance in a random direction, then stop.
-fn run_movement_tick(client: &Client) {
-    let directions = [
-        WalkDirection::Forward,
-        WalkDirection::Backward,
-        WalkDirection::Left,
-        WalkDirection::Right,
-    ];
-    let direction = directions[rand::thread_rng().gen_range(0..directions.len())];
-    client.walk(direction);
+        // Movement: wander a short distance in a random direction, then stop
+        // (handled by `stop_walking_at` above). Skipped while already walking.
+        if self.config.movement_enabled
+            && self.stop_walking_at.is_none()
+            && now.duration_since(self.last_movement_at) >= MOVEMENT_INTERVAL
+        {
+            self.last_movement_at = now;
+            let directions = [
+                WalkDirection::Forward,
+                WalkDirection::Backward,
+                WalkDirection::Left,
+                WalkDirection::Right,
+            ];
+            let direction = directions[rand::thread_rng().gen_range(0..directions.len())];
+            bot.walk(direction);
+            self.stop_walking_at = Some(now + WALK_DURATION);
+        }
 
-    let client = client.clone();
-    tokio::task::spawn_local(async move {
-        tokio::time::sleep(WALK_DURATION).await;
-        client.walk(WalkDirection::None);
-    });
+        // Auto-command: type a configured chat message/command at a fixed
+        // interval, independent of the AFK/movement behaviors.
+        if self.config.auto_command_enabled {
+            let text = self.config.auto_command_text.trim().to_string();
+            if !text.is_empty() {
+                let interval =
+                    Duration::from_secs(self.config.auto_command_interval_minutes.max(1) * 60);
+                if now.duration_since(self.last_auto_command_at) >= interval {
+                    self.last_auto_command_at = now;
+                    bot.chat(text.clone());
+                    emit(&OutEvent::BehaviorLog {
+                        message: format!("Auto-command sent: {text}"),
+                    });
+                }
+            }
+        }
+    }
 }
