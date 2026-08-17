@@ -14,6 +14,12 @@ import type { Logger } from "pino";
 const RECONNECT_DELAY_MS = 30_000;
 const RECONNECT_JITTER_MS = 2_000;
 
+// Safety net: if a connection attempt never reaches "spawn" within this
+// window (e.g. the server hangs waiting for something the bot never
+// responds to), we forcibly abandon it and reconnect, instead of getting
+// stuck showing "CONNECTING..." forever.
+const CONNECTION_TIMEOUT_MS = 45_000;
+
 /**
  * Wraps a single Mineflayer bot connection and exposes a small, explicit
  * state machine (OFFLINE -> CONNECTING -> ONLINE -> DISCONNECTING/RECONNECTING/ERROR)
@@ -27,6 +33,7 @@ export class MinecraftClient extends EventEmitter {
   private status: ClientStatus = "OFFLINE";
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private connectionWatchdog: NodeJS.Timeout | null = null;
   private manuallyStopped = false;
   private connectedSince: Date | null = null;
   private lastError: string | undefined;
@@ -179,6 +186,8 @@ export class MinecraftClient extends EventEmitter {
       const bot = mineflayer.createBot(botOptions as unknown as Parameters<typeof mineflayer.createBot>[0]);
       this.attachBotHandlers(bot);
       this.bot = bot;
+
+      this.connectionWatchdog = setTimeout(() => this.handleStuckConnection(), CONNECTION_TIMEOUT_MS);
     } catch (err) {
       this.handleFatalError(err as Error);
     }
@@ -186,12 +195,30 @@ export class MinecraftClient extends EventEmitter {
 
   private attachBotHandlers(bot: Bot): void {
     bot.once("spawn", () => {
+      this.clearConnectionWatchdog();
       this.reconnectAttempt = 0;
       this.connectedSince = new Date();
       this.msaSignIn = undefined;
       this.setStatus("ONLINE");
       this.emitConsole("SYSTEM", "Spawned into world");
       this.behaviorManager.start(bot);
+    });
+
+    bot.on("login", () => {
+      this.emitConsole("SYSTEM", "Login accepted by server, waiting to spawn...");
+    });
+
+    // Some servers require accepting a resource/texture pack before letting
+    // the player fully join. Since this is a headless bot with no renderer,
+    // we always auto-accept immediately so the join isn't blocked waiting
+    // for a response that would otherwise never come.
+    bot.on("resourcePack", (url: string) => {
+      this.emitConsole("SYSTEM", `Server requested a resource pack (${url}); auto-accepting...`);
+      try {
+        bot.acceptResourcePack();
+      } catch (err) {
+        this.emitConsole("WARNING", `Failed to auto-accept resource pack: ${(err as Error).message}`);
+      }
     });
 
     bot.on("chat", (username: string, message: string) => {
@@ -218,6 +245,7 @@ export class MinecraftClient extends EventEmitter {
     });
 
     bot.on("end", (reason?: string) => {
+      this.clearConnectionWatchdog();
       this.behaviorManager.stop();
       this.connectedSince = null;
       this.bot = null;
@@ -257,8 +285,36 @@ export class MinecraftClient extends EventEmitter {
     this.scheduleReconnect();
   }
 
+  /**
+   * Called when a connection attempt has been stuck without reaching
+   * "spawn" for too long (e.g. the server never responded to something,
+   * or the TCP connection silently died without emitting 'end'). Forces a
+   * clean teardown and reconnect so the UI never gets stuck showing
+   * "CONNECTING..." indefinitely.
+   */
+  private handleStuckConnection(): void {
+    if (this.status !== "CONNECTING" && this.status !== "RECONNECTING") return;
+    this.log.warn("Connection attempt timed out before spawning; forcing reconnect");
+    this.emitConsole("WARNING", `No response from server after ${CONNECTION_TIMEOUT_MS / 1000}s, retrying...`);
+
+    const staleBot = this.bot;
+    this.bot = null;
+    this.connectedSince = null;
+    this.behaviorManager.stop();
+    if (staleBot) {
+      try {
+        staleBot.removeAllListeners();
+        staleBot.quit("Connection timed out");
+      } catch {
+        /* already dead, nothing to clean up */
+      }
+    }
+    this.scheduleReconnect();
+  }
+
   private teardownBot(reason: string): void {
     this.clearReconnectTimer();
+    this.clearConnectionWatchdog();
     this.behaviorManager.stop();
     if (this.bot) {
       try {
@@ -275,6 +331,13 @@ export class MinecraftClient extends EventEmitter {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  private clearConnectionWatchdog(): void {
+    if (this.connectionWatchdog) {
+      clearTimeout(this.connectionWatchdog);
+      this.connectionWatchdog = null;
     }
   }
 

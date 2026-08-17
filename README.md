@@ -186,6 +186,17 @@ Credentials (`credentialsSecret`/`credentialsPassword`, used for
 Microsoft auth) are **never** included in any API response sent to the
 frontend — only account metadata and live status are exposed.
 
+### Server resource/texture packs
+
+If the target server requires accepting a resource pack before letting a
+player fully join, `MinecraftClient` automatically accepts it on the
+bot's behalf (there's no renderer to actually download/display it, so
+there's nothing to prompt a human for). A connection attempt that never
+reaches "spawn" within 45 seconds for any reason (stuck resource pack
+handshake, unresponsive server, a TCP connection that silently died) is
+automatically abandoned and retried, so the dashboard never gets stuck
+showing "CONNECTING..." indefinitely.
+
 ### AFK / Movement behavior system
 
 `BehaviorManager` (in `backend/src/minecraft/behaviors/`) attaches small,

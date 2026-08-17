@@ -16,6 +16,7 @@ class FakeBot extends EventEmitter {
   quit = vi.fn(() => this.emit("end", "quit() called"));
   setControlState = vi.fn();
   look = vi.fn();
+  acceptResourcePack = vi.fn();
 }
 
 const createdBots: FakeBot[] = [];
@@ -128,5 +129,31 @@ describe("MinecraftClient state machine", () => {
 
     expect(events).toContain("CHAT:Steve: hello there");
     expect(events.some((e) => e.includes("should be ignored"))).toBe(false);
+  });
+
+  it("auto-accepts a server resource pack instead of leaving the join blocked", () => {
+    const client = new MinecraftClient(baseConfig());
+    client.connect();
+    createdBots[0].emit("resourcePack", "https://example.com/pack.zip");
+
+    expect(createdBots[0].acceptResourcePack).toHaveBeenCalled();
+  });
+
+  it("forces a reconnect if the connection is stuck without spawning (watchdog)", () => {
+    vi.useFakeTimers();
+    try {
+      const client = new MinecraftClient(baseConfig({ autoReconnect: true }));
+      client.connect();
+      expect(client.getStatus().status).toBe("CONNECTING");
+
+      // Never emit 'spawn' — simulate a hung connection — and advance past
+      // the connection watchdog timeout.
+      vi.advanceTimersByTime(46_000);
+
+      expect(client.getStatus().status).toBe("RECONNECTING");
+      expect(createdBots[0].quit).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -104,17 +104,6 @@ export function AccountSettingsPanel({
         </select>
       </label>
       {versionMessage && <p className="mt-1 text-xs text-emerald-400">{versionMessage}</p>}
-      <p className="mt-1 text-xs text-slate-500">Applies immediately and restarts the client if it's online.</p>
-
-      <div className="mt-4 rounded-md border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-400">
-        <span className="font-medium text-slate-300">Auth type: {account.authType}</span>
-        {account.authType === "MICROSOFT" && (
-          <p className="mt-1">
-            Microsoft email/password are set once at creation and cannot be changed. Delete this account and
-            create a new one to use different credentials.
-          </p>
-        )}
-      </div>
 
       <div className="mt-4 space-y-2">
         <label className="flex items-center justify-between">
@@ -172,10 +161,6 @@ export function AccountSettingsPanel({
             className="input w-20"
           />
         </label>
-        <p className="text-xs text-slate-500">
-          Sent automatically to chat at this interval whenever the client is online, independent of the AFK
-          behavior above.
-        </p>
       </div>
 
       {isAdmin && (

@@ -116,11 +116,6 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
                   className="input"
                 />
               </Field>
-              <p className="text-xs text-slate-500">
-                These credentials can only be set here. To change them later, delete this account and create a
-                new one. Accounts with 2FA/modern security enabled cannot sign in this way — leave the password
-                empty and use the device-code link shown on the account page instead.
-              </p>
             </>
           )}
 
