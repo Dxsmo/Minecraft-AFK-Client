@@ -99,6 +99,12 @@ model MinecraftAccount {
   autoCommandEnabled         Boolean @default(false)
   autoCommandText            String  @default("")
   autoCommandIntervalMinutes Int     @default(5)
+  // Auto-accept incoming /tpa teleport requests (never /tpahere).
+  tpAutoEnabled              Boolean @default(false)
+  // Periodically run the sell command and shift all items into the sell menu.
+  autoSellEnabled            Boolean @default(false)
+  autoSellIntervalSeconds    Int     @default(60)
+  autoSellCommand            String  @default("/sell")
   status             ClientStatus @default(OFFLINE)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt

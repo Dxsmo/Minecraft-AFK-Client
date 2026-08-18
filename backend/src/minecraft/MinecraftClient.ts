@@ -73,6 +73,10 @@ export class MinecraftClient extends EventEmitter {
         auto_command_enabled: config.autoCommandEnabled,
         auto_command_text: config.autoCommandText,
         auto_command_interval_minutes: config.autoCommandIntervalMinutes,
+        tpauto_enabled: config.tpAutoEnabled,
+        autosell_enabled: config.autoSellEnabled,
+        autosell_interval_seconds: config.autoSellIntervalSeconds,
+        autosell_command: config.autoSellCommand,
       });
     }
   }
@@ -225,6 +229,10 @@ export class MinecraftClient extends EventEmitter {
       auto_command_enabled: this.config.autoCommandEnabled,
       auto_command_text: this.config.autoCommandText,
       auto_command_interval_minutes: this.config.autoCommandIntervalMinutes,
+      tpauto_enabled: this.config.tpAutoEnabled,
+      autosell_enabled: this.config.autoSellEnabled,
+      autosell_interval_seconds: this.config.autoSellIntervalSeconds,
+      autosell_command: this.config.autoSellCommand,
     });
 
     this.hangTimer = setTimeout(() => {
@@ -288,6 +296,14 @@ export class MinecraftClient extends EventEmitter {
       case "behavior_log":
         this.emitConsole("SYSTEM", String((event as { message: string }).message));
         break;
+
+      case "health": {
+        const { health, food } = event as { health: number; food: number };
+        this.health = health;
+        this.food = food;
+        this.emitStatus();
+        break;
+      }
 
       case "warning":
         this.emitConsole("WARNING", String((event as { message: string }).message));

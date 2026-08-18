@@ -50,6 +50,12 @@ export interface ClientRuntimeConfig {
   autoCommandEnabled: boolean;
   autoCommandText: string;
   autoCommandIntervalMinutes: number;
+  /** Auto-accept incoming /tpa teleport requests (never /tpahere). */
+  tpAutoEnabled: boolean;
+  /** Periodically run the sell command and move all items into the sell menu. */
+  autoSellEnabled: boolean;
+  autoSellIntervalSeconds: number;
+  autoSellCommand: string;
 }
 
 /** Microsoft device-code sign-in details, shown live in the account console/UI. */

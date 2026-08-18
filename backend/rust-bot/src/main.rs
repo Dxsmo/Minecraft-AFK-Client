@@ -23,6 +23,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use azalea::account::microsoft::MicrosoftAccountOpts;
+use azalea::entity::metadata::Health;
 use azalea::prelude::*;
 use azalea::{ClientInformation, auth};
 use parking_lot::Mutex;
@@ -56,12 +57,35 @@ fn flush_stdout() {
     let _ = std::io::stdout().flush();
 }
 
+/// Reads the bot's current health and food and emits a [`OutEvent::Health`]
+/// whenever either value changes. Values are unavailable before the bot has
+/// spawned, in which case this is a no-op.
+fn report_health(bot: &Client) {
+    let Ok(health_component) = bot.component::<Health>() else {
+        return;
+    };
+    let health = **health_component;
+    let Ok(hunger) = bot.hunger() else {
+        return;
+    };
+    let food = hunger.food;
+
+    let mut s = shared().lock();
+    if s.last_health != Some((health, food)) {
+        s.last_health = Some((health, food));
+        drop(s);
+        emit(&OutEvent::Health { health, food });
+    }
+}
+
 /// State shared between the stdin-reader thread (producer) and the Azalea event
 /// handler (consumer). There's exactly one bot per process, so a single global
 /// is simpler and safer than threading it through Azalea's ECS state.
 struct Shared {
     behavior: BehaviorState,
     pending: Vec<Command>,
+    /// Last health/food we reported, so we only emit a Health event on change.
+    last_health: Option<(f32, u32)>,
 }
 
 static SHARED: OnceLock<Arc<Mutex<Shared>>> = OnceLock::new();
@@ -107,6 +131,7 @@ async fn async_main() -> AppExit {
     let _ = SHARED.set(Arc::new(Mutex::new(Shared {
         behavior: BehaviorState::new(&config),
         pending: Vec::new(),
+        last_health: None,
     })));
 
     // 3. Read subsequent command lines on a dedicated OS thread.
@@ -341,6 +366,8 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
         }
         Event::Chat(packet) => {
             let (sender, message) = packet.split_sender_and_content();
+            // Auto-accept /tpa requests before the message is moved into the event.
+            shared().lock().behavior.on_chat(&bot, &message);
             emit(&OutEvent::Chat { sender, message });
         }
         Event::Tick => {
@@ -363,6 +390,7 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
                 }
             }
             shared().lock().behavior.on_tick(&bot);
+            report_health(&bot);
         }
         Event::Disconnect(reason) => {
             emit(&OutEvent::Disconnect {

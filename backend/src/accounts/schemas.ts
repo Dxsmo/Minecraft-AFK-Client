@@ -32,6 +32,10 @@ export const createAccountSchema = z
     autoCommandEnabled: z.boolean().default(false),
     autoCommandText: z.string().max(256).default(""),
     autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).default(5),
+    tpAutoEnabled: z.boolean().default(false),
+    autoSellEnabled: z.boolean().default(false),
+    autoSellIntervalSeconds: z.coerce.number().int().min(5).max(3600).default(60),
+    autoSellCommand: z.string().max(64).default("/sell"),
   })
   .refine((data) => data.authType !== "MICROSOFT" || !!data.credentialsSecret, {
     message: "Microsoft accounts require an account email",
@@ -57,6 +61,10 @@ export const updateAccountSchema = z.object({
   autoCommandEnabled: z.boolean().optional(),
   autoCommandText: z.string().max(256).optional(),
   autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).optional(),
+  tpAutoEnabled: z.boolean().optional(),
+  autoSellEnabled: z.boolean().optional(),
+  autoSellIntervalSeconds: z.coerce.number().int().min(5).max(3600).optional(),
+  autoSellCommand: z.string().max(64).optional(),
 });
 
 export const assignUsersSchema = z.object({

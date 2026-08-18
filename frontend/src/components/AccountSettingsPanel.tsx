@@ -23,6 +23,10 @@ export function AccountSettingsPanel({
   const [autoCommandEnabled, setAutoCommandEnabled] = useState(account.autoCommandEnabled);
   const [autoCommandText, setAutoCommandText] = useState(account.autoCommandText);
   const [autoCommandIntervalMinutes, setAutoCommandIntervalMinutes] = useState(account.autoCommandIntervalMinutes);
+  const [tpAutoEnabled, setTpAutoEnabled] = useState(account.tpAutoEnabled);
+  const [autoSellEnabled, setAutoSellEnabled] = useState(account.autoSellEnabled);
+  const [autoSellIntervalSeconds, setAutoSellIntervalSeconds] = useState(account.autoSellIntervalSeconds);
+  const [autoSellCommand, setAutoSellCommand] = useState(account.autoSellCommand);
   const [assigned, setAssigned] = useState<Set<string>>(new Set(account.assignments.map((a) => a.userId)));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -49,6 +53,10 @@ export function AccountSettingsPanel({
         autoCommandEnabled,
         autoCommandText,
         autoCommandIntervalMinutes,
+        tpAutoEnabled,
+        autoSellEnabled,
+        autoSellIntervalSeconds,
+        autoSellCommand,
       });
       if (isAdmin) {
         await api.put(`/minecraft/accounts/${account.id}/assignments`, { userIds: Array.from(assigned) });
@@ -197,6 +205,46 @@ export function AccountSettingsPanel({
             className="input w-20"
           />
         </label>
+      </div>
+
+      <h4 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
+        Auto-TPA
+      </h4>
+      <div className="space-y-2.5">
+        <Switch label="Accept incoming /tpa" checked={tpAutoEnabled} onChange={setTpAutoEnabled} />
+        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+          Automatically accepts players teleporting to the bot (/tpa). Ignores /tpahere.
+        </p>
+      </div>
+
+      <h4 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
+        Auto-sell
+      </h4>
+      <div className="space-y-2.5">
+        <Switch label="Enabled" checked={autoSellEnabled} onChange={setAutoSellEnabled} />
+        <div>
+          <label className="label">Sell command</label>
+          <input
+            value={autoSellCommand}
+            onChange={(e) => setAutoSellCommand(e.target.value)}
+            placeholder="/sell"
+            className="input"
+          />
+        </div>
+        <label className="flex items-center justify-between">
+          <span style={{ color: "var(--text-muted)" }}>Every (seconds)</span>
+          <input
+            type="number"
+            min={5}
+            max={3600}
+            value={autoSellIntervalSeconds}
+            onChange={(e) => setAutoSellIntervalSeconds(Number(e.target.value))}
+            className="input w-20"
+          />
+        </label>
+        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+          Runs the sell command, then moves all inventory items into the sell menu.
+        </p>
       </div>
 
       {isAdmin && (

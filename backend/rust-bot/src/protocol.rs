@@ -29,6 +29,28 @@ pub struct Config {
     pub auto_command_enabled: bool,
     pub auto_command_text: String,
     pub auto_command_interval_minutes: u64,
+
+    /// Auto-accept incoming `/tpa` teleport requests (but never `/tpahere`).
+    #[serde(default)]
+    pub tpauto_enabled: bool,
+    /// Periodically sell the inventory by running the sell command and moving
+    /// all items into the sell menu the server opens.
+    #[serde(default)]
+    pub autosell_enabled: bool,
+    /// Seconds between two auto-sell cycles.
+    #[serde(default = "default_autosell_interval")]
+    pub autosell_interval_seconds: u64,
+    /// The command that opens the server's sell menu (e.g. "/sell").
+    #[serde(default = "default_autosell_command")]
+    pub autosell_command: String,
+}
+
+fn default_autosell_interval() -> u64 {
+    60
+}
+
+fn default_autosell_command() -> String {
+    "/sell".to_string()
 }
 
 /// Behavior-only subset of [`Config`], sent again later to update settings
@@ -41,6 +63,14 @@ pub struct BehaviorConfig {
     pub auto_command_enabled: bool,
     pub auto_command_text: String,
     pub auto_command_interval_minutes: u64,
+    #[serde(default)]
+    pub tpauto_enabled: bool,
+    #[serde(default)]
+    pub autosell_enabled: bool,
+    #[serde(default = "default_autosell_interval")]
+    pub autosell_interval_seconds: u64,
+    #[serde(default = "default_autosell_command")]
+    pub autosell_command: String,
 }
 
 /// Commands sent from Node.js to this process after the initial config line.
@@ -92,4 +122,7 @@ pub enum OutEvent {
     FatalError { error: String },
     /// A behavior fired an action worth logging (e.g. an auto-command was sent).
     BehaviorLog { message: String },
+    /// The bot's current health (0..=20) and food/hunger level (0..=20),
+    /// emitted whenever either value changes.
+    Health { health: f32, food: u32 },
 }

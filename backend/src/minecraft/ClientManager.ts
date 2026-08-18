@@ -25,6 +25,10 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     autoCommandEnabled: account.autoCommandEnabled,
     autoCommandText: account.autoCommandText,
     autoCommandIntervalMinutes: account.autoCommandIntervalMinutes,
+    tpAutoEnabled: account.tpAutoEnabled,
+    autoSellEnabled: account.autoSellEnabled,
+    autoSellIntervalSeconds: account.autoSellIntervalSeconds,
+    autoSellCommand: account.autoSellCommand,
   };
 }
 

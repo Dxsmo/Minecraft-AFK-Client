@@ -68,6 +68,10 @@ export interface MinecraftAccount {
   autoCommandEnabled: boolean;
   autoCommandText: string;
   autoCommandIntervalMinutes: number;
+  tpAutoEnabled: boolean;
+  autoSellEnabled: boolean;
+  autoSellIntervalSeconds: number;
+  autoSellCommand: string;
   status: ClientStatus;
   createdAt: string;
   updatedAt: string;
