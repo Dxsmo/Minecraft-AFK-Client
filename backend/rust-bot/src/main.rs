@@ -73,8 +73,23 @@ fn shared() -> &'static Arc<Mutex<Shared>> {
 #[derive(Clone, Component, Default)]
 struct State;
 
-#[tokio::main]
-async fn main() -> AppExit {
+/// Entry point. We drive Azalea on a **single-threaded** Tokio runtime plus a
+/// [`LocalSet`](tokio::task::LocalSet): one Minecraft account is very light, and
+/// since each account is its own OS process, a multi-threaded runtime per bot
+/// would otherwise spawn a full worker pool per bot (≈4 threads each), which
+/// adds up fast when running dozens of accounts on a Raspberry Pi. A
+/// current-thread runtime keeps each bot to a handful of threads while behaving
+/// identically for an AFK workload.
+fn main() -> AppExit {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build the Tokio runtime");
+    let local = tokio::task::LocalSet::new();
+    local.block_on(&runtime, async_main())
+}
+
+async fn async_main() -> AppExit {
     // 1. Read the config line (the very first stdin line). Nothing else runs
     //    yet, so a blocking read here is fine.
     let config = match read_config() {
