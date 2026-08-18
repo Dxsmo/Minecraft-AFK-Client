@@ -34,7 +34,7 @@ export const createAccountSchema = z
     autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).default(5),
     tpAutoEnabled: z.boolean().default(false),
     autoSellEnabled: z.boolean().default(false),
-    autoSellIntervalSeconds: z.coerce.number().int().min(5).max(3600).default(60),
+    autoSellIntervalSeconds: z.coerce.number().int().min(1).max(3600).default(60),
     autoSellCommand: z.string().max(64).default("/sell"),
   })
   .refine((data) => data.authType !== "MICROSOFT" || !!data.credentialsSecret, {
@@ -63,7 +63,7 @@ export const updateAccountSchema = z.object({
   autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).optional(),
   tpAutoEnabled: z.boolean().optional(),
   autoSellEnabled: z.boolean().optional(),
-  autoSellIntervalSeconds: z.coerce.number().int().min(5).max(3600).optional(),
+  autoSellIntervalSeconds: z.coerce.number().int().min(1).max(3600).optional(),
   autoSellCommand: z.string().max(64).optional(),
 });
 

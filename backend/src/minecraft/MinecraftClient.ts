@@ -25,6 +25,12 @@ const RECONNECT_JITTER_MS = 2_000;
 // Safety net: if a spawned bot never reaches ONLINE or reports a failure within
 // this window, we treat the attempt as hung and recycle it.
 const SUBPROCESS_HANG_TIMEOUT_MS = 5 * 60_000;
+/// If an ONLINE bot emits nothing (not even a heartbeat, which fires every ~20s)
+/// for this long, treat it as hung and recycle it. Recovers frozen bots that
+/// previously required a manual restart.
+const SUBPROCESS_ONLINE_SILENCE_MS = 90_000;
+/// How often the online-hang watchdog checks for subprocess silence.
+const ONLINE_WATCHDOG_INTERVAL_MS = 15_000;
 
 /**
  * Wraps the Azalea Rust bot subprocess (one per Minecraft account) and exposes
@@ -45,6 +51,9 @@ export class MinecraftClient extends EventEmitter {
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private hangTimer: NodeJS.Timeout | null = null;
+  private onlineWatchdog: NodeJS.Timeout | null = null;
+  /** Epoch ms of the last line received from the bot subprocess. */
+  private lastActivityAt = 0;
   private manuallyStopped = false;
   /** Guards against a single connection attempt being "ended" more than once. */
   private connectionEnded = false;
@@ -170,12 +179,15 @@ export class MinecraftClient extends EventEmitter {
     }
 
     this.subprocess = child;
+    this.lastActivityAt = Date.now();
+    this.startOnlineWatchdog();
 
     const rl = readline.createInterface({ input: child.stdout!, crlfDelay: Infinity });
     rl.on("line", (line) => {
       if (child !== this.subprocess) return; // ignore a superseded process
       const trimmed = line.trim();
       if (!trimmed) return;
+      this.lastActivityAt = Date.now();
       try {
         this.handleRustBotEvent(JSON.parse(trimmed));
       } catch (err) {
@@ -305,6 +317,10 @@ export class MinecraftClient extends EventEmitter {
         break;
       }
 
+      case "heartbeat":
+        // Liveness only; lastActivityAt is already refreshed for every line.
+        break;
+
       case "warning":
         this.emitConsole("WARNING", String((event as { message: string }).message));
         break;
@@ -365,6 +381,7 @@ export class MinecraftClient extends EventEmitter {
   }
 
   private teardownSubprocess(reason: string): void {
+    this.clearOnlineWatchdog();
     const child = this.subprocess;
     this.subprocess = null;
     this.connectedSince = null;
@@ -419,6 +436,26 @@ export class MinecraftClient extends EventEmitter {
     if (this.hangTimer) {
       clearTimeout(this.hangTimer);
       this.hangTimer = null;
+    }
+  }
+
+  private startOnlineWatchdog(): void {
+    this.clearOnlineWatchdog();
+    this.onlineWatchdog = setInterval(() => {
+      if (this.status !== "ONLINE") return;
+      const silentFor = Date.now() - this.lastActivityAt;
+      if (silentFor > SUBPROCESS_ONLINE_SILENCE_MS) {
+        this.log.warn({ silentFor }, "Bot subprocess silent while online, recycling");
+        this.emitConsole("WARNING", "Bot appears frozen (no heartbeat); reconnecting…");
+        this.handleConnectionFailure("Bot froze (no heartbeat)");
+      }
+    }, ONLINE_WATCHDOG_INTERVAL_MS);
+  }
+
+  private clearOnlineWatchdog(): void {
+    if (this.onlineWatchdog) {
+      clearInterval(this.onlineWatchdog);
+      this.onlineWatchdog = null;
     }
   }
 

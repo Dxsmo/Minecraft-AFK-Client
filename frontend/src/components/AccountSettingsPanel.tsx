@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { api, ApiError } from "../lib/api";
 import type { ManagedUser, MinecraftAccount } from "../lib/types";
 import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
@@ -95,51 +95,52 @@ export function AccountSettingsPanel({
   }
 
   return (
-    <div className="card p-4 text-sm">
-      {account.createdBy && (
-        <div className="mb-2 flex items-center gap-1.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
-          <span style={{ color: "var(--text-subtle)" }}>Erstellt von</span>
-          <span
-            className="rounded-full px-2 py-0.5 font-semibold"
-            style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
-          >
-            {account.createdBy.username}
-          </span>
-        </div>
-      )}
-      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
-        Settings
-      </h3>
-
-      <label className="flex items-center justify-between gap-2">
-        <span className="shrink-0" style={{ color: "var(--text-muted)" }}>
-          Minecraft version
-        </span>
-        <select
-          value={version}
-          disabled={versionSaving}
-          onChange={(e) => void applyVersion(e.target.value)}
-          className="input w-40"
-        >
-          <option value={AUTO_DETECT_VERSION}>Auto-detect</option>
-          {!MINECRAFT_VERSIONS.includes(version) && version !== AUTO_DETECT_VERSION && (
-            <option value={version}>{version}</option>
-          )}
-          {MINECRAFT_VERSIONS.map((v) => (
-            <option key={v} value={v}>
-              {v}
-            </option>
-          ))}
-        </select>
-      </label>
-      {versionMessage && <p className="mt-1 text-xs" style={{ color: "#34d399" }}>{versionMessage}</p>}
-
-      <h4 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
-        Server
-      </h4>
-      <div className="space-y-2.5">
+    <div className="card p-5 text-sm">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3 border-b pb-4" style={{ borderColor: "var(--border)" }}>
         <div>
-          <label className="label">Host</label>
+          <h3 className="text-sm font-semibold" style={{ color: "var(--text)" }}>
+            Settings
+          </h3>
+          <p className="mt-0.5 text-xs" style={{ color: "var(--text-subtle)" }}>
+            {account.name}
+          </p>
+        </div>
+        {account.createdBy && (
+          <div className="flex shrink-0 items-center gap-1.5 text-[11px]">
+            <span style={{ color: "var(--text-subtle)" }}>Erstellt von</span>
+            <span
+              className="rounded-full px-2 py-0.5 font-semibold"
+              style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+            >
+              {account.createdBy.username}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Connection */}
+      <Section title="Connection">
+        <Field label="Minecraft version" hint={versionMessage ?? undefined}>
+          <select
+            value={version}
+            disabled={versionSaving}
+            onChange={(e) => void applyVersion(e.target.value)}
+            className="input w-44"
+          >
+            <option value={AUTO_DETECT_VERSION}>Auto-detect</option>
+            {!MINECRAFT_VERSIONS.includes(version) && version !== AUTO_DETECT_VERSION && (
+              <option value={version}>{version}</option>
+            )}
+            {MINECRAFT_VERSIONS.map((v) => (
+              <option key={v} value={v}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div>
+          <label className="label">Server host</label>
           <input
             value={serverHost}
             onChange={(e) => setServerHost(e.target.value)}
@@ -147,44 +148,34 @@ export function AccountSettingsPanel({
             className="input"
           />
         </div>
-        <label className="flex items-center justify-between">
-          <span style={{ color: "var(--text-muted)" }}>Port</span>
+        <Field label="Server port">
           <input
             type="number"
             min={1}
             max={65535}
             value={serverPort}
             onChange={(e) => setServerPort(Number(e.target.value))}
-            className="input w-24"
+            className="input w-24 text-right"
           />
-        </label>
+        </Field>
         <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-          Restart the account to connect to the new server.
+          Restart the account to connect to a new server.
         </p>
-      </div>
+      </Section>
 
-      <div className="mt-4 space-y-2.5">
-        <Switch label="AFK behavior" checked={afkEnabled} onChange={setAfkEnabled} />
-        <Switch label="Movement behavior" checked={movementEnabled} onChange={setMovementEnabled} />
-        <Switch label="Auto-reconnect" checked={autoReconnect} onChange={setAutoReconnect} />
-        <label className="flex items-center justify-between">
-          <span style={{ color: "var(--text-muted)" }}>AFK interval (s)</span>
-          <input
-            type="number"
-            min={5}
-            max={3600}
-            value={afkIntervalSeconds}
-            onChange={(e) => setAfkIntervalSeconds(Number(e.target.value))}
-            className="input w-20"
-          />
-        </label>
-      </div>
+      {/* Behavior */}
+      <Section title="Behavior">
+        <Toggle label="AFK behavior" checked={afkEnabled} onChange={setAfkEnabled} />
+        <Toggle label="Movement behavior" checked={movementEnabled} onChange={setMovementEnabled} />
+        <Toggle label="Auto-reconnect" checked={autoReconnect} onChange={setAutoReconnect} />
+        <Field label="AFK interval">
+          <NumberInput value={afkIntervalSeconds} onChange={setAfkIntervalSeconds} min={5} max={3600} suffix="s" />
+        </Field>
+      </Section>
 
-      <h4 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
-        Auto-command
-      </h4>
-      <div className="space-y-2.5">
-        <Switch label="Enabled" checked={autoCommandEnabled} onChange={setAutoCommandEnabled} />
+      {/* Auto-command */}
+      <Section title="Auto-command">
+        <Toggle label="Enabled" checked={autoCommandEnabled} onChange={setAutoCommandEnabled} />
         <div>
           <label className="label">Command / message</label>
           <input
@@ -194,34 +185,29 @@ export function AccountSettingsPanel({
             className="input"
           />
         </div>
-        <label className="flex items-center justify-between">
-          <span style={{ color: "var(--text-muted)" }}>Every (minutes)</span>
-          <input
-            type="number"
-            min={1}
-            max={1440}
-            value={autoCommandIntervalMinutes}
-            onChange={(e) => setAutoCommandIntervalMinutes(Number(e.target.value))}
-            className="input w-20"
-          />
-        </label>
-      </div>
+        <Field label="Interval">
+          <NumberInput value={autoCommandIntervalMinutes} onChange={setAutoCommandIntervalMinutes} min={1} max={1440} suffix="min" />
+        </Field>
+      </Section>
 
-      <h4 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
-        Auto-TPA
-      </h4>
-      <div className="space-y-2.5">
-        <Switch label="Accept incoming /tpa" checked={tpAutoEnabled} onChange={setTpAutoEnabled} />
-        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-          Automatically accepts players teleporting to the bot (/tpa). Ignores /tpahere.
-        </p>
-      </div>
+      {/* Auto-TPA */}
+      <Section title="Auto-TPA">
+        <Toggle
+          label="Accept incoming /tpa"
+          description="Accepts players teleporting to the bot. Ignores /tpahere."
+          checked={tpAutoEnabled}
+          onChange={setTpAutoEnabled}
+        />
+      </Section>
 
-      <h4 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
-        Auto-sell
-      </h4>
-      <div className="space-y-2.5">
-        <Switch label="Enabled" checked={autoSellEnabled} onChange={setAutoSellEnabled} />
+      {/* Auto-sell */}
+      <Section title="Auto-sell">
+        <Toggle
+          label="Enabled"
+          description="Runs the sell command, then moves all inventory items into the sell menu."
+          checked={autoSellEnabled}
+          onChange={setAutoSellEnabled}
+        />
         <div>
           <label className="label">Sell command</label>
           <input
@@ -231,31 +217,26 @@ export function AccountSettingsPanel({
             className="input"
           />
         </div>
-        <label className="flex items-center justify-between">
-          <span style={{ color: "var(--text-muted)" }}>Every (seconds)</span>
-          <input
-            type="number"
-            min={5}
-            max={3600}
-            value={autoSellIntervalSeconds}
-            onChange={(e) => setAutoSellIntervalSeconds(Number(e.target.value))}
-            className="input w-20"
-          />
-        </label>
-        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-          Runs the sell command, then moves all inventory items into the sell menu.
-        </p>
-      </div>
+        <Field label="Interval">
+          <NumberInput value={autoSellIntervalSeconds} onChange={setAutoSellIntervalSeconds} min={1} max={3600} suffix="s" />
+        </Field>
+      </Section>
 
+      {/* Assigned users (admin only) */}
       {isAdmin && (
-        <>
-          <h4 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
-            Assigned users
-          </h4>
+        <Section title="Assigned users">
+          {users.length === 0 && (
+            <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+              No users created yet.
+            </p>
+          )}
           <div className="max-h-40 space-y-1.5 overflow-y-auto">
-            {users.length === 0 && <p className="text-xs" style={{ color: "var(--text-subtle)" }}>No users created yet.</p>}
             {users.map((u) => (
-              <label key={u.id} className="flex cursor-pointer items-center gap-2" style={{ color: "var(--text-muted)" }}>
+              <label
+                key={u.id}
+                className="flex cursor-pointer items-center gap-2"
+                style={{ color: "var(--text-muted)" }}
+              >
                 <input
                   type="checkbox"
                   checked={assigned.has(u.id)}
@@ -266,24 +247,109 @@ export function AccountSettingsPanel({
               </label>
             ))}
           </div>
-        </>
+        </Section>
       )}
 
-      {error && <p className="alert-error mt-3">{error}</p>}
-      {message && <p className="alert-success mt-3">{message}</p>}
+      {error && <p className="alert-error mt-4">{error}</p>}
+      {message && <p className="alert-success mt-4">{message}</p>}
 
-      <button onClick={() => void saveSettings()} disabled={saving} className="btn btn-primary mt-4 w-full">
+      <button onClick={() => void saveSettings()} disabled={saving} className="btn btn-primary mt-5 w-full">
         {saving ? "Saving…" : "Save settings"}
       </button>
     </div>
   );
 }
 
-function Switch({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+/** A titled group of related settings, visually separated from its neighbours. */
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <label className="flex cursor-pointer items-center justify-between">
-      <span style={{ color: "var(--text-muted)" }}>{label}</span>
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="accent-emerald-500" />
-    </label>
+    <section className="mt-4 rounded-xl border p-3.5" style={{ borderColor: "var(--border)", backgroundColor: "var(--bg-elev)" }}>
+      <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-subtle)" }}>
+        {title}
+      </h4>
+      <div className="space-y-3">{children}</div>
+    </section>
+  );
+}
+
+/** A label + control row, with an optional hint line below. */
+function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <span style={{ color: "var(--text-muted)" }}>{label}</span>
+        {children}
+      </div>
+      {hint && (
+        <p className="mt-1 text-right text-xs" style={{ color: "var(--accent)" }}>
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** A compact number input with a trailing unit suffix. */
+function NumberInput({
+  value,
+  onChange,
+  min,
+  max,
+  suffix,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  min: number;
+  max: number;
+  suffix?: string;
+}) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="input w-20 text-right"
+      />
+      {suffix && (
+        <span className="text-xs" style={{ color: "var(--text-subtle)" }}>
+          {suffix}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** A labelled toggle switch with an optional description line. */
+function Toggle({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div>
+      <label className="flex cursor-pointer items-center justify-between">
+        <span style={{ color: "var(--text-muted)" }}>{label}</span>
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          className="accent-emerald-500"
+        />
+      </label>
+      {description && (
+        <p className="mt-1 text-xs" style={{ color: "var(--text-subtle)" }}>
+          {description}
+        </p>
+      )}
+    </div>
   );
 }

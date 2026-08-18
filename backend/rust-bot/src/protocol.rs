@@ -125,4 +125,7 @@ pub enum OutEvent {
     /// The bot's current health (0..=20) and food/hunger level (0..=20),
     /// emitted whenever either value changes.
     Health { health: f32, food: u32 },
+    /// Periodic liveness signal so the Node supervisor can distinguish a hung
+    /// bot from a healthy but idle one.
+    Heartbeat,
 }
