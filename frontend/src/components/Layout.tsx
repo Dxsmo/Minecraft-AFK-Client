@@ -80,7 +80,7 @@ export function Layout() {
             <h1 className="text-sm font-semibold" style={{ color: "var(--text)" }}>
               Minecraft AFK
             </h1>
-            <p className="text-[10px]" style={{ color: "var(--text-subtle)" }}>
+            <p className="text-[11px] font-semibold" style={{ color: "var(--accent)" }}>
               Hosted by Desmodus
             </p>
           </div>
@@ -106,6 +106,12 @@ export function Layout() {
         </nav>
 
         <div className="mt-auto px-1 pt-4">
+          <div
+            className="mb-2 rounded-lg px-2.5 py-2 text-center text-xs font-semibold"
+            style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+          >
+            Hosted by Desmodus
+          </div>
           <p className="text-[10px]" style={{ color: "var(--text-subtle)" }}>
             v1 · Azalea engine
           </p>

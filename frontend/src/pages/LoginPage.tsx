@@ -39,7 +39,7 @@ export function LoginPage() {
             <h1 className="text-sm font-semibold" style={{ color: "var(--text)" }}>
               Minecraft AFK
             </h1>
-            <p className="text-[10px]" style={{ color: "var(--text-subtle)" }}>
+            <p className="text-[11px] font-semibold" style={{ color: "var(--accent)" }}>
               Hosted by Desmodus
             </p>
           </div>

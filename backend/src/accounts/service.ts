@@ -24,6 +24,7 @@ const publicAccountSelect = {
   status: true,
   createdAt: true,
   updatedAt: true,
+  createdBy: { select: { id: true, username: true } },
   assignments: {
     select: { userId: true, user: { select: { id: true, username: true } } },
   },
@@ -61,7 +62,7 @@ export async function canAccessAccount(session: SessionContext, id: string): Pro
 export async function createAccount(input: CreateAccountInput, creator: SessionContext) {
   const name = input.name.trim();
   const account = await prisma.minecraftAccount.create({
-    data: { ...input, name },
+    data: { ...input, name, createdById: creator.user.id },
     select: publicAccountSelect,
   });
 

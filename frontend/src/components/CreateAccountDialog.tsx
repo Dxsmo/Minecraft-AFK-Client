@@ -80,7 +80,7 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="input"
-                placeholder="Bot_01"
+                placeholder="Desmodus"
                 pattern="[a-zA-Z0-9_\-]+"
                 minLength={2}
                 maxLength={32}
@@ -94,7 +94,7 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="input"
-                  placeholder="Bot_01"
+                  placeholder="Desmodus"
                   pattern="[a-zA-Z0-9_\-]+"
                   minLength={2}
                   maxLength={32}

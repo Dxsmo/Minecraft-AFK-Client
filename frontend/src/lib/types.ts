@@ -71,6 +71,7 @@ export interface MinecraftAccount {
   status: ClientStatus;
   createdAt: string;
   updatedAt: string;
+  createdBy: { id: string; username: string } | null;
   assignments: { userId: string; user: { id: string; username: string } }[];
   live?: LiveStatus;
 }

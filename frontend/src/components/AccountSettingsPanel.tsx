@@ -88,6 +88,17 @@ export function AccountSettingsPanel({
 
   return (
     <div className="card p-4 text-sm">
+      {account.createdBy && (
+        <div className="mb-2 flex items-center gap-1.5 text-[11px]" style={{ color: "var(--text-muted)" }}>
+          <span style={{ color: "var(--text-subtle)" }}>Erstellt von</span>
+          <span
+            className="rounded-full px-2 py-0.5 font-semibold"
+            style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+          >
+            {account.createdBy.username}
+          </span>
+        </div>
+      )}
       <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
         Settings
       </h3>

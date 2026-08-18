@@ -32,8 +32,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    // Security: every fresh document load (a reload or a newly opened tab)
+    // starts logged out. We proactively destroy any lingering server session
+    // so the httpOnly session cookie can't silently re-authenticate the
+    // previous user — important on shared machines. In-app navigation uses the
+    // SPA router (no reload), so an active session is unaffected.
+    void (async () => {
+      try {
+        await api.post("/auth/logout");
+      } catch {
+        // No active session to clear — nothing to do.
+      }
+      setUser(null);
+      setLoading(false);
+    })();
+  }, []);
 
   const login = useCallback(async (username: string, password: string) => {
     const loggedIn = await api.post<CurrentUser>("/auth/login", { username, password });

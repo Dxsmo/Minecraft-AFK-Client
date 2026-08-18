@@ -67,7 +67,7 @@ export function UsersPage() {
 
       {error && <p className="alert-error">{error}</p>}
 
-      <form onSubmit={handleCreate} className="card flex flex-wrap items-end gap-3 p-4">
+      <form onSubmit={handleCreate} className="card flex flex-wrap items-end gap-3 p-4" autoComplete="off">
         <div>
           <label className="label">Username</label>
           <input
@@ -75,6 +75,7 @@ export function UsersPage() {
             value={form.username}
             onChange={(e) => setForm({ ...form, username: e.target.value })}
             className="input w-44"
+            autoComplete="off"
           />
         </div>
         <div>
@@ -85,6 +86,8 @@ export function UsersPage() {
             value={form.password}
             onChange={(e) => setForm({ ...form, password: e.target.value })}
             className="input w-44"
+            autoComplete="new-password"
+            minLength={8}
           />
         </div>
         <div>

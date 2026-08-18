@@ -159,7 +159,7 @@ export function DashboardPage() {
                     Restart
                   </button>
                   <Link to={`/accounts/${account.id}`} className="btn btn-primary btn-sm">
-                    Console
+                    Settings
                   </Link>
                   <button
                     disabled={busy}

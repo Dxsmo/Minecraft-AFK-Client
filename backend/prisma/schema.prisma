@@ -55,6 +55,7 @@ model User {
   sessions        Session[]
   assignments     UserMinecraftAccount[]
   auditLogs       AuditLog[]
+  createdAccounts MinecraftAccount[]     @relation("CreatedAccounts")
 }
 
 model Session {
@@ -101,6 +102,11 @@ model MinecraftAccount {
   status             ClientStatus @default(OFFLINE)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+
+  // The website user who created this account. Nullable so accounts survive
+  // the deletion of their creator (the reference is simply cleared).
+  createdById String?
+  createdBy   User?   @relation("CreatedAccounts", fields: [createdById], references: [id], onDelete: SetNull)
 
   assignments UserMinecraftAccount[]
   consoleLogs ConsoleLog[]
