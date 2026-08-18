@@ -24,6 +24,8 @@ export function AccountSettingsPanel({
   const [autoCommandText, setAutoCommandText] = useState(account.autoCommandText);
   const [autoCommandIntervalMinutes, setAutoCommandIntervalMinutes] = useState(account.autoCommandIntervalMinutes);
   const [tpAutoEnabled, setTpAutoEnabled] = useState(account.tpAutoEnabled);
+  const [tpAutoAllowlist, setTpAutoAllowlist] = useState<string[]>(account.tpAutoAllowlist ?? []);
+  const [allowlistDraft, setAllowlistDraft] = useState("");
   const [autoSellEnabled, setAutoSellEnabled] = useState(account.autoSellEnabled);
   const [autoSellIntervalSeconds, setAutoSellIntervalSeconds] = useState(account.autoSellIntervalSeconds);
   const [autoSellCommand, setAutoSellCommand] = useState(account.autoSellCommand);
@@ -54,6 +56,7 @@ export function AccountSettingsPanel({
         autoCommandText,
         autoCommandIntervalMinutes,
         tpAutoEnabled,
+        tpAutoAllowlist,
         autoSellEnabled,
         autoSellIntervalSeconds,
         autoSellCommand,
@@ -86,8 +89,24 @@ export function AccountSettingsPanel({
     }
   }
 
-  function toggleUser(userId: string) {
-    setAssigned((prev) => {
+  function addAllowlistName() {
+    const name = allowlistDraft.trim();
+    if (!name) return;
+    if (name.length > 16 || !/^[A-Za-z0-9_]+$/.test(name)) {
+      setError("Invalid Minecraft name");
+      return;
+    }
+    if (!tpAutoAllowlist.some((n) => n.toLowerCase() === name.toLowerCase())) {
+      setTpAutoAllowlist([...tpAutoAllowlist, name]);
+    }
+    setAllowlistDraft("");
+  }
+
+  function removeAllowlistName(name: string) {
+    setTpAutoAllowlist(tpAutoAllowlist.filter((n) => n !== name));
+  }
+
+  function toggleUser(userId: string) {    setAssigned((prev) => {
       const next = new Set(prev);
       next.has(userId) ? next.delete(userId) : next.add(userId);
       return next;
@@ -198,6 +217,50 @@ export function AccountSettingsPanel({
           checked={tpAutoEnabled}
           onChange={setTpAutoEnabled}
         />
+        <div>
+          <label className="label">Allowed names</label>
+          <p className="mb-2 text-xs" style={{ color: "var(--text-subtle)" }}>
+            Leave empty to accept from anyone, or add names to accept only from them.
+          </p>
+          {tpAutoAllowlist.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {tpAutoAllowlist.map((name) => (
+                <span
+                  key={name}
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
+                  style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+                >
+                  {name}
+                  <button
+                    type="button"
+                    onClick={() => removeAllowlistName(name)}
+                    className="leading-none opacity-70 hover:opacity-100"
+                    aria-label={`Remove ${name}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <input
+              value={allowlistDraft}
+              onChange={(e) => setAllowlistDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addAllowlistName();
+                }
+              }}
+              placeholder="Add a Minecraft name…"
+              className="input"
+            />
+            <button type="button" onClick={addAllowlistName} className="btn btn-secondary btn-sm shrink-0">
+              Add
+            </button>
+          </div>
+        </div>
       </Section>
 
       {/* Auto-sell */}

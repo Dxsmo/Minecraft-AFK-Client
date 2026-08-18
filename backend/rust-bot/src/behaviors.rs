@@ -65,6 +65,7 @@ impl BehaviorState {
                 auto_command_text: config.auto_command_text.clone(),
                 auto_command_interval_minutes: config.auto_command_interval_minutes,
                 tpauto_enabled: config.tpauto_enabled,
+                tpauto_allowlist: config.tpauto_allowlist.clone(),
                 autosell_enabled: config.autosell_enabled,
                 autosell_interval_seconds: config.autosell_interval_seconds,
                 autosell_command: config.autosell_command.clone(),
@@ -238,6 +239,28 @@ impl BehaviorState {
             return;
         };
 
+        // Optional allowlist: when configured, only accept requests from the
+        // named players. The requester's name is the first real argument of the
+        // suggested `/tpaccept …` command (e.g. "/tpaccept Desmodus tpa").
+        if !self.config.tpauto_allowlist.is_empty() {
+            let target = tpaccept_target_name(&command);
+            let allowed = target.as_deref().is_some_and(|name| {
+                self.config
+                    .tpauto_allowlist
+                    .iter()
+                    .any(|allowed| allowed.trim().eq_ignore_ascii_case(name))
+            });
+            if !allowed {
+                emit(&OutEvent::BehaviorLog {
+                    message: format!(
+                        "TPAuto: ignored teleport request from {} (not in allowlist)",
+                        target.as_deref().unwrap_or("unknown")
+                    ),
+                });
+                return;
+            }
+        }
+
         let now = Instant::now();
         if let Some((last_cmd, last_at)) = &self.last_tpaccept {
             if *last_cmd == command && now.duration_since(*last_at) < TPACCEPT_DEDUP {
@@ -327,9 +350,20 @@ fn extract_tpaccept_command(message: &str) -> Option<String> {
     Some(command)
 }
 
+/// Extracts the requester's Minecraft name from a reconstructed `/tpaccept …`
+/// command — the first argument that isn't a `tpa`/`tpahere` flag. Returns
+/// `None` for a bare `/tpaccept`.
+fn tpaccept_target_name(command: &str) -> Option<String> {
+    command
+        .split_whitespace()
+        .skip(1) // "/tpaccept"
+        .find(|t| !t.eq_ignore_ascii_case("tpa") && !t.eq_ignore_ascii_case("tpahere"))
+        .map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_tpa_accept_command;
+    use super::{parse_tpa_accept_command, tpaccept_target_name};
 
     #[test]
     fn hugosmp_accept_hint_line() {
@@ -387,5 +421,14 @@ mod tests {
             parse_tpa_accept_command("Type /tpaccept to accept this request").as_deref(),
             Some("/tpaccept")
         );
+    }
+
+    #[test]
+    fn target_name_from_command() {
+        assert_eq!(
+            tpaccept_target_name("/tpaccept Desmodus tpa").as_deref(),
+            Some("Desmodus")
+        );
+        assert_eq!(tpaccept_target_name("/tpaccept").as_deref(), None);
     }
 }

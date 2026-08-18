@@ -52,6 +52,8 @@ export interface ClientRuntimeConfig {
   autoCommandIntervalMinutes: number;
   /** Auto-accept incoming /tpa teleport requests (never /tpahere). */
   tpAutoEnabled: boolean;
+  /** Only auto-accept /tpa from these Minecraft names; empty = accept anyone. */
+  tpAutoAllowlist: string[];
   /** Periodically run the sell command and move all items into the sell menu. */
   autoSellEnabled: boolean;
   autoSellIntervalSeconds: number;

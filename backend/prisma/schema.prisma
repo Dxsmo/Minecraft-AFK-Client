@@ -101,6 +101,9 @@ model MinecraftAccount {
   autoCommandIntervalMinutes Int     @default(5)
   // Auto-accept incoming /tpa teleport requests (never /tpahere).
   tpAutoEnabled              Boolean @default(false)
+  // JSON-encoded array of Minecraft names; when non-empty, only /tpa requests
+  // from these players are auto-accepted. Empty ("[]") means accept from anyone.
+  tpAutoAllowlist            String  @default("[]")
   // Periodically run the sell command and shift all items into the sell menu.
   autoSellEnabled            Boolean @default(false)
   autoSellIntervalSeconds    Int     @default(60)

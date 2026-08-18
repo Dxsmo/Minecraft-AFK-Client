@@ -2,6 +2,21 @@ import { prisma } from "../database/prisma.js";
 import type { CreateAccountInput, UpdateAccountInput } from "./schemas.js";
 import type { SessionContext } from "../auth/session.js";
 
+/** Parses the JSON-encoded tpAuto allowlist column into a string array. */
+export function parseAllowlist(raw: string): string[] {
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Presents a stored account to API clients, decoding the allowlist to an array. */
+function present<T extends { tpAutoAllowlist: string }>(account: T): Omit<T, "tpAutoAllowlist"> & { tpAutoAllowlist: string[] } {
+  return { ...account, tpAutoAllowlist: parseAllowlist(account.tpAutoAllowlist) };
+}
+
 /**
  * Fields safe to expose to any authorized viewer. `credentialsSecret` is
  * intentionally excluded so Minecraft credentials never reach the frontend,
@@ -22,6 +37,7 @@ const publicAccountSelect = {
   autoCommandText: true,
   autoCommandIntervalMinutes: true,
   tpAutoEnabled: true,
+  tpAutoAllowlist: true,
   autoSellEnabled: true,
   autoSellIntervalSeconds: true,
   autoSellCommand: true,
@@ -35,14 +51,15 @@ const publicAccountSelect = {
 } as const;
 
 export async function listAccountsForSession(session: SessionContext) {
-  if (session.user.role === "ADMIN") {
-    return prisma.minecraftAccount.findMany({ select: publicAccountSelect, orderBy: { name: "asc" } });
-  }
-  return prisma.minecraftAccount.findMany({
-    where: { assignments: { some: { userId: session.user.id } } },
-    select: publicAccountSelect,
-    orderBy: { name: "asc" },
-  });
+  const accounts =
+    session.user.role === "ADMIN"
+      ? await prisma.minecraftAccount.findMany({ select: publicAccountSelect, orderBy: { name: "asc" } })
+      : await prisma.minecraftAccount.findMany({
+          where: { assignments: { some: { userId: session.user.id } } },
+          select: publicAccountSelect,
+          orderBy: { name: "asc" },
+        });
+  return accounts.map(present);
 }
 
 export async function getAccountForSession(session: SessionContext, id: string) {
@@ -51,7 +68,7 @@ export async function getAccountForSession(session: SessionContext, id: string) 
   if (session.user.role !== "ADMIN" && !account.assignments.some((a) => a.userId === session.user.id)) {
     return null;
   }
-  return account;
+  return present(account);
 }
 
 /** Returns true if the session's user may operate (start/stop/command/etc.) this account. */
@@ -77,11 +94,12 @@ export async function createAccount(input: CreateAccountInput, creator: SessionC
     await setAssignments(account.id, [creator.user.id]);
     return (await getAccountForSession(creator, account.id))!;
   }
-  return account;
+  return present(account);
 }
 
 export async function updateAccount(id: string, input: UpdateAccountInput) {
-  return prisma.minecraftAccount.update({ where: { id }, data: input, select: publicAccountSelect });
+  const account = await prisma.minecraftAccount.update({ where: { id }, data: input, select: publicAccountSelect });
+  return present(account);
 }
 
 export async function deleteAccount(id: string) {

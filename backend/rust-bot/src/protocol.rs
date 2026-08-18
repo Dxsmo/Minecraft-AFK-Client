@@ -33,6 +33,10 @@ pub struct Config {
     /// Auto-accept incoming `/tpa` teleport requests (but never `/tpahere`).
     #[serde(default)]
     pub tpauto_enabled: bool,
+    /// If non-empty, only auto-accept `/tpa` requests from these Minecraft
+    /// names (case-insensitive). Empty means accept from anyone.
+    #[serde(default)]
+    pub tpauto_allowlist: Vec<String>,
     /// Periodically sell the inventory by running the sell command and moving
     /// all items into the sell menu the server opens.
     #[serde(default)]
@@ -65,6 +69,10 @@ pub struct BehaviorConfig {
     pub auto_command_interval_minutes: u64,
     #[serde(default)]
     pub tpauto_enabled: bool,
+    /// If non-empty, only auto-accept `/tpa` requests from these Minecraft
+    /// names (case-insensitive). Empty means accept from anyone.
+    #[serde(default)]
+    pub tpauto_allowlist: Vec<String>,
     #[serde(default)]
     pub autosell_enabled: bool,
     #[serde(default = "default_autosell_interval")]
@@ -72,8 +80,6 @@ pub struct BehaviorConfig {
     #[serde(default = "default_autosell_command")]
     pub autosell_command: String,
 }
-
-/// Commands sent from Node.js to this process after the initial config line.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {

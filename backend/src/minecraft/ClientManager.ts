@@ -3,6 +3,7 @@ import type { ClientRuntimeConfig, ClientStatusSnapshot, ConsoleEvent } from "./
 import { prisma } from "../database/prisma.js";
 import { persistConsoleLog } from "../logging/consoleLogService.js";
 import { logger } from "../logging/logger.js";
+import { parseAllowlist } from "../accounts/service.js";
 import type { MinecraftAccount } from "@prisma/client";
 
 export type ConsoleEventListener = (event: ConsoleEvent) => void;
@@ -26,6 +27,7 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     autoCommandText: account.autoCommandText,
     autoCommandIntervalMinutes: account.autoCommandIntervalMinutes,
     tpAutoEnabled: account.tpAutoEnabled,
+    tpAutoAllowlist: parseAllowlist(account.tpAutoAllowlist),
     autoSellEnabled: account.autoSellEnabled,
     autoSellIntervalSeconds: account.autoSellIntervalSeconds,
     autoSellCommand: account.autoSellCommand,

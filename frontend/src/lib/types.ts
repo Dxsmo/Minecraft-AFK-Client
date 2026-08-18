@@ -69,6 +69,7 @@ export interface MinecraftAccount {
   autoCommandText: string;
   autoCommandIntervalMinutes: number;
   tpAutoEnabled: boolean;
+  tpAutoAllowlist: string[];
   autoSellEnabled: boolean;
   autoSellIntervalSeconds: number;
   autoSellCommand: string;
