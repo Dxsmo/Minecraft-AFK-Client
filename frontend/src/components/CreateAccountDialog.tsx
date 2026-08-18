@@ -8,6 +8,7 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
   const [authType, setAuthType] = useState<AuthType>("OFFLINE");
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [serverHost, setServerHost] = useState("");
   const [serverPort, setServerPort] = useState(25565);
   const [minecraftVersion, setMinecraftVersion] = useState(AUTO_DETECT_VERSION);
@@ -29,6 +30,7 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
         name: authType === "OFFLINE" ? username : undefined,
         authType,
         credentialsSecret: authType === "MICROSOFT" ? email : undefined,
+        credentialsPassword: authType === "MICROSOFT" ? password : undefined,
         serverHost,
         serverPort,
         minecraftVersion,
@@ -84,16 +86,29 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
               />
             </Field>
           ) : (
-            <Field label="Microsoft account email">
-              <input
-                required
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="input"
-                placeholder="bot@example.com"
-              />
-            </Field>
+            <>
+              <Field label="Microsoft account email">
+                <input
+                  required
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="input"
+                  placeholder="bot@example.com"
+                />
+              </Field>
+              <Field label="Microsoft account password">
+                <input
+                  required
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="input"
+                  placeholder="••••••••"
+                  autoComplete="new-password"
+                />
+              </Field>
+            </>
           )}
 
           <div className="grid grid-cols-3 gap-3">

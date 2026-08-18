@@ -217,6 +217,7 @@ export class MinecraftClient extends EventEmitter {
       auth_type: this.config.authType === "MICROSOFT" ? "microsoft" : "offline",
       username: this.config.name,
       email: this.config.credentialsSecret,
+      password: this.config.credentialsPassword,
       cache_dir: cacheDir,
       afk_enabled: this.config.afkEnabled,
       movement_enabled: this.config.movementEnabled,

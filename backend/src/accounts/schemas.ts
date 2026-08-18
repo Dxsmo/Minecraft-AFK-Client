@@ -23,6 +23,10 @@ export const createAccountSchema = z
     // Microsoft account email. Used as the identity for the device-code sign-in
     // and its token cache. Never exposed back to the frontend.
     credentialsSecret: z.string().max(320).nullable().optional(),
+    // Microsoft account password. When provided, the bot signs in automatically
+    // with email + password (falling back to the device-code link if that
+    // fails, e.g. for 2FA-protected accounts). Write-once; never exposed back.
+    credentialsPassword: z.string().max(256).nullable().optional(),
     afkEnabled: z.boolean().default(true),
     movementEnabled: z.boolean().default(false),
     afkIntervalSeconds: z.coerce.number().int().min(5).max(3600).default(30),

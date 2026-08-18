@@ -13,6 +13,11 @@ pub struct Config {
     pub username: String,
     /// Microsoft account email; required when `auth_type == "microsoft"`.
     pub email: Option<String>,
+    /// Microsoft account password. When present, the bot attempts an automated
+    /// email+password sign-in and only falls back to the device-code flow if
+    /// that fails (e.g. the account uses two-step verification).
+    #[serde(default)]
+    pub password: Option<String>,
     /// Directory used to persist the Microsoft auth token cache for this
     /// specific account, so re-authentication is only needed once.
     pub cache_dir: String,
