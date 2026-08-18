@@ -1,13 +1,18 @@
 # syntax=docker/dockerfile:1
+# Build context is the ./backend directory (see docker-compose.yml).
 
-# ---- Rust stage: compile azalea-bot binary ----
-FROM rustlang/rust:nightly AS rust-builder
+# ---- Rust stage: compile the azalea-bot binary ----
+# Must match the runtime image's Debian release (bookworm) so the compiled
+# binary links against a compatible glibc — the default trixie-based
+# rustlang/rust:nightly produces a binary that needs a newer glibc than
+# node:20-bookworm-slim provides.
+FROM rustlang/rust:nightly-bookworm AS rust-builder
 WORKDIR /rust-bot
-COPY ./backend/rust-bot/Cargo.toml ./backend/rust-bot/Cargo.lock ./
-COPY ./backend/rust-bot/src ./src
+COPY rust-bot/Cargo.toml rust-bot/Cargo.lock ./
+COPY rust-bot/src ./src
 RUN cargo build --release
 
-# ---- Build stage: compile TypeScript + generate Prisma client ----
+# ---- Build stage: compile TypeScript + generate the Prisma client ----
 FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 
@@ -15,14 +20,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ openssl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY ./backend/package.json ./backend/package-lock.json* ./
+COPY package.json package-lock.json* ./
 RUN npm ci
 
-COPY ./backend/prisma ./prisma
+COPY prisma ./prisma
 RUN npx prisma generate
 
-COPY ./backend/tsconfig.json ./
-COPY ./backend/src ./src
+COPY tsconfig.json ./
+COPY src ./src
 RUN npm run build
 
 # ---- Runtime stage: slim image with only production deps + azalea-bot binary ----
@@ -33,15 +38,15 @@ ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ openssl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY ./backend/package.json ./backend/package-lock.json* ./
+COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev && npm cache clean --force \
     && apt-get purge -y python3 make g++ && apt-get autoremove -y
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY ./backend/prisma ./prisma
+COPY prisma ./prisma
 
-# Copy compiled azalea-bot binary from Rust build stage
+# Compiled Azalea bot binary from the Rust build stage.
 COPY --from=rust-builder /rust-bot/target/release/azalea-bot /app/azalea-bot
 RUN chmod +x /app/azalea-bot
 
@@ -52,4 +57,7 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/server.js"]
+# Clear RUST_LOG for the migration step: Prisma's schema engine is a Rust
+# binary that crashes if RUST_LOG is set to certain levels. The Minecraft bot
+# subprocess sets its own RUST_LOG when spawned, so the server doesn't need it.
+CMD ["sh", "-c", "env -u RUST_LOG npx prisma migrate deploy && node dist/server.js"]
