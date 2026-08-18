@@ -17,12 +17,20 @@ class FakeChild extends EventEmitter {
   kill = vi.fn((signal?: NodeJS.Signals) => {
     this.killed = true;
     this.emit("exit", null, signal ?? "SIGTERM");
+    this.emit("close", null, signal ?? "SIGTERM");
     return true;
   });
 
   /** Emit one NDJSON event line on stdout, as the real bot would. */
   send(event: Record<string, unknown>): void {
     this.stdout.write(JSON.stringify(event) + "\n");
+  }
+
+  /** Simulate the process ending on its own (crash / connection dropped). */
+  exitWith(code: number | null): void {
+    this.stdout.end();
+    this.emit("exit", code, null);
+    this.emit("close", code, null);
   }
 }
 
@@ -133,7 +141,8 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     await tick();
     expect(client.getStatus().status).toBe("ONLINE");
 
-    lastChild().emit("exit", 1, null);
+    lastChild().exitWith(1);
+    await tick();
     expect(client.getStatus().status).toBe("RECONNECTING");
     expect(client.getStatus().lastError).toContain("code 1");
   });
@@ -144,7 +153,8 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     lastChild().send({ type: "spawn" });
     await tick();
 
-    lastChild().emit("exit", 1, null);
+    lastChild().exitWith(1);
+    await tick();
     expect(client.getStatus().status).toBe("ERROR");
   });
 

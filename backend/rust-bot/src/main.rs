@@ -17,7 +17,9 @@ mod protocol;
 
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use azalea::account::microsoft::MicrosoftAccountOpts;
 use azalea::prelude::*;
@@ -26,6 +28,17 @@ use parking_lot::Mutex;
 
 use behaviors::BehaviorState;
 use protocol::{Command, Config, OutEvent};
+
+/// How long to wait for the bot to spawn into the world before giving up on a
+/// connection attempt. Azalea doesn't reliably surface an event for every kind
+/// of connection failure (e.g. a fast connection-refused can be dropped before
+/// the client's event channel is wired up), so this watchdog guarantees we
+/// always terminate — letting Node own the reconnect schedule — instead of
+/// hanging in CONNECTING forever. Overridable via `BOT_CONNECT_TIMEOUT_SECS`.
+const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 45;
+
+/// Set once the bot has spawned into the world; disables the connect watchdog.
+static SPAWNED: AtomicBool = AtomicBool::new(false);
 
 /// Serialize and print a single NDJSON event on stdout, then flush so Node
 /// receives it immediately (line-buffered pipes otherwise hold it back).
@@ -95,7 +108,11 @@ async fn main() -> AppExit {
         }
     };
 
-    // 5. Join the server. `reconnect_after(None)` disables Azalea's built-in
+    // 5. Start the connect watchdog (only now, so a slow Microsoft device-code
+    //    sign-in above isn't counted against the connection timeout).
+    spawn_connect_watchdog();
+
+    // 6. Join the server. `reconnect_after(None)` disables Azalea's built-in
     //    auto-reconnect — Node owns that policy and respawns us on exit.
     let address = format!("{}:{}", config.host, config.port);
     ClientBuilder::new()
@@ -104,6 +121,25 @@ async fn main() -> AppExit {
         .reconnect_after(None::<std::time::Duration>)
         .start(account, address.as_str())
         .await
+}
+
+/// Spawn a background thread that exits the process if the bot hasn't spawned
+/// into the world within the connect timeout. See [`DEFAULT_CONNECT_TIMEOUT_SECS`].
+fn spawn_connect_watchdog() {
+    let timeout = std::env::var("BOT_CONNECT_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_CONNECT_TIMEOUT_SECS);
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(timeout));
+        if !SPAWNED.load(Ordering::SeqCst) {
+            emit(&OutEvent::ConnectionFailed {
+                error: format!("Timed out after {timeout}s before joining the world"),
+            });
+            flush_stdout();
+            std::process::exit(1);
+        }
+    });
 }
 
 /// Read and parse the first stdin line into a [`Config`].
@@ -236,7 +272,10 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
             });
         }
         Event::Login => emit(&OutEvent::Login),
-        Event::Spawn => emit(&OutEvent::Spawn),
+        Event::Spawn => {
+            SPAWNED.store(true, Ordering::SeqCst);
+            emit(&OutEvent::Spawn);
+        }
         Event::Chat(packet) => {
             let (sender, message) = packet.split_sender_and_content();
             emit(&OutEvent::Chat { sender, message });

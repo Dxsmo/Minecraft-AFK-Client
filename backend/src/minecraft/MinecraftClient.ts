@@ -185,14 +185,20 @@ export class MinecraftClient extends EventEmitter {
       this.log.debug({ data: data.toString() }, "Bot stderr");
     });
 
-    child.on("exit", (code, signal) => {
-      if (child !== this.subprocess) return; // superseded process exiting
-      this.log.info({ code, signal }, "Bot subprocess exited");
+    // Use "close" (not "exit"): it fires only after the process has ended AND
+    // its stdout has been fully drained, so any final connection_failed /
+    // disconnect line (carrying the human-readable reason) has already been
+    // handled by the "line" listener above — which nulls out this.subprocess,
+    // making the guard below skip this handler. "exit" alone races the stdout
+    // pipe and would clobber the reason.
+    child.on("close", (code, signal) => {
+      if (child !== this.subprocess) return;
+      this.log.info({ code, signal }, "Bot subprocess closed");
       if (this.manuallyStopped) {
-        this.teardownSubprocess("Subprocess exited after manual stop");
+        this.teardownSubprocess("Subprocess closed after manual stop");
       } else {
         this.handleConnectionFailure(
-          code === 0 ? "Connection ended" : `Bot exited with code ${code ?? "?"}`,
+          code && code !== 0 ? `Bot exited with code ${code}` : "Connection ended",
         );
       }
     });
