@@ -139,7 +139,7 @@ export function AccountSettingsPanel({
       </div>
 
       {/* Connection */}
-      <Section title="Connection">
+      <Section title="Connection" defaultOpen>
         <Field label="Minecraft version" hint={versionMessage ?? undefined}>
           <select
             value={version}
@@ -323,14 +323,44 @@ export function AccountSettingsPanel({
   );
 }
 
-/** A titled group of related settings, visually separated from its neighbours. */
-function Section({ title, children }: { title: string; children: ReactNode }) {
+/** A titled, collapsible group of related settings, separated from its neighbours. */
+function Section({
+  title,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="mt-4 rounded-xl border p-3.5" style={{ borderColor: "var(--border)", backgroundColor: "var(--bg-elev)" }}>
-      <h4 className="mb-3 text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-subtle)" }}>
-        {title}
-      </h4>
-      <div className="space-y-3">{children}</div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between gap-2"
+        aria-expanded={open}
+      >
+        <h4 className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-subtle)" }}>
+          {title}
+        </h4>
+        <svg
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="shrink-0 transition-transform duration-200"
+          style={{ color: "var(--text-subtle)", transform: open ? "rotate(180deg)" : "none" }}
+        >
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+      {open && <div className="mt-3 space-y-3">{children}</div>}
     </section>
   );
 }
