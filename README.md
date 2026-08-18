@@ -23,16 +23,16 @@ Application services (auth, users, accounts, commands, logging)
 Minecraft Client Manager (ClientManager)
         │
         ▼
-MinecraftClient instances (Mineflayer) ── BehaviorManager (AFK / Movement)
-        │
-        ▼
-Minecraft Server(s)
+MinecraftClient instances ──spawn──▶ azalea-bot (Rust subprocess, NDJSON over stdio)
+        │                                    │  AFK / Movement / Auto-command
+        ▼                                    ▼
+Minecraft Server(s) ◀────────────────────────┘
 ```
 
 | Layer     | Choice                                                        |
 |-----------|----------------------------------------------------------------|
 | Backend   | Node.js 20+, TypeScript, Fastify, `@fastify/websocket`         |
-| Minecraft | Mineflayer (pinned to a specific GitHub commit, see below)     |
+| Minecraft | [Azalea](https://github.com/azalea-rs/azalea) (Rust) bot, run as a per-account subprocess |
 | Database  | SQLite via Prisma ORM                                          |
 | Auth      | Argon2id password hashing, **server-side sessions** (cookie + DB), CSRF double-submit cookie |
 | Logging   | Pino (structured JSON), secrets redacted                       |
@@ -52,7 +52,8 @@ api/            system status, audit log endpoints
 auth/           password hashing, sessions, RBAC middleware, login routes
 users/          user CRUD (admin-only)
 accounts/       Minecraft account CRUD, ownership checks, assignments
-minecraft/      MinecraftClient (state machine), ClientManager, behaviors/
+minecraft/      MinecraftClient (state machine + subprocess control), ClientManager
+rust-bot/       Azalea-based Minecraft bot compiled to a native binary (Rust)
 commands/       permission-checked command dispatch
 websocket/      live console + dashboard WebSocket routes
 logging/        pino logger, console log persistence, audit log
@@ -65,9 +66,13 @@ config/         typed environment configuration
 ## 2. Prerequisites
 
 - Node.js 20+ and npm
-- Docker + Docker Compose (recommended deployment path)
+- Docker + Docker Compose (recommended deployment path — it compiles the
+  Rust bot for you, so you don't need a local Rust toolchain)
 - A Minecraft server to connect the bots to (any recent version; set
-  `minecraftVersion` per account to match)
+  `minecraftVersion` per account or leave it on auto-detect)
+- **Only if building the bot outside Docker:** a Rust **nightly** toolchain
+  (`rustup toolchain install nightly`) — Azalea uses nightly-only features.
+  See section 6 for the one-line build command.
 
 ---
 
@@ -80,8 +85,15 @@ cd backend
 cp ../.env.example .env        # then edit values, see section 4
 npm install
 npx prisma migrate dev         # creates backend/data/afk.db + applies schema
+# Build the Azalea bot once (needs a Rust nightly toolchain). MinecraftClient
+# looks for the binary at rust-bot/target/{release,debug}/azalea-bot.
+( cd rust-bot && cargo +nightly build --release )
 npm run dev                    # http://localhost:4000
 ```
+
+> Skipping the `cargo build` step is fine if you only work on the web app —
+> the backend starts normally and simply reports "azalea-bot binary not found"
+> when you try to start a client.
 
 On first start, if no ADMIN user exists yet, one is created automatically
 from `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` in `.env` (defaults
@@ -111,8 +123,9 @@ database). Covers: password hashing, session lifecycle, RBAC/ownership
 checks for Minecraft accounts, command-execution permission checks, user
 service invariants (last-admin protection, session invalidation), and the
 `MinecraftClient` state machine (`OFFLINE → CONNECTING → ONLINE`,
-reconnect scheduling, manual disconnect, command dispatch) using a mocked
-Mineflayer bot — no real Minecraft server is required to run the tests.
+reconnect scheduling, manual disconnect, command dispatch, NDJSON event
+handling) using a **mocked `azalea-bot` subprocess** — no real Minecraft
+server or compiled Rust binary is required to run the tests.
 
 ---
 
@@ -158,19 +171,21 @@ Any authenticated user can create a Minecraft account under **Dashboard →
 New account** (they're automatically the sole assignee; admins can grant
 additional users access afterwards in the account's **Settings** panel):
 
-- `name` – internal bot identifier (also used as the offline-mode
-  username by default)
+- `name` – the account's display name. For **offline** accounts this is the
+  Minecraft username you type in and is also the name the bot joins with.
+  For **Microsoft** accounts you don't set it — the account is auto-named
+  after the real in-game username once the bot signs in.
 - `serverHost` / `serverPort`
-- `minecraftVersion` – selectable from a dropdown of supported releases;
-  changing it applies immediately and restarts the client if it's online
+- `minecraftVersion` – selectable from a dropdown of supported releases, or
+  left on auto-detect; changing it applies immediately
 - `authType` – `OFFLINE` (cracked/offline server) or `MICROSOFT`. For
-  `MICROSOFT`, the account **email and password are set only once at
-  creation and cannot be changed afterwards** — the update API does not
-  accept these fields at all, so changing credentials requires deleting
-  the account and creating a new one. Password-based sign-in does not
-  work for Microsoft accounts with 2FA/modern security features enabled;
-  leave the password empty in that case and use the device-code sign-in
-  link shown live on the account page instead.
+  `MICROSOFT` you provide **only the account email**, which is set once at
+  creation and can't be changed afterwards (to use a different account,
+  delete and recreate). Azalea authenticates via Microsoft's **device-code
+  flow**: the first time the bot starts, the account page shows a live
+  sign-in link + code; open it, approve once, and the token is cached on
+  disk (`data/bot-cache/<account>/`) so subsequent starts are silent. No
+  password is ever entered or stored.
 - AFK / Movement behavior toggles + AFK interval
 - Auto-command: an optional chat message/command sent automatically at a
   configurable interval (minutes), independent of the AFK/movement
@@ -182,80 +197,75 @@ additional users access afterwards in the account's **Settings** panel):
   start/stop/restart it, and delete it entirely; only admins can grant
   *other* users access via the assignments list
 
-Credentials (`credentialsSecret`/`credentialsPassword`, used for
-Microsoft auth) are **never** included in any API response sent to the
-frontend — only account metadata and live status are exposed.
+The Microsoft account email (`credentialsSecret`) is **never** included in
+any API response sent to the frontend — only account metadata and live
+status are exposed.
 
 ### Server resource/texture packs
 
 If the target server requires accepting a resource pack before letting a
-player fully join, `MinecraftClient` automatically accepts it on the
-bot's behalf (there's no renderer to actually download/display it, so
-there's nothing to prompt a human for).
+player fully join, the Azalea bot accepts it automatically (Azalea's
+built-in `AcceptResourcePacksPlugin`). There's no renderer to actually
+download/display the pack, so there's nothing to prompt a human for — this
+works out of the box for texture-pack-gated servers.
 
 ### Reliable "online" detection
 
-Some servers (especially ones behind anti-bot/verification systems, or
-that simply never resend default full health) delay or never send the
-packet Mineflayer's built-in `spawn` event depends on, even though the
-account has already fully joined and is visible to other players (e.g.
-in the tab list). To avoid getting stuck showing `CONNECTING...`
-indefinitely in that case, `MinecraftClient` also treats the mandatory
-initial position-sync packet (`forcedMove`) as sufficient evidence of a
-successful join — whichever of `spawn`/`forcedMove` arrives first marks
-the client `ONLINE`. A connection attempt is abandoned and retried if
-either (a) **no packets at all** have been received from the server for
-90 seconds, or (b) the attempt has been running for more than 3 minutes
-in total regardless of packet activity — the latter specifically catches
-servers whose anti-bot/verification systems hold a connection in limbo
-indefinitely (still exchanging keep-alives) without ever releasing it
-into actual play.
+The Rust bot reports lifecycle events over NDJSON: `login` when the login
+packet arrives and `spawn` once the player is fully in a loaded world. The
+Node side marks the client `ONLINE` on `spawn`. If a connection attempt
+neither spawns nor fails within 5 minutes (a hung subprocess), it's
+recycled and retried. When the connection later ends, the Rust process
+exits and Node schedules the next attempt on its fixed 30s timer — Node,
+not Azalea, owns the reconnect policy.
 
-### Mineflayer version pin (tracking new Minecraft releases)
+### Azalea version pin (tracking new Minecraft releases)
 
-Mineflayer's last npm release (`4.37.1`) does not yet support every very
-recent Minecraft version (e.g. the `26.x` release line) — protocol
-support for new versions typically lands on the project's `master`
-branch on GitHub before it's cut into an npm release. To get support for
-the newest versions without waiting on an npm release, `backend/package.json`
-pins Mineflayer directly to a specific GitHub commit instead of an npm
-version range:
+The Rust bot pins Azalea to a specific GitHub commit in
+`backend/rust-bot/Cargo.toml` (Azalea publishes Minecraft protocol support
+on `main` well ahead of crates.io releases):
 
 ```
-"mineflayer": "github:PrismarineJS/mineflayer#<commit-sha>"
+azalea = { git = "https://github.com/azalea-rs/azalea", rev = "<commit-sha>" }
 ```
 
-**To update this pin** (e.g. once a new Minecraft version is released and
-support is merged upstream): check
-[PrismarineJS/mineflayer](https://github.com/PrismarineJS/mineflayer) for
-the latest relevant commit on `master`, update the SHA in
-`backend/package.json`, then run `npm install` in `backend/` and rebuild.
-Pinning an exact commit (rather than tracking `master` directly) keeps
-builds reproducible — `master` can change under you at any time otherwise.
+**To update** (e.g. for a newly released Minecraft version): pick a commit
+from [azalea-rs/azalea](https://github.com/azalea-rs/azalea) that supports
+it, update the `rev` in `Cargo.toml`, then rebuild
+(`cd backend/rust-bot && cargo +nightly build --release`, or just rebuild
+the Docker image). Pinning an exact commit keeps builds reproducible.
 
-**Important caveat:** getting Mineflayer to recognize a server's protocol
-version is necessary but not always sufficient to successfully join.
-Some servers run anti-bot/verification systems (common on public survival
-servers) that hold *any* automated/headless client in a "limbo" state
-indefinitely — visible in the player list, but never actually completing
-the join sequence — regardless of which bot library or protocol version
-is used. If a specific account/server combination consistently times out
-after "Server requested a resource pack" with no further progress even
-after a version update, this is the most likely explanation, and it's not
-something fixable from the client side. Check whether the server
-documents any bot-verification requirements before assuming it's a bug.
+Azalea completes the join sequence (including the configuration phase and
+resource-pack exchange) on servers where some other headless clients get
+stuck — which is exactly why this project uses it.
+
+### NDJSON subprocess protocol
+
+`MinecraftClient` (Node) and `azalea-bot` (Rust) talk over the subprocess's
+stdio, one JSON object per line (see `backend/rust-bot/src/protocol.rs` and
+`backend/src/minecraft/MinecraftClient.ts`):
+
+- **stdin, first line:** a `Config` object (host, port, auth type, username,
+  email, cache dir, behavior settings).
+- **stdin, subsequent lines:** `Command`s — `{"type":"chat","text":…}`,
+  `{"type":"configure",…}` (live behavior update), `{"type":"disconnect"}`.
+- **stdout:** one `OutEvent` per line — `login`, `spawn`, `chat`,
+  `msa_code`, `profile`, `disconnect`, `connection_failed`, `warning`,
+  `behavior_log`, `fatal_error`. Azalea's own logging is sent to stderr
+  (`RUST_LOG=error`) so it never corrupts the protocol.
 
 ### AFK / Movement behavior system
 
-`BehaviorManager` (in `backend/src/minecraft/behaviors/`) attaches small,
-independent `Behavior` implementations to a connected bot:
+Behaviors live in the Rust bot (`backend/rust-bot/src/behaviors.rs`) and are
+driven from Azalea's game tick:
 
-- `AfkBehavior` – periodic look-around + jump to avoid inactivity kicks
-- `MovementBehavior` – occasional short random walk
+- **AFK** – periodic random look-around + jump to avoid inactivity kicks
+- **Movement** – occasional short random walk
+- **Auto-command** – periodic chat message/command
 
-Behaviors are started/stopped together with the bot's connection and are
-fully decoupled from `MinecraftClient`, so adding a new behavior later
-only means adding one more class + registering it in `BehaviorManager`.
+They read a shared config that `{"type":"configure"}` updates live, so
+toggling AFK/movement/auto-command or changing intervals in the UI takes
+effect without reconnecting.
 
 ---
 
@@ -319,7 +329,11 @@ docker compose logs -f
 This starts two containers:
 
 - **backend** – the Fastify API + WebSocket server + all Minecraft clients
-  (SQLite DB persisted in the `backend_data` volume)
+  (SQLite DB persisted in the `backend_data` volume). The image is built in
+  multiple stages: a Rust nightly stage compiles the `azalea-bot` binary, a
+  Node stage compiles the TypeScript, and the slim runtime stage bundles
+  both. The first `docker compose build` therefore takes a few minutes while
+  the Rust dependencies compile; subsequent builds are cached.
 - **web** – Caddy, serving the built React SPA and reverse-proxying
   `/api/*` and `/ws/*` to `backend`, listening on `80`/`443`
 
@@ -347,12 +361,12 @@ troubleshooting).
 
 ## 11. Known limitations / future work
 
-- Microsoft authentication support in `MinecraftClient` uses Mineflayer's
-  built-in `auth: "microsoft"` device-code flow; the account's Microsoft
-  email is stored in `credentialsSecret`. For unattended Raspberry Pi
-  operation, complete the interactive device-code login once (watch the
-  backend logs on first connect) — Mineflayer caches the resulting token
-  under its own cache directory so subsequent restarts don't require
+- Microsoft authentication uses Azalea's Microsoft **device-code** flow.
+  The account's Microsoft email is stored in `credentialsSecret` and used as
+  the token cache key. For unattended Raspberry Pi operation, complete the
+  interactive device-code login once (the link + code appear live on the
+  account page on first connect) — the resulting token is cached under
+  `data/bot-cache/<account>/` so subsequent restarts don't require
   re-authentication.
 - No built-in email/2FA — access control relies on strong passwords +
   the RBAC/audit system described above. Consider adding 2FA if exposing
