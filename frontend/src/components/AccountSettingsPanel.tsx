@@ -16,6 +16,8 @@ export function AccountSettingsPanel({
 }) {
   const [afkEnabled, setAfkEnabled] = useState(account.afkEnabled);
   const [movementEnabled, setMovementEnabled] = useState(account.movementEnabled);
+  const [serverHost, setServerHost] = useState(account.serverHost);
+  const [serverPort, setServerPort] = useState(account.serverPort);
   const [afkIntervalSeconds, setAfkIntervalSeconds] = useState(account.afkIntervalSeconds);
   const [autoReconnect, setAutoReconnect] = useState(account.autoReconnect);
   const [autoCommandEnabled, setAutoCommandEnabled] = useState(account.autoCommandEnabled);
@@ -42,6 +44,8 @@ export function AccountSettingsPanel({
         movementEnabled,
         afkIntervalSeconds,
         autoReconnect,
+        serverHost,
+        serverPort,
         autoCommandEnabled,
         autoCommandText,
         autoCommandIntervalMinutes,
@@ -110,6 +114,35 @@ export function AccountSettingsPanel({
         </select>
       </label>
       {versionMessage && <p className="mt-1 text-xs" style={{ color: "#34d399" }}>{versionMessage}</p>}
+
+      <h4 className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
+        Server
+      </h4>
+      <div className="space-y-2.5">
+        <div>
+          <label className="label">Host</label>
+          <input
+            value={serverHost}
+            onChange={(e) => setServerHost(e.target.value)}
+            placeholder="play.example.com"
+            className="input"
+          />
+        </div>
+        <label className="flex items-center justify-between">
+          <span style={{ color: "var(--text-muted)" }}>Port</span>
+          <input
+            type="number"
+            min={1}
+            max={65535}
+            value={serverPort}
+            onChange={(e) => setServerPort(Number(e.target.value))}
+            className="input w-24"
+          />
+        </label>
+        <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+          Restart the account to connect to the new server.
+        </p>
+      </div>
 
       <div className="mt-4 space-y-2.5">
         <Switch label="AFK behavior" checked={afkEnabled} onChange={setAfkEnabled} />
