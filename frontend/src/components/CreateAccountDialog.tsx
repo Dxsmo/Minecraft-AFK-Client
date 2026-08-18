@@ -7,6 +7,7 @@ type AuthType = "OFFLINE" | "MICROSOFT";
 export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [authType, setAuthType] = useState<AuthType>("OFFLINE");
   const [username, setUsername] = useState("");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [serverHost, setServerHost] = useState("");
@@ -24,10 +25,10 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
     setSubmitting(true);
     try {
       await api.post("/minecraft/accounts", {
-        // Offline: the username is also the account name. Microsoft: no name is
-        // sent — the server auto-names it after the real in-game username once
-        // the bot signs in.
-        name: authType === "OFFLINE" ? username : undefined,
+        // The display name shown on the website. For offline accounts the
+        // in-game username doubles as the name; Microsoft accounts get their
+        // own free-form name chosen here.
+        name: authType === "OFFLINE" ? username : name,
         authType,
         credentialsSecret: authType === "MICROSOFT" ? email : undefined,
         credentialsPassword: authType === "MICROSOFT" ? password : undefined,
@@ -87,6 +88,18 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
             </Field>
           ) : (
             <>
+              <Field label="Account name">
+                <input
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="input"
+                  placeholder="Bot_01"
+                  pattern="[a-zA-Z0-9_\-]+"
+                  minLength={2}
+                  maxLength={32}
+                />
+              </Field>
               <Field label="Microsoft account email">
                 <input
                   required

@@ -59,7 +59,7 @@ export async function canAccessAccount(session: SessionContext, id: string): Pro
 }
 
 export async function createAccount(input: CreateAccountInput, creator: SessionContext) {
-  const name = input.name?.trim() || (await deriveAccountName(input));
+  const name = input.name.trim();
   const account = await prisma.minecraftAccount.create({
     data: { ...input, name },
     select: publicAccountSelect,
@@ -73,29 +73,6 @@ export async function createAccount(input: CreateAccountInput, creator: SessionC
     return (await getAccountForSession(creator, account.id))!;
   }
   return account;
-}
-
-/**
- * Derives a valid, unique temporary display name when none was provided. Used
- * for Microsoft accounts, where the real in-game username isn't known until the
- * bot signs in — at which point it's auto-renamed (see ClientManager).
- */
-async function deriveAccountName(input: CreateAccountInput): Promise<string> {
-  let base = "bot";
-  if (input.authType === "MICROSOFT" && input.credentialsSecret) {
-    base = input.credentialsSecret.split("@")[0] || "bot";
-  }
-  base = base.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24);
-  if (base.length < 2) base = `bot-${base}`.slice(0, 24);
-
-  let candidate = base;
-  let n = 1;
-  // eslint-disable-next-line no-await-in-loop
-  while (await prisma.minecraftAccount.findUnique({ where: { name: candidate }, select: { id: true } })) {
-    const suffix = `-${n++}`;
-    candidate = base.slice(0, 32 - suffix.length) + suffix;
-  }
-  return candidate;
 }
 
 export async function updateAccount(id: string, input: UpdateAccountInput) {

@@ -219,7 +219,7 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(msa?.verificationUri).toBe("https://microsoft.com/link");
   });
 
-  it("emits a profile event so the account can be auto-named", async () => {
+  it("emits a profile event with the resolved in-game username", async () => {
     const client = makeClient({ authType: "MICROSOFT", credentialsSecret: "bot@example.com" });
     const profiles: Array<{ username: string; uuid: string }> = [];
     client.on("profile", (p: { username: string; uuid: string }) => profiles.push(p));

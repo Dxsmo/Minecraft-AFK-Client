@@ -9,11 +9,9 @@ import { z } from "zod";
  */
 export const createAccountSchema = z
   .object({
-    // Optional: for Microsoft accounts the display name is auto-derived and then
-    // replaced with the real in-game username after the first sign-in. For
-    // offline accounts the frontend always provides it (it doubles as the
-    // join username).
-    name: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+    // The display name shown on the website. Provided by the user for every
+    // account type (for offline accounts it is also the in-game join username).
+    name: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_-]+$/),
     // Empty string means "auto-detect" (the bot negotiates the protocol version
     // with the server) — see MinecraftClient.ts.
     minecraftVersion: z.string().max(16).default(""),
@@ -38,10 +36,6 @@ export const createAccountSchema = z
   .refine((data) => data.authType !== "MICROSOFT" || !!data.credentialsSecret, {
     message: "Microsoft accounts require an account email",
     path: ["credentialsSecret"],
-  })
-  .refine((data) => data.authType !== "OFFLINE" || !!data.name, {
-    message: "A username is required",
-    path: ["name"],
   });
 
 /**

@@ -1,5 +1,5 @@
 import { MinecraftClient } from "./MinecraftClient.js";
-import type { ClientRuntimeConfig, ClientStatusSnapshot, ConsoleEvent, ProfileEvent } from "./types.js";
+import type { ClientRuntimeConfig, ClientStatusSnapshot, ConsoleEvent } from "./types.js";
 import { prisma } from "../database/prisma.js";
 import { persistConsoleLog } from "../logging/consoleLogService.js";
 import { logger } from "../logging/logger.js";
@@ -100,43 +100,8 @@ export class ClientManager {
         }
       }
     });
-    client.on("profile", (profile: ProfileEvent) => {
-      void this.applyResolvedName(profile);
-    });
     this.clients.set(account.id, client);
     return client;
-  }
-
-  /**
-   * Auto-names an account after the real Minecraft username once the bot has
-   * authenticated. Skips silently if the name is unchanged or already taken by
-   * a different account (the `name` column is unique).
-   */
-  private async applyResolvedName(profile: ProfileEvent): Promise<void> {
-    const { minecraftAccountId, username } = profile;
-    try {
-      const account = await prisma.minecraftAccount.findUnique({ where: { id: minecraftAccountId } });
-      if (!account || account.name === username) return;
-
-      const clash = await prisma.minecraftAccount.findFirst({
-        where: { name: username, NOT: { id: minecraftAccountId } },
-        select: { id: true },
-      });
-      if (clash) {
-        logger.warn({ username }, "Skipping auto-rename: name already in use by another account");
-        return;
-      }
-
-      await prisma.minecraftAccount.update({ where: { id: minecraftAccountId }, data: { name: username } });
-      const client = this.clients.get(minecraftAccountId);
-      if (client) {
-        const refreshed = await prisma.minecraftAccount.findUnique({ where: { id: minecraftAccountId } });
-        if (refreshed) client.updateConfig(toRuntimeConfig(refreshed));
-      }
-      logger.info({ minecraftAccountId, username }, "Auto-named account after Minecraft username");
-    } catch (err) {
-      logger.error({ err }, "Failed to auto-name account");
-    }
   }
 
   unregister(accountId: string): void {
