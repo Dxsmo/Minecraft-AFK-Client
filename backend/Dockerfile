@@ -35,7 +35,10 @@ FROM node:20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ openssl \
+# ca-certificates is required for the azalea-bot's HTTPS auth requests
+# (login.live.com / Xbox / Minecraft services) — without it reqwest panics
+# with "No CA certificates were loaded from the system".
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
