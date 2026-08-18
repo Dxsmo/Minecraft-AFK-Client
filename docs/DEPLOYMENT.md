@@ -65,9 +65,35 @@ default: `sudo systemctl enable docker`).
 
 ## 5. Reverse proxy & HTTPS options
 
-You have two supported options, pick one:
+You have three supported options, pick one:
 
-### Option A — Cloudflare proxies + terminates TLS ("Flexible"/"Full")
+### Option A — Cloudflare Tunnel (recommended for a home Raspberry Pi)
+
+No router port forwarding and no public/static IP required (works behind
+CGNAT / DS-Lite). Cloudflare reaches the Pi through an outbound-only
+connection and terminates HTTPS for you.
+
+1. In the Cloudflare dashboard: **Zero Trust → Networks → Tunnels →
+   Create a tunnel** (type: *Cloudflared*). Name it e.g. `afk` and copy
+   the **connector token** it shows.
+2. Add a **Public Hostname** to the tunnel:
+   - Subdomain: leave empty for the root, or e.g. `afk`
+   - Domain: `desmo.club`
+   - Service: **`HTTP`** → URL **`web:80`**
+3. On the Pi, put the token into `.env`:
+   ```bash
+   TUNNEL_TOKEN=eyJ...your-token...
+   SITE_ADDRESS=:80
+   ```
+4. Start the stack with the tunnel profile:
+   ```bash
+   docker compose --profile tunnel up -d
+   docker compose logs -f cloudflared   # should show "Registered tunnel connection"
+   ```
+   The `cloudflared` container has `restart: unless-stopped`, so it also
+   comes back automatically after a reboot.
+
+### Option B — Cloudflare proxies + terminates TLS ("Flexible"/"Full")
 
 1. In Cloudflare DNS, add an `A` record for your subdomain (e.g. `afk`)
    pointing at your home/router's public IP, with the orange cloud
@@ -82,7 +108,7 @@ You have two supported options, pick one:
    the commented example in `frontend/Caddyfile`. This keeps the
    Cloudflare↔Pi hop encrypted too (Flexible mode does not).
 
-### Option B — Caddy provisions its own Let's Encrypt certificate
+### Option C — Caddy provisions its own Let's Encrypt certificate
 
 1. Set Cloudflare DNS to **DNS only** (grey cloud) for the subdomain, or
    use Cloudflare's "Full (strict)" + origin cert as above if you still

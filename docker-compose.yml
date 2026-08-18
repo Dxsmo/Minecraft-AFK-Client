@@ -45,6 +45,24 @@ services:
     networks:
       - internal
 
+  # Cloudflare Tunnel connector (optional, enable with: --profile tunnel).
+  # Exposes the site on your Cloudflare domain WITHOUT any router port
+  # forwarding or public IP. Create a tunnel in the Cloudflare dashboard
+  # (Zero Trust -> Networks -> Tunnels), set its public hostname to
+  # service "http://web:80", copy the connector token into TUNNEL_TOKEN in
+  # .env, then run: docker compose --profile tunnel up -d
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: afk-tunnel
+    restart: unless-stopped
+    profiles:
+      - tunnel
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:-}
+    depends_on:
+      - web
+    networks:
+      - internal
+
 networks:
   internal:
     driver: bridge
