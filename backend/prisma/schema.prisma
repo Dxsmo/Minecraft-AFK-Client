@@ -75,6 +75,11 @@ model Session {
 model MinecraftAccount {
   id                 String   @id @default(cuid())
   name               String   @unique
+  // Reserved for future Bedrock support. Azalea speaks the Java protocol only,
+  // so this is always "JAVA" today and is intentionally NOT exposed in the
+  // create/update API or UI (see docs/LIMITATIONS.md). A future Bedrock bot
+  // binary would branch on this in ClientManager without touching the Java path.
+  edition            String   @default("JAVA")
   // Optional website-only display label. Unlike `name` (which doubles as the
   // offline join username and therefore must be a valid Minecraft name), this
   // is purely cosmetic and may contain spaces etc. Empty means "fall back to

@@ -351,6 +351,9 @@ troubleshooting).
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — Raspberry Pi 5 setup, Docker
   vs systemd, Caddy reverse proxy, Cloudflare DNS/HTTPS, firewall,
   backups, updates, troubleshooting.
+- [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — features that Azalea (Java-only,
+  headless) cannot support: Bedrock accounts and rendered Live View / screenshots,
+  with the path to add each later.
 - `.env.example` — all environment variables with descriptions.
 - `scripts/backup-db.sh` / `scripts/restore-db.sh` — SQLite backup/restore
   (works for both Docker and bare-metal installs).
