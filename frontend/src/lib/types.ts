@@ -52,6 +52,8 @@ export interface LiveStatus {
   reconnectAttempt: number;
   connectedSince?: string;
   msaSignIn?: MsaSignInPrompt;
+  balance?: number;
+  balanceUpdatedAt?: string;
 }
 
 export interface MinecraftAccount {
@@ -76,6 +78,12 @@ export interface MinecraftAccount {
   autoSellEnabled: boolean;
   autoSellIntervalSeconds: number;
   autoSellCommand: string;
+  dailyCommandEnabled: boolean;
+  dailyCommandTimes: string[];
+  balanceEnabled: boolean;
+  balanceCommand: string;
+  lastBalance: number | null;
+  lastBalanceAt: string | null;
   status: ClientStatus;
   createdAt: string;
   updatedAt: string;

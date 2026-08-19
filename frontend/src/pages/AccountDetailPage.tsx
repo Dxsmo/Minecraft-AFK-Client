@@ -72,6 +72,7 @@ export function AccountDetailPage() {
   const liveStatus = status?.status ?? account.status;
   const displayName = account.displayName?.trim() || status?.name || account.name;
   const msaSignIn = status?.msaSignIn;
+  const balance = status?.balance ?? account.lastBalance ?? undefined;
 
   return (
     <div className="space-y-5">
@@ -169,6 +170,7 @@ export function AccountDetailPage() {
               Send
             </button>
           </form>
+          {account.autoSellEnabled && id && <EarningsBox accountId={id} />}
         </div>
 
         <div className="space-y-4">
@@ -178,6 +180,9 @@ export function AccountDetailPage() {
                 Live info
               </h3>
               <dl className="space-y-2">
+                {balance !== null && balance !== undefined && (
+                  <Row label="Balance" value={`$${balance.toLocaleString("en-US")}`} />
+                )}
                 {status.health !== undefined && <Row label="Health" value={`${status.health}/20`} />}
                 {status.food !== undefined && <Row label="Food" value={`${status.food}/20`} />}
                 {status.position && (
@@ -206,6 +211,63 @@ function Row({ label, value }: { label: string; value: string }) {
       <dd className="text-right font-medium" style={{ color: "var(--text)" }}>
         {value}
       </dd>
+    </div>
+  );
+}
+
+interface Earnings {
+  last5m: number;
+  last1h: number;
+  last24h: number;
+}
+
+/** Rolling auto-sell earnings box, polled every 15s. Shown under the console. */
+function EarningsBox({ accountId }: { accountId: string }) {
+  const [earnings, setEarnings] = useState<Earnings | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    async function poll() {
+      try {
+        const data = await api.get<Earnings>(`/minecraft/accounts/${accountId}/earnings`);
+        if (active) setEarnings(data);
+      } catch {
+        /* transient; retry on next tick */
+      }
+    }
+    void poll();
+    const t = setInterval(poll, 15_000);
+    return () => {
+      active = false;
+      clearInterval(t);
+    };
+  }, [accountId]);
+
+  const fmt = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
+
+  return (
+    <div className="card p-3.5 text-sm">
+      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
+        Auto-sell earnings
+      </h3>
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <EarningStat label="5 min" value={earnings ? fmt(earnings.last5m) : "—"} />
+        <EarningStat label="1 h" value={earnings ? fmt(earnings.last1h) : "—"} />
+        <EarningStat label="24 h" value={earnings ? fmt(earnings.last24h) : "—"} />
+      </div>
+    </div>
+  );
+}
+
+function EarningStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-[11px]" style={{ color: "var(--text-subtle)" }}>
+        {label}
+      </p>
+      <p className="mt-0.5 font-semibold tabular-nums" style={{ color: "var(--accent)" }}>
+        {value}
+      </p>
     </div>
   );
 }

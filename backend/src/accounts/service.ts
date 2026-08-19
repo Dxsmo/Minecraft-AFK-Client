@@ -12,9 +12,25 @@ export function parseAllowlist(raw: string): string[] {
   }
 }
 
-/** Presents a stored account to API clients, decoding the allowlist to an array. */
-function present<T extends { tpAutoAllowlist: string }>(account: T): Omit<T, "tpAutoAllowlist"> & { tpAutoAllowlist: string[] } {
-  return { ...account, tpAutoAllowlist: parseAllowlist(account.tpAutoAllowlist) };
+/** Parses the JSON-encoded daily-command times column into a string array. */
+export function parseDailyTimes(raw: string): string[] {
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Presents a stored account to API clients, decoding JSON-encoded list columns to arrays. */
+function present<T extends { tpAutoAllowlist: string; dailyCommandTimes: string }>(
+  account: T,
+): Omit<T, "tpAutoAllowlist" | "dailyCommandTimes"> & { tpAutoAllowlist: string[]; dailyCommandTimes: string[] } {
+  return {
+    ...account,
+    tpAutoAllowlist: parseAllowlist(account.tpAutoAllowlist),
+    dailyCommandTimes: parseDailyTimes(account.dailyCommandTimes),
+  };
 }
 
 /**
@@ -44,6 +60,12 @@ const publicAccountSelect = {
   autoSellEnabled: true,
   autoSellIntervalSeconds: true,
   autoSellCommand: true,
+  dailyCommandEnabled: true,
+  dailyCommandTimes: true,
+  balanceEnabled: true,
+  balanceCommand: true,
+  lastBalance: true,
+  lastBalanceAt: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -122,4 +144,34 @@ export async function setAssignments(accountId: string, userIds: string[]) {
 /** Internal helper for ClientManager/commands module: includes the credentials field. */
 export async function getFullAccount(id: string) {
   return prisma.minecraftAccount.findUnique({ where: { id } });
+}
+
+/**
+ * Rolling auto-sell earnings for an account over the last 5 minutes, hour and
+ * 24 hours. Prunes rows older than 24h first so the table can't grow unbounded.
+ */
+export async function getEarningsSummary(id: string) {
+  const now = Date.now();
+  const cutoff24h = new Date(now - 24 * 60 * 60_000);
+  await prisma.sellEarning.deleteMany({
+    where: { minecraftAccountId: id, createdAt: { lt: cutoff24h } },
+  });
+
+  const rows = await prisma.sellEarning.findMany({
+    where: { minecraftAccountId: id, createdAt: { gte: cutoff24h } },
+    select: { amount: true, createdAt: true },
+  });
+
+  const since5m = now - 5 * 60_000;
+  const since1h = now - 60 * 60_000;
+  let last5m = 0;
+  let last1h = 0;
+  let last24h = 0;
+  for (const row of rows) {
+    const t = row.createdAt.getTime();
+    last24h += row.amount;
+    if (t >= since1h) last1h += row.amount;
+    if (t >= since5m) last5m += row.amount;
+  }
+  return { last5m, last1h, last24h };
 }

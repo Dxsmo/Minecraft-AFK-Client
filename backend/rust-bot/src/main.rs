@@ -380,6 +380,10 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
                 match cmd {
                     Command::Chat { text } => bot.chat(text),
                     Command::Configure(cfg) => shared().lock().behavior.update_config(cfg),
+                    Command::RunTask { text } => shared().lock().behavior.enqueue_task(text),
+                    Command::QueryBalance { command } => {
+                        shared().lock().behavior.enqueue_balance(command)
+                    }
                     Command::Disconnect => {
                         emit(&OutEvent::Disconnect {
                             reason: Some("Requested by controller".into()),

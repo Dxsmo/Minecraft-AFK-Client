@@ -46,6 +46,14 @@ export const createAccountSchema = z
     autoSellEnabled: z.boolean().default(false),
     autoSellIntervalSeconds: z.coerce.number().int().min(1).max(3600).default(60),
     autoSellCommand: z.string().max(64).default("/sell"),
+    dailyCommandEnabled: z.boolean().default(false),
+    dailyCommandTimes: z
+      .array(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM"))
+      .max(48)
+      .default([])
+      .transform((times) => JSON.stringify(Array.from(new Set(times)).sort())),
+    balanceEnabled: z.boolean().default(false),
+    balanceCommand: z.string().max(64).default("/balance"),
   })
   .refine((data) => data.authType !== "MICROSOFT" || !!data.credentialsSecret, {
     message: "Microsoft accounts require an account email",
@@ -83,6 +91,14 @@ export const updateAccountSchema = z.object({
   autoSellEnabled: z.boolean().optional(),
   autoSellIntervalSeconds: z.coerce.number().int().min(1).max(3600).optional(),
   autoSellCommand: z.string().max(64).optional(),
+  dailyCommandEnabled: z.boolean().optional(),
+  dailyCommandTimes: z
+    .array(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM"))
+    .max(48)
+    .optional()
+    .transform((times) => (times ? JSON.stringify(Array.from(new Set(times)).sort()) : undefined)),
+  balanceEnabled: z.boolean().optional(),
+  balanceCommand: z.string().max(64).optional(),
 });
 
 export const assignUsersSchema = z.object({

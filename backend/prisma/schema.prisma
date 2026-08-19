@@ -117,6 +117,18 @@ model MinecraftAccount {
   autoSellEnabled            Boolean @default(false)
   autoSellIntervalSeconds    Int     @default(60)
   autoSellCommand            String  @default("/sell")
+  // Daily scheduler for the existing auto-command text: when enabled, the
+  // configured autoCommandText is run once at each time of day listed in
+  // dailyCommandTimes (JSON-encoded array of "HH:MM", server local time).
+  dailyCommandEnabled        Boolean @default(false)
+  dailyCommandTimes          String  @default("[]")
+  // Periodically query and display the player's balance (parsed from chat).
+  balanceEnabled             Boolean @default(false)
+  balanceCommand             String  @default("/balance")
+  // Last known balance and when it was read, so the dashboard can show a value
+  // immediately after a restart before the next poll runs.
+  lastBalance                Float?
+  lastBalanceAt              DateTime?
   status             ClientStatus @default(OFFLINE)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
@@ -128,6 +140,20 @@ model MinecraftAccount {
 
   assignments UserMinecraftAccount[]
   consoleLogs ConsoleLog[]
+  sellEarnings SellEarning[]
+}
+
+// One row per money amount earned from an auto-sell action, used to compute the
+// rolling 5m/1h/24h earnings shown under the console. Kept separate from other
+// income so only genuine /sell earnings are counted.
+model SellEarning {
+  id                String   @id @default(cuid())
+  minecraftAccountId String
+  account           MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+  amount            Float
+  createdAt         DateTime @default(now())
+
+  @@index([minecraftAccountId, createdAt])
 }
 
 model UserMinecraftAccount {

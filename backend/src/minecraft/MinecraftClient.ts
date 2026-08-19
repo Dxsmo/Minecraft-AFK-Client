@@ -32,6 +32,13 @@ const SUBPROCESS_ONLINE_SILENCE_MS = 90_000;
 /// How often the online-hang watchdog checks for subprocess silence.
 const ONLINE_WATCHDOG_INTERVAL_MS = 15_000;
 
+/// How often the daily-command / balance schedulers wake up. A 30s cadence is
+/// fine for minute-granular daily times (deduped per day) and keeps overhead
+/// negligible.
+const SCHEDULER_TICK_MS = 30_000;
+/// How often to poll the player's balance while balance polling is enabled.
+const BALANCE_POLL_INTERVAL_MS = 5 * 60_000;
+
 /**
  * Wraps the Azalea Rust bot subprocess (one per Minecraft account) and exposes
  * a small state machine plus console/status/profile event streams.
@@ -64,10 +71,29 @@ export class MinecraftClient extends EventEmitter {
 
   private health = 20;
   private food = 20;
+  private balance: number | undefined;
+  private balanceUpdatedAt: Date | undefined;
+
+  /** Drives the daily-command + balance-poll schedulers (see runScheduledTasks). */
+  private schedulerTimer: NodeJS.Timeout | null = null;
+  /** Maps a daily "HH:MM" to the YYYY-MM-DD it last fired, to run it once per day. */
+  private firedDaily = new Map<string, string>();
+  /** Epoch ms of the last balance query, for the 5-minute poll cadence. */
+  private lastBalanceQueryAt = 0;
 
   constructor(private config: ClientRuntimeConfig) {
     super();
     this.log = accountLogger(config.id, config.name);
+    this.schedulerTimer = setInterval(() => this.runScheduledTasks(), SCHEDULER_TICK_MS);
+  }
+
+  /** Stops all timers and disconnects; call when the account is removed. */
+  dispose(): void {
+    if (this.schedulerTimer) {
+      clearInterval(this.schedulerTimer);
+      this.schedulerTimer = null;
+    }
+    this.disconnect();
   }
 
   updateConfig(config: ClientRuntimeConfig): void {
@@ -105,6 +131,8 @@ export class MinecraftClient extends EventEmitter {
       lastError: this.lastError,
       reconnectAttempt: this.reconnectAttempt,
       msaSignIn: this.msaSignIn,
+      balance: this.balance,
+      balanceUpdatedAt: this.balanceUpdatedAt?.toISOString(),
     };
   }
 
@@ -144,6 +172,40 @@ export class MinecraftClient extends EventEmitter {
 
   sendChat(message: string): void {
     this.sendCommand(message);
+  }
+
+  /**
+   * Runs the time-of-day daily-command scheduler and the periodic balance poll.
+   * Both dispatch through the Rust bot's foreground task queue (RunTask /
+   * QueryBalance), so they automatically pause any in-progress auto-sell cycle
+   * and resume it afterwards — no scheduling logic lives in the bot itself.
+   */
+  private runScheduledTasks(): void {
+    if (this.status !== "ONLINE" || !this.subprocess) return;
+
+    // Daily command: fire the existing auto-command text once at each configured
+    // time of day (server local time), deduped per day.
+    const text = this.config.autoCommandText.trim();
+    if (this.config.dailyCommandEnabled && text && this.config.dailyCommandTimes.length > 0) {
+      const now = new Date();
+      const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      const today = now.toISOString().slice(0, 10);
+      if (this.config.dailyCommandTimes.includes(hhmm) && this.firedDaily.get(hhmm) !== today) {
+        this.firedDaily.set(hhmm, today);
+        this.sendToBot({ type: "run_task", text });
+        this.emitConsole("SYSTEM", `Daily command scheduled for ${hhmm} dispatched`);
+      }
+    }
+
+    // Balance poll: query at most every BALANCE_POLL_INTERVAL_MS.
+    if (this.config.balanceEnabled) {
+      const elapsed = Date.now() - this.lastBalanceQueryAt;
+      if (elapsed >= BALANCE_POLL_INTERVAL_MS) {
+        this.lastBalanceQueryAt = Date.now();
+        const command = this.config.balanceCommand.trim() || "/balance";
+        this.sendToBot({ type: "query_balance", command });
+      }
+    }
   }
 
   private attemptConnect(): void {
@@ -324,6 +386,24 @@ export class MinecraftClient extends EventEmitter {
       case "heartbeat":
         // Liveness only; lastActivityAt is already refreshed for every line.
         break;
+
+      case "balance": {
+        const { balance } = event as { balance: number };
+        this.balance = balance;
+        this.balanceUpdatedAt = new Date();
+        this.emitConsole("SYSTEM", `Balance: ${balance.toLocaleString("en-US")}`);
+        this.emit("balance", { minecraftAccountId: this.config.id, balance });
+        this.emitStatus();
+        break;
+      }
+
+      case "sell_earning": {
+        const { amount } = event as { amount: number };
+        if (Number.isFinite(amount) && amount > 0) {
+          this.emit("earning", { minecraftAccountId: this.config.id, amount });
+        }
+        break;
+      }
 
       case "warning":
         this.emitConsole("WARNING", String((event as { message: string }).message));

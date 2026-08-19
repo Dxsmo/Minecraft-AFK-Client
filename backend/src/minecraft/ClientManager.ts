@@ -3,7 +3,7 @@ import type { ClientRuntimeConfig, ClientStatusSnapshot, ConsoleEvent } from "./
 import { prisma } from "../database/prisma.js";
 import { persistConsoleLog } from "../logging/consoleLogService.js";
 import { logger } from "../logging/logger.js";
-import { parseAllowlist } from "../accounts/service.js";
+import { parseAllowlist, parseDailyTimes } from "../accounts/service.js";
 import type { MinecraftAccount } from "@prisma/client";
 
 export type ConsoleEventListener = (event: ConsoleEvent) => void;
@@ -32,6 +32,10 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     autoSellEnabled: account.autoSellEnabled,
     autoSellIntervalSeconds: account.autoSellIntervalSeconds,
     autoSellCommand: account.autoSellCommand,
+    dailyCommandEnabled: account.dailyCommandEnabled,
+    dailyCommandTimes: parseDailyTimes(account.dailyCommandTimes),
+    balanceEnabled: account.balanceEnabled,
+    balanceCommand: account.balanceCommand,
   };
 }
 
@@ -107,6 +111,20 @@ export class ClientManager {
         }
       }
     });
+    client.on("balance", ({ minecraftAccountId, balance }: { minecraftAccountId: string; balance: number }) => {
+      prisma.minecraftAccount
+        .update({ where: { id: minecraftAccountId }, data: { lastBalance: balance, lastBalanceAt: new Date() } })
+        .catch((err) => {
+          if (err?.code !== "P2025") logger.error({ err }, "Failed to persist balance");
+        });
+    });
+    client.on("earning", ({ minecraftAccountId, amount }: { minecraftAccountId: string; amount: number }) => {
+      prisma.sellEarning
+        .create({ data: { minecraftAccountId, amount } })
+        .catch((err) => {
+          if (err?.code !== "P2025") logger.error({ err }, "Failed to persist sell earning");
+        });
+    });
     this.clients.set(account.id, client);
     return client;
   }
@@ -114,7 +132,7 @@ export class ClientManager {
   unregister(accountId: string): void {
     const client = this.clients.get(accountId);
     if (client) {
-      client.disconnect();
+      client.dispose();
       this.clients.delete(accountId);
     }
   }

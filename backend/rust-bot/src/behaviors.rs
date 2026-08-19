@@ -7,10 +7,13 @@
 //! so `tokio::spawn`/`spawn_local` from inside an event handler is unreliable.
 //! Tick-driven timing keeps behaviors simple, deterministic and cheap.
 
+use std::collections::VecDeque;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use azalea::{Client, WalkDirection};
 use rand::Rng;
+use regex::Regex;
 
 use crate::emit;
 use crate::protocol::{BehaviorConfig, Config, OutEvent};
@@ -31,12 +34,37 @@ const TPACCEPT_DEDUP: Duration = Duration::from_secs(4);
 /// How often the bot emits a heartbeat so the Node supervisor can tell a live
 /// (but silent) bot apart from a hung one and recycle the latter.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
+/// How long to wait for the server to answer a balance query before giving up.
+const BALANCE_TIMEOUT: Duration = Duration::from_secs(5);
+/// After an auto-sell command runs, sell-confirmation messages arriving within
+/// this window are attributed to auto-sell earnings. Unrelated income (e.g.
+/// `/pay`) outside this window is never counted.
+const SELL_EARNING_WINDOW: Duration = Duration::from_secs(5);
 
 /// Tracks the two-step auto-sell cycle: send the sell command, then move all
 /// inventory items into the container the server opens in response.
 enum AutoSellPhase {
     Idle,
     WaitingForMenu { since: Instant },
+}
+
+/// A one-shot, foreground task. While one is queued or running, the continuous
+/// auto-sell loop is paused (it won't start a new cycle), and a queued task
+/// only begins once auto-sell is back to `Idle`. This guarantees the bot never
+/// runs two menu/inventory interactions at once — the core of the task-interrupt
+/// (pause/resume) system. Scheduling/timing lives in Node; this just ensures
+/// safe, non-overlapping execution.
+enum ForegroundTask {
+    /// Send a single chat line (e.g. a scheduled daily command).
+    Chat(String),
+    /// Send a balance query, then wait for the reply (parsed in `on_chat`).
+    Balance(String),
+}
+
+/// A foreground task that is mid-execution and spans multiple ticks.
+enum ActiveTask {
+    /// Waiting for the server to answer a balance query.
+    Balance { deadline: Instant },
 }
 
 pub struct BehaviorState {
@@ -48,6 +76,12 @@ pub struct BehaviorState {
     stop_walking_at: Option<Instant>,
     last_autosell_at: Instant,
     autosell_phase: AutoSellPhase,
+    /// When set, sell-confirmation messages until this time count as earnings.
+    sell_earning_window: Option<Instant>,
+    /// Foreground one-shot tasks awaiting execution (see [`ForegroundTask`]).
+    task_queue: VecDeque<ForegroundTask>,
+    /// The foreground task currently mid-execution, if any.
+    active_task: Option<ActiveTask>,
     /// The last `/tpaccept …` command we sent and when, for de-duplication.
     last_tpaccept: Option<(String, Instant)>,
     last_heartbeat_at: Instant,
@@ -77,6 +111,9 @@ impl BehaviorState {
             stop_walking_at: None,
             last_autosell_at: now,
             autosell_phase: AutoSellPhase::Idle,
+            sell_earning_window: None,
+            task_queue: VecDeque::new(),
+            active_task: None,
             last_tpaccept: None,
             last_heartbeat_at: now,
         }
@@ -85,6 +122,36 @@ impl BehaviorState {
     /// Apply a live settings update (from a `Command::Configure`).
     pub fn update_config(&mut self, config: BehaviorConfig) {
         self.config = config;
+    }
+
+    /// Enqueue a scheduled chat command as a foreground one-shot task. Auto-sell
+    /// is paused until it runs, then resumed (handled by the tick loop).
+    pub fn enqueue_task(&mut self, text: String) {
+        let text = text.trim().to_string();
+        if !text.is_empty() {
+            self.task_queue.push_back(ForegroundTask::Chat(text));
+        }
+    }
+
+    /// Enqueue a balance query as a foreground one-shot task. Coalesces with any
+    /// pending/active balance query so repeated requests don't stack up.
+    pub fn enqueue_balance(&mut self, command: String) {
+        let command = command.trim().to_string();
+        let command = if command.is_empty() { "/balance".to_string() } else { command };
+        let already_pending = matches!(self.active_task, Some(ActiveTask::Balance { .. }))
+            || self
+                .task_queue
+                .iter()
+                .any(|t| matches!(t, ForegroundTask::Balance(_)));
+        if !already_pending {
+            self.task_queue.push_back(ForegroundTask::Balance(command));
+        }
+    }
+
+    /// True while a foreground one-shot task is queued or running; auto-sell must
+    /// not start a new cycle in this state.
+    fn foreground_busy(&self) -> bool {
+        self.active_task.is_some() || !self.task_queue.is_empty()
     }
 
     /// Called on every `Event::Tick`. Checks each behavior's elapsed time
@@ -156,6 +223,7 @@ impl BehaviorState {
             }
         }
 
+        self.tick_foreground(bot, now);
         self.tick_autosell(bot, now);
 
         // Heartbeat: prove the tick loop is alive so the supervisor can recycle
@@ -163,6 +231,44 @@ impl BehaviorState {
         if now.duration_since(self.last_heartbeat_at) >= HEARTBEAT_INTERVAL {
             self.last_heartbeat_at = now;
             emit(&OutEvent::Heartbeat);
+        }
+    }
+
+    /// Drives the foreground one-shot task queue (the task-interrupt system).
+    /// A queued task only starts once auto-sell is idle, so menu/inventory
+    /// interactions never overlap; instant tasks (a chat command) complete in
+    /// the same tick, while multi-tick tasks (a balance query) become the
+    /// `active_task` until they finish or time out.
+    fn tick_foreground(&mut self, bot: &Client, now: Instant) {
+        // Advance an in-progress multi-tick task.
+        if let Some(ActiveTask::Balance { deadline }) = &self.active_task {
+            if now >= *deadline {
+                emit(&OutEvent::BehaviorLog {
+                    message: "Balance: no reply from the server (timed out)".into(),
+                });
+                self.active_task = None;
+            }
+        }
+
+        // Start the next queued task, but only when nothing is active and
+        // auto-sell isn't mid-cycle — this is what enforces mutual exclusion.
+        if self.active_task.is_none() && matches!(self.autosell_phase, AutoSellPhase::Idle) {
+            if let Some(task) = self.task_queue.pop_front() {
+                match task {
+                    ForegroundTask::Chat(text) => {
+                        bot.chat(text.clone());
+                        emit(&OutEvent::BehaviorLog {
+                            message: format!("Scheduled command sent: {text}"),
+                        });
+                    }
+                    ForegroundTask::Balance(command) => {
+                        bot.chat(command.clone());
+                        self.active_task = Some(ActiveTask::Balance {
+                            deadline: now + BALANCE_TIMEOUT,
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -179,12 +285,21 @@ impl BehaviorState {
 
         match self.autosell_phase {
             AutoSellPhase::Idle => {
+                // Don't start a new cycle while a foreground one-shot task is
+                // queued or running — this is the "pause" half of the interrupt
+                // system. An in-progress cycle below is always allowed to finish.
+                if self.foreground_busy() {
+                    return;
+                }
                 let interval = Duration::from_secs(self.config.autosell_interval_seconds.max(1));
                 if now.duration_since(self.last_autosell_at) >= interval {
                     self.last_autosell_at = now;
                     let command = self.config.autosell_command.trim();
                     let command = if command.is_empty() { "/sell" } else { command };
                     bot.chat(command.to_string());
+                    // Open the earnings-attribution window: sell confirmations
+                    // arriving shortly after this command count as earnings.
+                    self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
                     self.autosell_phase = AutoSellPhase::WaitingForMenu { since: now };
                     emit(&OutEvent::BehaviorLog {
                         message: format!("AutoSell: opening sell menu ({command})"),
@@ -210,6 +325,9 @@ impl BehaviorState {
                             emit(&OutEvent::BehaviorLog {
                                 message: format!("AutoSell: moved {sold} stack(s) into the sell menu"),
                             });
+                            if sold > 0 {
+                                self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
+                            }
                         }
                         // Always close the menu so we never leave the bot stuck
                         // in an open GUI (which otherwise blocks further actions
@@ -240,6 +358,32 @@ impl BehaviorState {
     /// `/tpaccept <name> tpa`) and only falls back to a bare `/tpaccept` when no
     /// such hint is present.
     pub fn on_chat(&mut self, bot: &Client, message: &str) {
+        // Balance reply: while a balance query is in flight, the next chat line
+        // carrying a money amount is the answer.
+        if matches!(self.active_task, Some(ActiveTask::Balance { .. })) {
+            if let Some(balance) = parse_balance(message) {
+                self.active_task = None;
+                emit(&OutEvent::Balance {
+                    balance,
+                    raw: message.to_string(),
+                });
+            }
+        }
+
+        // Auto-sell earnings: attribute sell-confirmation amounts arriving in the
+        // short window after a sell command. Nothing outside that window (e.g.
+        // `/pay` income) is ever counted.
+        if let Some(until) = self.sell_earning_window {
+            if Instant::now() <= until {
+                if let Some(amount) = parse_sell_amount(message) {
+                    emit(&OutEvent::SellEarning {
+                        amount,
+                        raw: message.to_string(),
+                    });
+                }
+            }
+        }
+
         if !self.config.tpauto_enabled {
             return;
         }
@@ -282,6 +426,59 @@ impl BehaviorState {
             message: format!("TPAuto: accepted teleport request ({command})"),
         });
     }
+}
+
+/// Extracts a monetary amount from `text`, preferring a `$`-prefixed number and
+/// otherwise falling back to the first plausible number. Thousands separators
+/// (commas) are stripped; an optional decimal part is kept.
+fn extract_money(text: &str) -> Option<f64> {
+    static DOLLAR: OnceLock<Regex> = OnceLock::new();
+    static NUMBER: OnceLock<Regex> = OnceLock::new();
+    let dollar = DOLLAR.get_or_init(|| Regex::new(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)").unwrap());
+    let number = NUMBER.get_or_init(|| Regex::new(r"([0-9][0-9,]*(?:\.[0-9]+)?)").unwrap());
+
+    let cap = dollar
+        .captures(text)
+        .or_else(|| number.captures(text))?;
+    let raw = cap.get(1)?.as_str().replace(',', "");
+    raw.parse::<f64>().ok()
+}
+
+/// Parses the player's balance from a server reply to a balance query. Requires
+/// a currency hint so unrelated numeric chatter isn't misread as a balance.
+fn parse_balance(text: &str) -> Option<f64> {
+    let lower = text.to_lowercase();
+    let looks_like_balance = text.contains('$')
+        || lower.contains("balance")
+        || lower.contains("money")
+        || lower.contains("coins")
+        || lower.contains("guthaben")
+        || lower.contains("kontostand");
+    if !looks_like_balance {
+        return None;
+    }
+    extract_money(text)
+}
+
+/// Parses money earned from an auto-sell confirmation line. Requires a sell-verb
+/// keyword and excludes transfer income (`/pay`) so only genuine sell earnings
+/// are counted.
+fn parse_sell_amount(text: &str) -> Option<f64> {
+    let lower = text.to_lowercase();
+    let is_sale = lower.contains("sold")
+        || lower.contains("sale")
+        || lower.contains("selling")
+        || lower.contains("verkauft")
+        || lower.contains("verkauf");
+    let is_transfer = lower.contains("pay")
+        || lower.contains("paid")
+        || lower.contains("received")
+        || lower.contains("bezahlt")
+        || lower.contains("erhalten von");
+    if !is_sale || is_transfer {
+        return None;
+    }
+    extract_money(text)
 }
 
 /// Words that commonly follow `/tpaccept` as prose rather than as real command
@@ -371,7 +568,36 @@ fn tpaccept_target_name(command: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_tpa_accept_command, tpaccept_target_name};
+    use super::{parse_balance, parse_sell_amount, parse_tpa_accept_command, tpaccept_target_name};
+
+    #[test]
+    fn balance_dollar_with_commas() {
+        assert_eq!(parse_balance("Balance: $12,450"), Some(12450.0));
+        assert_eq!(parse_balance("Your balance is $1,234.56"), Some(1234.56));
+        assert_eq!(parse_balance("You have 8000 coins"), Some(8000.0));
+    }
+
+    #[test]
+    fn balance_ignores_non_currency_lines() {
+        assert_eq!(parse_balance("Player joined at 12:00"), None);
+        assert_eq!(parse_balance("You have 5 new messages"), None);
+    }
+
+    #[test]
+    fn sell_amount_counts_sales_only() {
+        assert_eq!(
+            parse_sell_amount("You sold 64 cobblestone for $500"),
+            Some(500.0)
+        );
+        assert_eq!(parse_sell_amount("Verkauft für $1,250"), Some(1250.0));
+    }
+
+    #[test]
+    fn sell_amount_excludes_transfers() {
+        assert_eq!(parse_sell_amount("Desmodus paid you $9000"), None);
+        assert_eq!(parse_sell_amount("You received $100 from Steve"), None);
+        assert_eq!(parse_sell_amount("Welcome to the server!"), None);
+    }
 
     #[test]
     fn hugosmp_accept_hint_line() {

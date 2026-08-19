@@ -59,6 +59,14 @@ export interface ClientRuntimeConfig {
   autoSellEnabled: boolean;
   autoSellIntervalSeconds: number;
   autoSellCommand: string;
+  /** Fire the auto-command text at fixed times of day (see dailyCommandTimes). */
+  dailyCommandEnabled: boolean;
+  /** Times of day ("HH:MM", server local time) to run the auto-command once each. */
+  dailyCommandTimes: string[];
+  /** Periodically query and display the player's balance. */
+  balanceEnabled: boolean;
+  /** Command used to query the balance (e.g. "/balance"). */
+  balanceCommand: string;
 }
 
 /** Microsoft device-code sign-in details, shown live in the account console/UI. */
@@ -82,4 +90,8 @@ export interface ClientStatusSnapshot {
   reconnectAttempt: number;
   connectedSince?: string;
   msaSignIn?: MsaSignInPrompt;
+  /** Last known player balance, when balance polling is enabled. */
+  balance?: number;
+  /** ISO timestamp of the last balance update. */
+  balanceUpdatedAt?: string;
 }

@@ -25,6 +25,11 @@ export function AccountSettingsPanel({
   const [autoCommandEnabled, setAutoCommandEnabled] = useState(account.autoCommandEnabled);
   const [autoCommandText, setAutoCommandText] = useState(account.autoCommandText);
   const [autoCommandIntervalMinutes, setAutoCommandIntervalMinutes] = useState(account.autoCommandIntervalMinutes);
+  const [dailyCommandEnabled, setDailyCommandEnabled] = useState(account.dailyCommandEnabled);
+  const [dailyCommandTimes, setDailyCommandTimes] = useState<string[]>(account.dailyCommandTimes ?? []);
+  const [dailyTimeDraft, setDailyTimeDraft] = useState("08:00");
+  const [balanceEnabled, setBalanceEnabled] = useState(account.balanceEnabled);
+  const [balanceCommand, setBalanceCommand] = useState(account.balanceCommand);
   const [tpAutoEnabled, setTpAutoEnabled] = useState(account.tpAutoEnabled);
   const [tpAutoAllowlist, setTpAutoAllowlist] = useState<string[]>(account.tpAutoAllowlist ?? []);
   const [allowlistDraft, setAllowlistDraft] = useState("");
@@ -59,6 +64,10 @@ export function AccountSettingsPanel({
         autoCommandEnabled,
         autoCommandText,
         autoCommandIntervalMinutes,
+        dailyCommandEnabled,
+        dailyCommandTimes,
+        balanceEnabled,
+        balanceCommand,
         tpAutoEnabled,
         tpAutoAllowlist,
         autoSellEnabled,
@@ -108,6 +117,20 @@ export function AccountSettingsPanel({
 
   function removeAllowlistName(name: string) {
     setTpAutoAllowlist(tpAutoAllowlist.filter((n) => n !== name));
+  }
+
+  function addDailyTime() {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(dailyTimeDraft)) {
+      setError("Invalid time (use HH:MM)");
+      return;
+    }
+    if (!dailyCommandTimes.includes(dailyTimeDraft)) {
+      setDailyCommandTimes([...dailyCommandTimes, dailyTimeDraft].sort());
+    }
+  }
+
+  function removeDailyTime(time: string) {
+    setDailyCommandTimes(dailyCommandTimes.filter((t) => t !== time));
   }
 
   function toggleUser(userId: string) {    setAssigned((prev) => {
@@ -229,6 +252,67 @@ export function AccountSettingsPanel({
         <Field label="Interval">
           <NumberInput value={autoCommandIntervalMinutes} onChange={setAutoCommandIntervalMinutes} min={1} max={1440} suffix="min" />
         </Field>
+
+        {/* Daily scheduler: runs the command above once at each listed time. */}
+        <div className="mt-1 border-t pt-3" style={{ borderColor: "var(--border)" }}>
+          <Toggle
+            label="Daily command"
+            description="Run the command above once each day at the times below (server local time)."
+            checked={dailyCommandEnabled}
+            onChange={setDailyCommandEnabled}
+          />
+          {dailyCommandTimes.length > 0 && (
+            <div className="mb-2 mt-2 flex flex-wrap gap-1.5">
+              {dailyCommandTimes.map((time) => (
+                <span
+                  key={time}
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums"
+                  style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+                >
+                  {time}
+                  <button
+                    type="button"
+                    onClick={() => removeDailyTime(time)}
+                    className="leading-none opacity-70 hover:opacity-100"
+                    aria-label={`Remove ${time}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="mt-2 flex gap-2">
+            <input
+              type="time"
+              value={dailyTimeDraft}
+              onChange={(e) => setDailyTimeDraft(e.target.value)}
+              className="input w-32"
+            />
+            <button type="button" onClick={addDailyTime} className="btn btn-secondary btn-sm shrink-0">
+              + Add time
+            </button>
+          </div>
+        </div>
+      </Section>
+
+      {/* Balance */}
+      <Section title="Balance">
+        <Toggle
+          label="Show balance"
+          description="Queries the balance every 5 minutes and shows it above health/hunger."
+          checked={balanceEnabled}
+          onChange={setBalanceEnabled}
+        />
+        <div>
+          <label className="label">Balance command</label>
+          <input
+            value={balanceCommand}
+            onChange={(e) => setBalanceCommand(e.target.value)}
+            placeholder="/balance"
+            className="input"
+          />
+        </div>
       </Section>
 
       {/* Auto-TPA */}
