@@ -384,6 +384,7 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
                     Command::QueryBalance { command } => {
                         shared().lock().behavior.enqueue_balance(command)
                     }
+                    Command::CleanSpawner => shared().lock().behavior.enqueue_clean_spawner(),
                     Command::Disconnect => {
                         emit(&OutEvent::Disconnect {
                             reason: Some("Requested by controller".into()),

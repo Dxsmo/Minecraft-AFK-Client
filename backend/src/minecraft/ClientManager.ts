@@ -166,6 +166,12 @@ export class ClientManager {
     return true;
   }
 
+  cleanSpawner(accountId: string): boolean {
+    const client = this.clients.get(accountId);
+    if (!client) return false;
+    return client.cleanSpawner();
+  }
+
   /** Gracefully disconnects every client, e.g. during process shutdown. */
   shutdownAll(): void {
     for (const client of this.clients.values()) {

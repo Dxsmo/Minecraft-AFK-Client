@@ -101,6 +101,10 @@ pub enum Command {
     /// auto-sell, sends the given balance command, and waits for the server's
     /// reply (parsed into an [`OutEvent::Balance`]).
     QueryBalance { command: String },
+    /// Clean a nearby spawner as a foreground one-shot task: right-click a
+    /// spawner within reach (without walking to it), drop the items in the
+    /// container it opens, and close it. Pauses auto-sell for the duration.
+    CleanSpawner,
     /// Gracefully disconnect and exit.
     Disconnect,
 }

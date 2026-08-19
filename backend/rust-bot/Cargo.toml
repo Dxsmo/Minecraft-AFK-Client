@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 azalea = { git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea-inventory = { git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
 tokio = { version = "1", features = ["full"] }
 eyre = "0.6"
 serde = { version = "1", features = ["derive"] }

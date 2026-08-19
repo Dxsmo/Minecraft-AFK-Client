@@ -181,6 +181,14 @@ export default async function accountsRoutes(app: FastifyInstance) {
     await guardedLifecycle(req, reply, (id) => clientManager.restart(id), "ACCOUNT_RESTART");
   });
 
+  app.post(
+    "/api/minecraft/accounts/:id/clean-spawner",
+    { preHandler: app.requireCsrf },
+    async (req, reply) => {
+      await guardedLifecycle(req, reply, (id) => clientManager.cleanSpawner(id), "ACCOUNT_CLEAN_SPAWNER");
+    },
+  );
+
   app.post("/api/minecraft/accounts/:id/command", { preHandler: app.requireCsrf }, async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = parseOrReject(commandSchema, req.body, reply);

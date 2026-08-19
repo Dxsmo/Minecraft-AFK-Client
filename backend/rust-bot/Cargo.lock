@@ -231,6 +231,7 @@ name = "azalea-bot"
 version = "0.1.0"
 dependencies = [
  "azalea",
+ "azalea-inventory",
  "eyre",
  "parking_lot",
  "rand 0.8.7",

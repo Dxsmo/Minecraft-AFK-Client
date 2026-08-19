@@ -175,6 +175,21 @@ export class MinecraftClient extends EventEmitter {
   }
 
   /**
+   * Queue a clean-spawner run on the bot. The bot right-clicks a spawner within
+   * reach (never walking to it) and drops the container's items. Runs through
+   * the bot's foreground task queue, so it pauses/resumes auto-sell cleanly.
+   */
+  cleanSpawner(): boolean {
+    if (this.status !== "ONLINE" || !this.subprocess) {
+      this.emitConsole("ERROR", "Bot is not online, cannot clean spawner");
+      return false;
+    }
+    this.sendToBot({ type: "clean_spawner" });
+    this.emitConsole("SYSTEM", "Clean spawner task dispatched");
+    return true;
+  }
+
+  /**
    * Runs the time-of-day daily-command scheduler and the periodic balance poll.
    * Both dispatch through the Rust bot's foreground task queue (RunTask /
    * QueryBalance), so they automatically pause any in-progress auto-sell cycle

@@ -11,7 +11,10 @@ use std::collections::VecDeque;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use azalea::{Client, WalkDirection};
+use azalea::registry::builtin::BlockKind;
+use azalea::block::BlockStates;
+use azalea::{BlockPos, Client, WalkDirection};
+use azalea_inventory::operations::ThrowClick;
 use rand::Rng;
 use regex::Regex;
 
@@ -40,6 +43,16 @@ const BALANCE_TIMEOUT: Duration = Duration::from_secs(5);
 /// this window are attributed to auto-sell earnings. Unrelated income (e.g.
 /// `/pay`) outside this window is never counted.
 const SELL_EARNING_WINDOW: Duration = Duration::from_secs(5);
+/// How close (in blocks) a spawner must be for Clean Spawner to interact with
+/// it. The bot never walks, so anything beyond normal interaction reach is
+/// ignored rather than approached.
+const SPAWNER_MAX_REACH: f64 = 5.0;
+/// How long to wait for a right-clicked spawner to open its container before
+/// giving up on the clean-spawner cycle.
+const SPAWNER_MENU_TIMEOUT: Duration = Duration::from_millis(2000);
+/// Stop scanning a spawner container after this many consecutive empty slots,
+/// assuming no further items remain.
+const SPAWNER_EMPTY_STREAK: usize = 3;
 
 /// Tracks the two-step auto-sell cycle: send the sell command, then move all
 /// inventory items into the container the server opens in response.
@@ -59,12 +72,16 @@ enum ForegroundTask {
     Chat(String),
     /// Send a balance query, then wait for the reply (parsed in `on_chat`).
     Balance(String),
+    /// Right-click a nearby spawner and drop the items in its container.
+    CleanSpawner,
 }
 
 /// A foreground task that is mid-execution and spans multiple ticks.
 enum ActiveTask {
     /// Waiting for the server to answer a balance query.
     Balance { deadline: Instant },
+    /// Waiting for a right-clicked spawner's container to open.
+    CleanSpawner { menu_deadline: Instant },
 }
 
 pub struct BehaviorState {
@@ -145,6 +162,19 @@ impl BehaviorState {
                 .any(|t| matches!(t, ForegroundTask::Balance(_)));
         if !already_pending {
             self.task_queue.push_back(ForegroundTask::Balance(command));
+        }
+    }
+
+    /// Enqueue a clean-spawner run as a foreground one-shot task. Coalesces with
+    /// any pending/active clean-spawner task so repeated clicks don't stack up.
+    pub fn enqueue_clean_spawner(&mut self) {
+        let already_pending = matches!(self.active_task, Some(ActiveTask::CleanSpawner { .. }))
+            || self
+                .task_queue
+                .iter()
+                .any(|t| matches!(t, ForegroundTask::CleanSpawner));
+        if !already_pending {
+            self.task_queue.push_back(ForegroundTask::CleanSpawner);
         }
     }
 
@@ -241,13 +271,27 @@ impl BehaviorState {
     /// `active_task` until they finish or time out.
     fn tick_foreground(&mut self, bot: &Client, now: Instant) {
         // Advance an in-progress multi-tick task.
-        if let Some(ActiveTask::Balance { deadline }) = &self.active_task {
-            if now >= *deadline {
-                emit(&OutEvent::BehaviorLog {
-                    message: "Balance: no reply from the server (timed out)".into(),
-                });
-                self.active_task = None;
+        match &self.active_task {
+            Some(ActiveTask::Balance { deadline }) => {
+                if now >= *deadline {
+                    emit(&OutEvent::BehaviorLog {
+                        message: "Balance: no reply from the server (timed out)".into(),
+                    });
+                    self.active_task = None;
+                }
             }
+            Some(ActiveTask::CleanSpawner { menu_deadline }) => {
+                let menu_deadline = *menu_deadline;
+                if self.try_clean_spawner_container(bot) {
+                    self.active_task = None;
+                } else if now >= menu_deadline {
+                    emit(&OutEvent::BehaviorLog {
+                        message: "CleanSpawner: no container opened (timed out)".into(),
+                    });
+                    self.active_task = None;
+                }
+            }
+            None => {}
         }
 
         // Start the next queued task, but only when nothing is active and
@@ -267,9 +311,68 @@ impl BehaviorState {
                             deadline: now + BALANCE_TIMEOUT,
                         });
                     }
+                    ForegroundTask::CleanSpawner => match find_spawner_in_reach(bot) {
+                        Some(pos) => {
+                            // Right-click the spawner in place — never walk to it.
+                            bot.block_interact(pos);
+                            emit(&OutEvent::BehaviorLog {
+                                message: format!(
+                                    "CleanSpawner: opening spawner at {}, {}, {}",
+                                    pos.x, pos.y, pos.z
+                                ),
+                            });
+                            self.active_task = Some(ActiveTask::CleanSpawner {
+                                menu_deadline: now + SPAWNER_MENU_TIMEOUT,
+                            });
+                        }
+                        None => emit(&OutEvent::BehaviorLog {
+                            message: "CleanSpawner: no spawner within reach".into(),
+                        }),
+                    },
                 }
             }
         }
+    }
+
+    /// If the spawner's container is open, drop all its items and close it.
+    /// Returns true once the container has been processed (or was never the
+    /// player's own inventory), false while still waiting for it to open.
+    ///
+    /// Only the container's own slots are dropped (the player's 36 slots are the
+    /// last slots of the menu and are left untouched). Scanning stops after
+    /// [`SPAWNER_EMPTY_STREAK`] consecutive empty slots — but a single gap does
+    /// not abort, so items after an empty slot are still processed.
+    fn try_clean_spawner_container(&mut self, bot: &Client) -> bool {
+        let Ok(inv) = bot.get_inventory() else {
+            return false;
+        };
+        // id 0 == the player's own inventory: the spawner GUI hasn't opened yet.
+        if inv.id() == 0 {
+            return false;
+        }
+
+        let mut dropped = 0;
+        if let Some(slots) = inv.slots() {
+            let container_len = slots.len().saturating_sub(36);
+            let mut empty_streak = 0;
+            for slot in 0..container_len {
+                if slots[slot].is_present() {
+                    inv.click(ThrowClick::All { slot: slot as u16 });
+                    dropped += 1;
+                    empty_streak = 0;
+                } else {
+                    empty_streak += 1;
+                    if empty_streak >= SPAWNER_EMPTY_STREAK {
+                        break;
+                    }
+                }
+            }
+        }
+        inv.close();
+        emit(&OutEvent::BehaviorLog {
+            message: format!("CleanSpawner: dropped {dropped} stack(s), closing container"),
+        });
+        true
     }
 
     /// Drives the periodic auto-sell cycle. When enabled, every
@@ -425,6 +528,27 @@ impl BehaviorState {
         emit(&OutEvent::BehaviorLog {
             message: format!("TPAuto: accepted teleport request ({command})"),
         });
+    }
+}
+
+/// Finds the nearest mob/trial spawner to the bot that is within interaction
+/// reach, or `None` if there is none nearby. The bot never moves toward it — a
+/// spawner outside [`SPAWNER_MAX_REACH`] is simply ignored.
+fn find_spawner_in_reach(bot: &Client) -> Option<BlockPos> {
+    let position = bot.position().ok()?;
+    let world = bot.world().ok()?;
+    let world = world.read();
+    let states = BlockStates::from([BlockKind::Spawner, BlockKind::TrialSpawner]);
+    let found = world.find_block(position, &states)?;
+
+    let dx = (found.x as f64 + 0.5) - position.x;
+    let dy = (found.y as f64 + 0.5) - position.y;
+    let dz = (found.z as f64 + 0.5) - position.z;
+    let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+    if distance <= SPAWNER_MAX_REACH {
+        Some(found)
+    } else {
+        None
     }
 }
 

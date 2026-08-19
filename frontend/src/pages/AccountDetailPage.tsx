@@ -57,6 +57,15 @@ export function AccountDetailPage() {
     }
   }
 
+  async function handleCleanSpawner() {
+    if (!id) return;
+    try {
+      await api.post(`/minecraft/accounts/${id}/clean-spawner`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to start clean spawner");
+    }
+  }
+
   function handleSendCommand(e: React.FormEvent) {
     e.preventDefault();
     if (!command.trim()) return;
@@ -104,6 +113,14 @@ export function AccountDetailPage() {
           </button>
           <button onClick={() => void runAction("restart")} className="btn btn-ghost btn-sm">
             Restart
+          </button>
+          <button
+            onClick={() => void handleCleanSpawner()}
+            className="btn btn-ghost btn-sm"
+            disabled={liveStatus !== "ONLINE"}
+            title="Right-click a nearby spawner and drop its items"
+          >
+            Clean spawner
           </button>
           <button onClick={() => void handleDelete()} className="btn btn-danger btn-sm">
             Delete
