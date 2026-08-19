@@ -172,6 +172,26 @@ export class ClientManager {
     return client.cleanSpawner();
   }
 
+  requestInventory(accountId: string): void {
+    this.clients.get(accountId)?.requestInventory();
+  }
+
+  getInventory(accountId: string) {
+    return this.clients.get(accountId)?.getInventory();
+  }
+
+  moveInventoryItem(accountId: string, from: number, to: number): boolean {
+    const client = this.clients.get(accountId);
+    if (!client) return false;
+    return client.moveInventoryItem(from, to);
+  }
+
+  dropInventoryItem(accountId: string, slot: number): boolean {
+    const client = this.clients.get(accountId);
+    if (!client) return false;
+    return client.dropInventoryItem(slot);
+  }
+
   /** Gracefully disconnects every client, e.g. during process shutdown. */
   shutdownAll(): void {
     for (const client of this.clients.values()) {

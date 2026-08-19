@@ -95,3 +95,25 @@ export interface ClientStatusSnapshot {
   /** ISO timestamp of the last balance update. */
   balanceUpdatedAt?: string;
 }
+
+/** A single occupied inventory slot in a live inventory snapshot. */
+export interface InventoryItem {
+  id: string;
+  count: number;
+}
+
+/**
+ * A live snapshot of a bot's own inventory. `main` is the 27 storage slots,
+ * `hotbar` the 9 hotbar slots, `armor` the 4 armor slots; each entry is `null`
+ * for an empty slot. `mutable` is true only when move/drop actions are accepted
+ * (i.e. no container GUI is currently open).
+ */
+export interface InventorySnapshot {
+  main: (InventoryItem | null)[];
+  hotbar: (InventoryItem | null)[];
+  offhand: InventoryItem | null;
+  armor: (InventoryItem | null)[];
+  mutable: boolean;
+  /** ISO timestamp of when this snapshot was received from the bot. */
+  updatedAt: string;
+}

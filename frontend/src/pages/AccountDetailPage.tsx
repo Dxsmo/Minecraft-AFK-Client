@@ -214,7 +214,13 @@ export function AccountDetailPage() {
             </div>
           )}
 
-          <AccountSettingsPanel account={account} users={users} isAdmin={isAdmin} onUpdated={load} />
+          <AccountSettingsPanel
+            account={account}
+            users={users}
+            isAdmin={isAdmin}
+            online={liveStatus === "ONLINE"}
+            onUpdated={load}
+          />
         </div>
       </div>
     </div>

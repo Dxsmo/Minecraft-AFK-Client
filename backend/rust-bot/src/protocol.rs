@@ -105,6 +105,16 @@ pub enum Command {
     /// spawner within reach (without walking to it), drop the items in the
     /// container it opens, and close it. Pauses auto-sell for the duration.
     CleanSpawner,
+    /// Emit a snapshot of the bot's own inventory (an [`OutEvent::Inventory`]).
+    /// Read-only, so it runs immediately without touching the task queue.
+    RequestInventory,
+    /// Move an item between two of the bot's own inventory slots (raw player
+    /// menu slot indices). Runs as a foreground one-shot task so it never
+    /// collides with auto-sell or other Minecraft actions.
+    MoveItem { from: u16, to: u16 },
+    /// Drop the whole stack in one of the bot's own inventory slots (raw player
+    /// menu slot index). Runs as a foreground one-shot task.
+    DropItem { slot: u16 },
     /// Gracefully disconnect and exit.
     Disconnect,
 }
@@ -154,7 +164,29 @@ pub enum OutEvent {
     /// confirmation message. Attributed only within a short window after the
     /// sell command runs, so unrelated income (e.g. `/pay`) is not counted.
     SellEarning { amount: f64, raw: String },
+    /// A live snapshot of the bot's own inventory. Slots use the player-menu
+    /// layout: `main` is the 27 storage slots, `hotbar` the 9 hotbar slots,
+    /// `offhand` the off-hand slot, and `armor` the 4 armor slots. Each entry is
+    /// `null` for an empty slot. `mutable` is true only when the player's own
+    /// inventory is open (no container GUI in the way), i.e. when move/drop
+    /// actions are accepted.
+    Inventory {
+        main: Vec<Option<InventorySlot>>,
+        hotbar: Vec<Option<InventorySlot>>,
+        offhand: Option<InventorySlot>,
+        armor: Vec<Option<InventorySlot>>,
+        mutable: bool,
+    },
     /// Periodic liveness signal so the Node supervisor can distinguish a hung
     /// bot from a healthy but idle one.
     Heartbeat,
+}
+
+/// A single occupied inventory slot in an [`OutEvent::Inventory`] snapshot.
+#[derive(Debug, Clone, Serialize)]
+pub struct InventorySlot {
+    /// The item identifier, e.g. `"minecraft:diamond"`.
+    pub id: String,
+    /// The stack size.
+    pub count: u32,
 }

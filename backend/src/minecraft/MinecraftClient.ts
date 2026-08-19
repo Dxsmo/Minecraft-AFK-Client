@@ -9,6 +9,8 @@ import type {
   ClientStatusSnapshot,
   ConsoleEvent,
   ConsoleEventType,
+  InventoryItem,
+  InventorySnapshot,
   MsaSignInPrompt,
   ProfileEvent,
 } from "./types.js";
@@ -73,6 +75,8 @@ export class MinecraftClient extends EventEmitter {
   private food = 20;
   private balance: number | undefined;
   private balanceUpdatedAt: Date | undefined;
+  /** Most recent live inventory snapshot from the bot, if any. */
+  private inventory: InventorySnapshot | undefined;
 
   /** Drives the daily-command + balance-poll schedulers (see runScheduledTasks). */
   private schedulerTimer: NodeJS.Timeout | null = null;
@@ -186,6 +190,31 @@ export class MinecraftClient extends EventEmitter {
     }
     this.sendToBot({ type: "clean_spawner" });
     this.emitConsole("SYSTEM", "Clean spawner task dispatched");
+    return true;
+  }
+
+  /** Ask the bot to emit a fresh inventory snapshot (received asynchronously). */
+  requestInventory(): void {
+    if (this.status !== "ONLINE" || !this.subprocess) return;
+    this.sendToBot({ type: "request_inventory" });
+  }
+
+  /** The most recently received inventory snapshot, if any. */
+  getInventory(): InventorySnapshot | undefined {
+    return this.inventory;
+  }
+
+  /** Move an item between two of the bot's own player-menu slots. */
+  moveInventoryItem(from: number, to: number): boolean {
+    if (this.status !== "ONLINE" || !this.subprocess) return false;
+    this.sendToBot({ type: "move_item", from, to });
+    return true;
+  }
+
+  /** Drop the whole stack in one of the bot's own player-menu slots. */
+  dropInventoryItem(slot: number): boolean {
+    if (this.status !== "ONLINE" || !this.subprocess) return false;
+    this.sendToBot({ type: "drop_item", slot });
     return true;
   }
 
@@ -420,6 +449,25 @@ export class MinecraftClient extends EventEmitter {
         break;
       }
 
+      case "inventory": {
+        const e = event as {
+          main: (InventoryItem | null)[];
+          hotbar: (InventoryItem | null)[];
+          offhand: InventoryItem | null;
+          armor: (InventoryItem | null)[];
+          mutable: boolean;
+        };
+        this.inventory = {
+          main: e.main ?? [],
+          hotbar: e.hotbar ?? [],
+          offhand: e.offhand ?? null,
+          armor: e.armor ?? [],
+          mutable: Boolean(e.mutable),
+          updatedAt: new Date().toISOString(),
+        };
+        break;
+      }
+
       case "warning":
         this.emitConsole("WARNING", String((event as { message: string }).message));
         break;
@@ -517,6 +565,8 @@ export class MinecraftClient extends EventEmitter {
     if (this.status === newStatus) return;
     this.log.debug(`Status: ${this.status} -> ${newStatus}`);
     this.status = newStatus;
+    // A stale inventory snapshot is meaningless once the bot leaves the world.
+    if (newStatus !== "ONLINE") this.inventory = undefined;
     this.emitStatus();
   }
 

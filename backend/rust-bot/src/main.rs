@@ -385,6 +385,15 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
                         shared().lock().behavior.enqueue_balance(command)
                     }
                     Command::CleanSpawner => shared().lock().behavior.enqueue_clean_spawner(),
+                    Command::RequestInventory => {
+                        shared().lock().behavior.emit_inventory(&bot)
+                    }
+                    Command::MoveItem { from, to } => {
+                        shared().lock().behavior.enqueue_move_item(from, to)
+                    }
+                    Command::DropItem { slot } => {
+                        shared().lock().behavior.enqueue_drop_item(slot)
+                    }
                     Command::Disconnect => {
                         emit(&OutEvent::Disconnect {
                             reason: Some("Requested by controller".into()),

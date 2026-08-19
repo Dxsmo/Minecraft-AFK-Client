@@ -109,5 +109,15 @@ export const commandSchema = z.object({
   command: z.string().min(1).max(256),
 });
 
+// Player inventory menu has 46 slots (0..45); move/drop use raw slot indices.
+export const moveItemSchema = z.object({
+  from: z.number().int().min(0).max(45),
+  to: z.number().int().min(0).max(45),
+});
+
+export const dropItemSchema = z.object({
+  slot: z.number().int().min(0).max(45),
+});
+
 export type CreateAccountInput = z.infer<typeof createAccountSchema>;
 export type UpdateAccountInput = z.infer<typeof updateAccountSchema>;

@@ -14,12 +14,13 @@ use std::time::{Duration, Instant};
 use azalea::registry::builtin::BlockKind;
 use azalea::block::BlockStates;
 use azalea::{BlockPos, Client, WalkDirection};
-use azalea_inventory::operations::ThrowClick;
+use azalea_inventory::operations::{PickupClick, ThrowClick};
+use azalea_inventory::ItemStack;
 use rand::Rng;
 use regex::Regex;
 
 use crate::emit;
-use crate::protocol::{BehaviorConfig, Config, OutEvent};
+use crate::protocol::{BehaviorConfig, Config, InventorySlot, OutEvent};
 
 /// How long the bot keeps walking in one direction before stopping again.
 const WALK_DURATION: Duration = Duration::from_secs(2);
@@ -53,6 +54,10 @@ const SPAWNER_MENU_TIMEOUT: Duration = Duration::from_millis(2000);
 /// Stop scanning a spawner container after this many consecutive empty slots,
 /// assuming no further items remain.
 const SPAWNER_EMPTY_STREAK: usize = 3;
+/// After an inventory move/drop, wait this long before emitting a fresh
+/// snapshot so the server's click acknowledgement has been applied and the UI
+/// resyncs with the bot's real inventory state.
+const INVENTORY_RESYNC_DELAY: Duration = Duration::from_millis(300);
 
 /// Tracks the two-step auto-sell cycle: send the sell command, then move all
 /// inventory items into the container the server opens in response.
@@ -74,6 +79,10 @@ enum ForegroundTask {
     Balance(String),
     /// Right-click a nearby spawner and drop the items in its container.
     CleanSpawner,
+    /// Move an item between two of the bot's own inventory slots.
+    MoveItem { from: u16, to: u16 },
+    /// Drop the whole stack in one of the bot's own inventory slots.
+    DropItem { slot: u16 },
 }
 
 /// A foreground task that is mid-execution and spans multiple ticks.
@@ -101,6 +110,10 @@ pub struct BehaviorState {
     active_task: Option<ActiveTask>,
     /// The last `/tpaccept …` command we sent and when, for de-duplication.
     last_tpaccept: Option<(String, Instant)>,
+    /// When set, emit a fresh inventory snapshot at this time (after an
+    /// inventory move/drop, so the UI resyncs with the bot's real state once the
+    /// click packets have been processed).
+    inventory_resync_at: Option<Instant>,
     last_heartbeat_at: Instant,
 }
 
@@ -132,6 +145,7 @@ impl BehaviorState {
             task_queue: VecDeque::new(),
             active_task: None,
             last_tpaccept: None,
+            inventory_resync_at: None,
             last_heartbeat_at: now,
         }
     }
@@ -176,6 +190,24 @@ impl BehaviorState {
         if !already_pending {
             self.task_queue.push_back(ForegroundTask::CleanSpawner);
         }
+    }
+
+    /// Enqueue an inventory move as a foreground one-shot task so it never runs
+    /// concurrently with auto-sell or another Minecraft action.
+    pub fn enqueue_move_item(&mut self, from: u16, to: u16) {
+        self.task_queue
+            .push_back(ForegroundTask::MoveItem { from, to });
+    }
+
+    /// Enqueue an inventory drop as a foreground one-shot task.
+    pub fn enqueue_drop_item(&mut self, slot: u16) {
+        self.task_queue.push_back(ForegroundTask::DropItem { slot });
+    }
+
+    /// Emit a live snapshot of the bot's own inventory. Read-only, so it is not
+    /// routed through the task queue.
+    pub fn emit_inventory(&self, bot: &Client) {
+        emit_inventory_snapshot(bot);
     }
 
     /// True while a foreground one-shot task is queued or running; auto-sell must
@@ -256,6 +288,15 @@ impl BehaviorState {
         self.tick_foreground(bot, now);
         self.tick_autosell(bot, now);
 
+        // Deferred inventory resync after a move/drop, so the UI reflects the
+        // bot's real inventory once the server has acknowledged the click.
+        if let Some(at) = self.inventory_resync_at {
+            if now >= at {
+                self.inventory_resync_at = None;
+                emit_inventory_snapshot(bot);
+            }
+        }
+
         // Heartbeat: prove the tick loop is alive so the supervisor can recycle
         // a genuinely hung bot without killing a healthy but idle one.
         if now.duration_since(self.last_heartbeat_at) >= HEARTBEAT_INTERVAL {
@@ -329,6 +370,33 @@ impl BehaviorState {
                             message: "CleanSpawner: no spawner within reach".into(),
                         }),
                     },
+                    ForegroundTask::MoveItem { from, to } => {
+                        if inventory_is_mutable(bot) {
+                            // Pick the stack up from `from`, then put it down on
+                            // `to` — two left clicks, exactly like a player would.
+                            let inv = bot.get_inventory().expect("inventory present");
+                            inv.click(PickupClick::Left { slot: Some(from) });
+                            inv.click(PickupClick::Left { slot: Some(to) });
+                            self.inventory_resync_at = Some(now + INVENTORY_RESYNC_DELAY);
+                        } else {
+                            emit(&OutEvent::BehaviorLog {
+                                message: "Inventory move ignored: a container is open".into(),
+                            });
+                            emit_inventory_snapshot(bot);
+                        }
+                    }
+                    ForegroundTask::DropItem { slot } => {
+                        if inventory_is_mutable(bot) {
+                            let inv = bot.get_inventory().expect("inventory present");
+                            inv.click(ThrowClick::All { slot });
+                            self.inventory_resync_at = Some(now + INVENTORY_RESYNC_DELAY);
+                        } else {
+                            emit(&OutEvent::BehaviorLog {
+                                message: "Inventory drop ignored: a container is open".into(),
+                            });
+                            emit_inventory_snapshot(bot);
+                        }
+                    }
                 }
             }
         }
@@ -529,6 +597,70 @@ impl BehaviorState {
             message: format!("TPAuto: accepted teleport request ({command})"),
         });
     }
+}
+
+/// Whether the bot's own inventory is currently mutable, i.e. no external
+/// container GUI is open (a container occupies the same click channel, so we
+/// refuse inventory edits while one is open).
+fn inventory_is_mutable(bot: &Client) -> bool {
+    matches!(bot.get_inventory(), Ok(inv) if inv.id() == 0)
+}
+
+/// Convert an item stack into a snapshot slot, or `None` if the slot is empty.
+fn slot_to_snapshot(stack: &ItemStack) -> Option<InventorySlot> {
+    if stack.is_present() {
+        Some(InventorySlot {
+            id: stack.kind().to_str().to_string(),
+            count: stack.count().max(0) as u32,
+        })
+    } else {
+        None
+    }
+}
+
+/// Read the bot's own inventory and emit an [`OutEvent::Inventory`] snapshot.
+///
+/// The player inventory menu lays its 46 slots out as: craft result (0), craft
+/// grid (1-4), armor (5-8), inventory (9-44: 27 main + 9 hotbar) and off-hand
+/// (45). We surface the storage, hotbar, armor and off-hand slots. When a
+/// container GUI is open the player's own inventory is the *last* 36 menu slots;
+/// we still show those, but mark the snapshot immutable.
+fn emit_inventory_snapshot(bot: &Client) {
+    let Ok(inv) = bot.get_inventory() else {
+        return;
+    };
+    let Some(slots) = inv.slots() else {
+        return;
+    };
+    let n = slots.len();
+    if n < 36 {
+        return;
+    }
+    let mutable = inv.id() == 0;
+
+    // The player's 27 storage + 9 hotbar slots are always the last 36 of any menu.
+    let player = &slots[n - 36..n];
+    let main: Vec<Option<InventorySlot>> = player[0..27].iter().map(slot_to_snapshot).collect();
+    let hotbar: Vec<Option<InventorySlot>> = player[27..36].iter().map(slot_to_snapshot).collect();
+
+    // Armor (menu slots 5-8) and off-hand (slot 45) are only meaningful in the
+    // player's own inventory menu.
+    let (armor, offhand) = if mutable && n >= 46 {
+        (
+            slots[5..9].iter().map(slot_to_snapshot).collect(),
+            slot_to_snapshot(&slots[45]),
+        )
+    } else {
+        (vec![None; 4], None)
+    };
+
+    emit(&OutEvent::Inventory {
+        main,
+        hotbar,
+        offhand,
+        armor,
+        mutable,
+    });
 }
 
 /// Finds the nearest mob/trial spawner to the bot that is within interaction

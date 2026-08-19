@@ -2,16 +2,19 @@ import { useState, type ReactNode } from "react";
 import { api, ApiError } from "../lib/api";
 import type { ManagedUser, MinecraftAccount } from "../lib/types";
 import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
+import { InventoryPanel } from "./InventoryPanel";
 
 export function AccountSettingsPanel({
   account,
   users,
   isAdmin,
+  online,
   onUpdated,
 }: {
   account: MinecraftAccount;
   users: ManagedUser[];
   isAdmin: boolean;
+  online: boolean;
   onUpdated: () => void;
 }) {
   const [afkEnabled, setAfkEnabled] = useState(account.afkEnabled);
@@ -235,6 +238,11 @@ export function AccountSettingsPanel({
         <Field label="AFK interval">
           <NumberInput value={afkIntervalSeconds} onChange={setAfkIntervalSeconds} min={5} max={3600} suffix="s" />
         </Field>
+      </Section>
+
+      {/* Live inventory */}
+      <Section title="Live inventory">
+        <InventoryPanel accountId={account.id} online={online} />
       </Section>
 
       {/* Auto-command */}
