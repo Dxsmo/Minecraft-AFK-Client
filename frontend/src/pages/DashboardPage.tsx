@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { useDashboardSocket } from "../lib/sockets";
@@ -116,7 +116,7 @@ export function DashboardPage() {
         <div className="space-y-2.5">
           {merged.map((account) => {
             const status = account.live?.status ?? account.status;
-            const displayName = account.live?.name ?? account.name;
+            const label = account.displayName?.trim() || account.live?.name || account.name;
             const busy = busyIds.has(account.id);
             return (
               <div
@@ -126,14 +126,23 @@ export function DashboardPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2.5">
                     <span className="truncate font-medium" style={{ color: "var(--text)" }}>
-                      {displayName}
+                      {label}
                     </span>
                     <StatusBadge status={status} />
+                    {account.createdBy && (
+                      <span className="shrink-0 text-[11px]" style={{ color: "var(--text-subtle)" }}>
+                        Erstellt von{" "}
+                        <span className="font-medium" style={{ color: "var(--text-muted)" }}>
+                          {account.createdBy.username}
+                        </span>
+                      </span>
+                    )}
                   </div>
                   <p className="mt-0.5 truncate text-xs" style={{ color: "var(--text-subtle)" }}>
                     {account.serverHost}:{account.serverPort}
                     {account.minecraftVersion ? ` · ${account.minecraftVersion}` : " · auto"}
                   </p>
+                  <NotesField accountId={account.id} initial={account.notes ?? ""} />
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -163,7 +172,7 @@ export function DashboardPage() {
                   </Link>
                   <button
                     disabled={busy}
-                    onClick={() => void deleteAccount(account.id, displayName)}
+                    onClick={() => void deleteAccount(account.id, label)}
                     className="btn btn-danger btn-sm"
                     title="Delete account"
                   >
@@ -189,8 +198,52 @@ export function DashboardPage() {
   );
 }
 
-function StatCard({ label, value, accent }: { label: string; value: number; accent: string }) {
+/** Inline, debounced-autosave note line for an account (no save button). */
+function NotesField({ accountId, initial }: { accountId: string; initial: string }) {
+  const [value, setValue] = useState(initial);
+  const [saved, setSaved] = useState(false);
+  const savedRef = useRef(initial);
+
+  useEffect(() => {
+    setValue(initial);
+    savedRef.current = initial;
+  }, [initial, accountId]);
+
+  useEffect(() => {
+    if (value === savedRef.current) return;
+    const t = setTimeout(async () => {
+      try {
+        await api.patch(`/minecraft/accounts/${accountId}`, { notes: value });
+        savedRef.current = value;
+        setSaved(true);
+        setTimeout(() => setSaved(false), 1500);
+      } catch {
+        /* ignore transient autosave errors; will retry on next edit */
+      }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [value, accountId]);
+
   return (
+    <div className="mt-1.5 flex items-center gap-2">
+      <input
+        value={value}
+        maxLength={50}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="Add a note…"
+        className="w-full max-w-xs bg-transparent text-xs outline-none"
+        style={{ color: "var(--text-muted)" }}
+      />
+      {saved && (
+        <span className="shrink-0 text-[10px]" style={{ color: "var(--accent)" }}>
+          saved
+        </span>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ label, value, accent }: { label: string; value: number; accent: string }) {  return (
     <div className="card p-4">
       <div className="flex items-center gap-2">
         <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accent }} />

@@ -16,6 +16,8 @@ export function AccountSettingsPanel({
 }) {
   const [afkEnabled, setAfkEnabled] = useState(account.afkEnabled);
   const [movementEnabled, setMovementEnabled] = useState(account.movementEnabled);
+  const [crouchEnabled, setCrouchEnabled] = useState(account.crouchEnabled);
+  const [displayName, setDisplayName] = useState(account.displayName ?? "");
   const [serverHost, setServerHost] = useState(account.serverHost);
   const [serverPort, setServerPort] = useState(account.serverPort);
   const [afkIntervalSeconds, setAfkIntervalSeconds] = useState(account.afkIntervalSeconds);
@@ -46,8 +48,10 @@ export function AccountSettingsPanel({
     setMessage(null);
     try {
       await api.patch(`/minecraft/accounts/${account.id}`, {
+        displayName,
         afkEnabled,
         movementEnabled,
+        crouchEnabled,
         afkIntervalSeconds,
         autoReconnect,
         serverHost,
@@ -138,6 +142,23 @@ export function AccountSettingsPanel({
         )}
       </div>
 
+      {/* General */}
+      <Section title="General" defaultOpen>
+        <div>
+          <label className="label">Display name</label>
+          <input
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder={account.name}
+            maxLength={48}
+            className="input"
+          />
+          <p className="mt-1 text-xs" style={{ color: "var(--text-subtle)" }}>
+            Website label only — does not change the Minecraft login name. Leave empty to use “{account.name}”.
+          </p>
+        </div>
+      </Section>
+
       {/* Connection */}
       <Section title="Connection" defaultOpen>
         <Field label="Minecraft version" hint={versionMessage ?? undefined}>
@@ -186,6 +207,7 @@ export function AccountSettingsPanel({
       <Section title="Behavior">
         <Toggle label="AFK behavior" checked={afkEnabled} onChange={setAfkEnabled} />
         <Toggle label="Movement behavior" checked={movementEnabled} onChange={setMovementEnabled} />
+        <Toggle label="Crouch" description="Continuously sneak while connected." checked={crouchEnabled} onChange={setCrouchEnabled} />
         <Toggle label="Auto-reconnect" checked={autoReconnect} onChange={setAutoReconnect} />
         <Field label="AFK interval">
           <NumberInput value={afkIntervalSeconds} onChange={setAfkIntervalSeconds} min={5} max={3600} suffix="s" />

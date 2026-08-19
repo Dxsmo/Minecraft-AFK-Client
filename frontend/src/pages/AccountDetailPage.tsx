@@ -70,7 +70,7 @@ export function AccountDetailPage() {
   }
 
   const liveStatus = status?.status ?? account.status;
-  const displayName = status?.name ?? account.name;
+  const displayName = account.displayName?.trim() || status?.name || account.name;
   const msaSignIn = status?.msaSignIn;
 
   return (

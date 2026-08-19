@@ -75,6 +75,11 @@ model Session {
 model MinecraftAccount {
   id                 String   @id @default(cuid())
   name               String   @unique
+  // Optional website-only display label. Unlike `name` (which doubles as the
+  // offline join username and therefore must be a valid Minecraft name), this
+  // is purely cosmetic and may contain spaces etc. Empty means "fall back to
+  // name". Editable at any time without touching the join identity.
+  displayName        String   @default("")
   // Empty string means "auto-detect" — MinecraftClient lets mineflayer ping
   // the server and negotiate whichever protocol version it actually
   // reports, rather than forcing a possibly-mismatched hardcoded version.
@@ -92,8 +97,12 @@ model MinecraftAccount {
   credentialsPassword String?
   afkEnabled         Boolean  @default(true)
   movementEnabled    Boolean  @default(false)
+  // When enabled, the bot continuously sneaks/crouches (re-applied every tick).
+  crouchEnabled      Boolean  @default(false)
   afkIntervalSeconds Int      @default(30)
   autoReconnect      Boolean  @default(true)
+  // Free-form short note shown in the dashboard/settings (e.g. "farming cobble").
+  notes              String   @default("")
   // Automatically types a configured chat message/command at a fixed interval,
   // independent of the AFK/movement behaviors.
   autoCommandEnabled         Boolean @default(false)

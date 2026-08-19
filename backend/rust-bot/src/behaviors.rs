@@ -60,6 +60,7 @@ impl BehaviorState {
             config: BehaviorConfig {
                 afk_enabled: config.afk_enabled,
                 movement_enabled: config.movement_enabled,
+                crouch_enabled: config.crouch_enabled,
                 afk_interval_seconds: config.afk_interval_seconds,
                 auto_command_enabled: config.auto_command_enabled,
                 auto_command_text: config.auto_command_text.clone(),
@@ -97,6 +98,13 @@ impl BehaviorState {
                 bot.walk(WalkDirection::None);
                 self.stop_walking_at = None;
             }
+        }
+
+        // Crouch: continuously hold sneak while enabled. Only send a state
+        // change when the desired value differs from the bot's current one, so
+        // we don't spam the server with a packet every tick.
+        if self.config.crouch_enabled != bot.crouching() {
+            let _ = bot.set_crouching(self.config.crouch_enabled);
         }
 
         // AFK: look somewhere random and jump. Keeps the player active without

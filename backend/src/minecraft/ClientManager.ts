@@ -21,6 +21,7 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     credentialsPassword: account.credentialsPassword,
     afkEnabled: account.afkEnabled,
     movementEnabled: account.movementEnabled,
+    crouchEnabled: account.crouchEnabled,
     afkIntervalSeconds: account.afkIntervalSeconds,
     autoReconnect: account.autoReconnect,
     autoCommandEnabled: account.autoCommandEnabled,

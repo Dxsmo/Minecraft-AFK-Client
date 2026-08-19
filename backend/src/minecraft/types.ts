@@ -45,6 +45,7 @@ export interface ClientRuntimeConfig {
   credentialsPassword: string | null;
   afkEnabled: boolean;
   movementEnabled: boolean;
+  crouchEnabled: boolean;
   afkIntervalSeconds: number;
   autoReconnect: boolean;
   autoCommandEnabled: boolean;

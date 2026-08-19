@@ -12,6 +12,9 @@ export const createAccountSchema = z
     // The display name shown on the website. Provided by the user for every
     // account type (for offline accounts it is also the in-game join username).
     name: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_-]+$/),
+    // Optional cosmetic label shown on the website (may contain spaces). Empty
+    // falls back to `name`. Never sent to the Minecraft server.
+    displayName: z.string().max(48).default(""),
     // Empty string means "auto-detect" (the bot negotiates the protocol version
     // with the server) — see MinecraftClient.ts.
     minecraftVersion: z.string().max(16).default(""),
@@ -27,8 +30,10 @@ export const createAccountSchema = z
     credentialsPassword: z.string().max(256).nullable().optional(),
     afkEnabled: z.boolean().default(true),
     movementEnabled: z.boolean().default(false),
+    crouchEnabled: z.boolean().default(false),
     afkIntervalSeconds: z.coerce.number().int().min(5).max(3600).default(30),
     autoReconnect: z.boolean().default(true),
+    notes: z.string().max(50).default(""),
     autoCommandEnabled: z.boolean().default(false),
     autoCommandText: z.string().max(256).default(""),
     autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).default(5),
@@ -56,13 +61,16 @@ export const createAccountSchema = z
  */
 export const updateAccountSchema = z.object({
   name: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+  displayName: z.string().max(48).optional(),
   minecraftVersion: z.string().max(16).optional(),
   serverHost: z.string().min(1).max(255).optional(),
   serverPort: z.coerce.number().int().min(1).max(65535).optional(),
   afkEnabled: z.boolean().optional(),
   movementEnabled: z.boolean().optional(),
+  crouchEnabled: z.boolean().optional(),
   afkIntervalSeconds: z.coerce.number().int().min(5).max(3600).optional(),
   autoReconnect: z.boolean().optional(),
+  notes: z.string().max(50).optional(),
   autoCommandEnabled: z.boolean().optional(),
   autoCommandText: z.string().max(256).optional(),
   autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).optional(),

@@ -24,8 +24,10 @@ pub struct Config {
 
     pub afk_enabled: bool,
     pub movement_enabled: bool,
+    /// When true, continuously sneak/crouch (re-applied every tick).
+    #[serde(default)]
+    pub crouch_enabled: bool,
     pub afk_interval_seconds: u64,
-
     pub auto_command_enabled: bool,
     pub auto_command_text: String,
     pub auto_command_interval_minutes: u64,
@@ -63,6 +65,8 @@ fn default_autosell_command() -> String {
 pub struct BehaviorConfig {
     pub afk_enabled: bool,
     pub movement_enabled: bool,
+    #[serde(default)]
+    pub crouch_enabled: bool,
     pub afk_interval_seconds: u64,
     pub auto_command_enabled: bool,
     pub auto_command_text: String,

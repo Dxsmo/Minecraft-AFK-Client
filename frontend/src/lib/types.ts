@@ -57,14 +57,17 @@ export interface LiveStatus {
 export interface MinecraftAccount {
   id: string;
   name: string;
+  displayName: string;
   minecraftVersion: string;
   serverHost: string;
   serverPort: number;
   authType: AuthType;
   afkEnabled: boolean;
   movementEnabled: boolean;
+  crouchEnabled: boolean;
   afkIntervalSeconds: number;
   autoReconnect: boolean;
+  notes: string;
   autoCommandEnabled: boolean;
   autoCommandText: string;
   autoCommandIntervalMinutes: number;
