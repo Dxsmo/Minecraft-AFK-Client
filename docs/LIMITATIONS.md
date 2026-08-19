@@ -81,3 +81,17 @@ renderer**: run a separate, GPU-capable headless renderer (e.g. a containerised
 official client or a project like `chunky`) fed by the bot's position/world,
 and upload its output. That is a standalone component, not something Azalea can
 do in-process.
+
+## 3. Live inventory item textures (partial)
+
+**Status: functional, but without item icons.**
+
+The live inventory tab (feature #10) reflects the bot's **real** inventory —
+slot contents, stack sizes, hotbar, armor and off-hand — and drag-and-drop moves
+and drops are executed on the server through the bot. What it cannot show are the
+official **item textures**: this project bundles no Minecraft texture assets
+(they are Mojang-copyrighted and are not redistributed here). Each slot therefore
+renders the item id and stack count on a deterministic per-item colour instead of
+an icon. Dropping in a texture atlas later (or wiring up a resource-pack loader)
+would be a purely cosmetic, additive change to `InventoryPanel.tsx`.
+
