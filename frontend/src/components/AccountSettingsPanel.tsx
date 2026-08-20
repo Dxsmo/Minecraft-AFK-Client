@@ -6,12 +6,14 @@ import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersion
 export function AccountSettingsPanel({
   account,
   users,
-  isAdmin,
+  canManageAccess,
+  currentUserId,
   onUpdated,
 }: {
   account: MinecraftAccount;
   users: ManagedUser[];
-  isAdmin: boolean;
+  canManageAccess: boolean;
+  currentUserId?: string;
   onUpdated: () => void;
 }) {
   const [afkEnabled, setAfkEnabled] = useState(account.afkEnabled);
@@ -75,7 +77,7 @@ export function AccountSettingsPanel({
         autoSellIntervalSeconds,
         autoSellCommand,
       });
-      if (isAdmin) {
+      if (canManageAccess) {
         await api.put(`/minecraft/accounts/${account.id}/assignments`, { userIds: Array.from(assigned) });
       }
       setMessage("Settings saved");
@@ -149,7 +151,7 @@ export function AccountSettingsPanel({
     { id: "balance", label: "Balance", icon: "coin", on: balanceEnabled },
     { id: "autotpa", label: "Auto-TPA", icon: "portal", on: tpAutoEnabled },
     { id: "autosell", label: "Auto-sell", icon: "tag", on: autoSellEnabled },
-    ...(isAdmin ? [{ id: "users", label: "Assigned users", icon: "users" as CatIcon, meta: `${assigned.size} assigned` }] : []),
+    ...(canManageAccess ? [{ id: "users", label: "Access", icon: "users" as CatIcon, meta: `${assigned.size} assigned` }] : []),
   ];
   const active = categories.find((c) => c.id === activeCat) ?? categories[0];
 
@@ -479,29 +481,51 @@ export function AccountSettingsPanel({
               </>
             )}
 
-            {activeCat === "users" && isAdmin && (
+            {activeCat === "users" && canManageAccess && (
               <>
+                <p className="mb-2 text-xs" style={{ color: "var(--text-subtle)" }}>
+                  Choose which users may view and control this account. Admins always
+                  have access.
+                </p>
                 {users.length === 0 && (
                   <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
                     No users created yet.
                   </p>
                 )}
                 <div className="max-h-64 space-y-1.5 overflow-y-auto">
-                  {users.map((u) => (
-                    <label
-                      key={u.id}
-                      className="flex cursor-pointer items-center gap-2"
-                      style={{ color: "var(--text-muted)" }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={assigned.has(u.id)}
-                        onChange={() => toggleUser(u.id)}
-                        className="accent-emerald-500"
-                      />
-                      {u.username}
-                    </label>
-                  ))}
+                  {users.map((u) => {
+                    const alwaysAccess = u.role === "ADMIN";
+                    const isSelf = u.id === currentUserId;
+                    // Admins always have access; the managing operator can't drop
+                    // their own access — both are shown locked & checked.
+                    const locked = alwaysAccess || isSelf;
+                    return (
+                      <label
+                        key={u.id}
+                        className="flex items-center gap-2"
+                        style={{ color: "var(--text-muted)", cursor: locked ? "default" : "pointer" }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={locked || assigned.has(u.id)}
+                          disabled={locked}
+                          onChange={() => toggleUser(u.id)}
+                          className="accent-emerald-500"
+                        />
+                        <span>{u.username}</span>
+                        {alwaysAccess && (
+                          <span className="text-[10px]" style={{ color: "var(--text-subtle)" }}>
+                            · admin · always access
+                          </span>
+                        )}
+                        {isSelf && !alwaysAccess && (
+                          <span className="text-[10px]" style={{ color: "var(--text-subtle)" }}>
+                            · you
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })}
                 </div>
               </>
             )}

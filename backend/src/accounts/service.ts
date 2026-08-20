@@ -106,6 +106,29 @@ export async function canAccessAccount(session: SessionContext, id: string): Pro
   return !!assignment;
 }
 
+/**
+ * Returns true if the session's user may grant/revoke *other* users' access to
+ * this account. Allowed for admins (who can manage every account) and for the
+ * account's own creator/operator. Admins always retain access regardless of the
+ * assignment rows, so ticking an admin in the picker is purely cosmetic.
+ */
+export async function canManageAssignments(session: SessionContext, id: string): Promise<boolean> {
+  if (session.user.role === "ADMIN") return true;
+  const account = await prisma.minecraftAccount.findUnique({
+    where: { id },
+    select: { createdById: true },
+  });
+  return !!account && account.createdById === session.user.id;
+}
+
+/** Minimal user list (id, username, role) for the account access picker. */
+export async function listAssignableUsers() {
+  return prisma.user.findMany({
+    select: { id: true, username: true, role: true },
+    orderBy: { username: "asc" },
+  });
+}
+
 export async function createAccount(input: CreateAccountInput, creator: SessionContext) {
   const name = input.name.trim();
   const account = await prisma.minecraftAccount.create({

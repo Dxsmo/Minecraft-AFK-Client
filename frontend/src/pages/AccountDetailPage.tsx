@@ -21,6 +21,8 @@ export function AccountDetailPage() {
   const { logs, status, sendCommand } = useAccountConsole(id);
   const inputRef = useRef<HTMLInputElement>(null);
   const isAdmin = user?.role === "ADMIN";
+  const isCreator = !!account && !!user && account.createdBy?.id === user.id;
+  const canManageAccess = isAdmin || isCreator;
 
   async function load() {
     if (!id) return;
@@ -33,11 +35,24 @@ export function AccountDetailPage() {
 
   useEffect(() => {
     void load();
-    if (isAdmin) {
-      void api.get<ManagedUser[]>("/users").then(setUsers).catch(() => undefined);
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  // Load the selectable-user list once we know whether the viewer may manage
+  // access: admins use the full users API, an account's creator uses the
+  // scoped assignable-users endpoint.
+  useEffect(() => {
+    if (!account || !user) return;
+    if (user.role === "ADMIN") {
+      void api.get<ManagedUser[]>("/users").then(setUsers).catch(() => undefined);
+    } else if (account.createdBy?.id === user.id) {
+      void api
+        .get<ManagedUser[]>(`/minecraft/accounts/${account.id}/assignable-users`)
+        .then(setUsers)
+        .catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [account?.id, user?.id]);
 
   async function runAction(action: "start" | "stop" | "restart") {
     if (!id) return;
@@ -258,7 +273,13 @@ export function AccountDetailPage() {
 
       {tab === "settings" && (
         <div key="settings" className="tab-panel">
-          <AccountSettingsPanel account={account} users={users} isAdmin={isAdmin} onUpdated={load} />
+          <AccountSettingsPanel
+            account={account}
+            users={users}
+            canManageAccess={canManageAccess}
+            currentUserId={user?.id}
+            onUpdated={load}
+          />
         </div>
       )}
     </div>

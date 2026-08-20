@@ -161,23 +161,46 @@ export default async function accountsRoutes(app: FastifyInstance) {
 
   app.put(
     "/api/minecraft/accounts/:id/assignments",
-    { preHandler: [app.requireAdmin, app.requireCsrf] },
+    { preHandler: app.requireCsrf },
     async (req, reply) => {
       const { id } = req.params as { id: string };
+      // Admins and the account's own operator/creator may manage access.
+      if (!(await accountsService.canManageAssignments(req.session!, id))) {
+        reply.code(404).send({ error: "Account not found" });
+        return;
+      }
       const body = parseOrReject(assignUsersSchema, req.body, reply);
       if (!body) return;
 
-      await accountsService.setAssignments(id, body.userIds);
+      // A non-admin operator must never accidentally remove their own access to
+      // an account they manage, so their own id is always kept in the set.
+      const userIds =
+        req.session!.user.role === "ADMIN"
+          ? body.userIds
+          : Array.from(new Set([...body.userIds, req.session!.user.id]));
+
+      await accountsService.setAssignments(id, userIds);
       await recordAuditLog({
         userId: req.session!.user.id,
         action: "ACCOUNT_ASSIGN",
         targetType: "MinecraftAccount",
         targetId: id,
-        details: { userIds: body.userIds },
+        details: { userIds },
       });
       reply.send({ ok: true });
     },
   );
+
+  // Users selectable in the access picker. Restricted to those allowed to manage
+  // the account's access (admin or the account's creator/operator).
+  app.get("/api/minecraft/accounts/:id/assignable-users", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await accountsService.canManageAssignments(req.session!, id))) {
+      reply.code(404).send({ error: "Account not found" });
+      return;
+    }
+    reply.send(await accountsService.listAssignableUsers());
+  });
 
   // ---- Lifecycle control (assigned users or admin) ----
 

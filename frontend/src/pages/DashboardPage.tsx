@@ -1,17 +1,43 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { useDashboardSocket } from "../lib/sockets";
 import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { CreateAccountDialog } from "../components/CreateAccountDialog";
 
 export function DashboardPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
   const [accounts, setAccounts] = useState<MinecraftAccount[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  // Admin-only: locally censor (blur) individual account cards, e.g. while
+  // screen-sharing. Persisted per admin in localStorage so it survives reloads.
+  const blurKey = user ? `afk.blurredAccounts.${user.id}` : null;
+  const [blurred, setBlurred] = useState<Set<string>>(new Set());
   const liveStatuses = useDashboardSocket();
+
+  useEffect(() => {
+    if (!blurKey) return;
+    try {
+      const raw = localStorage.getItem(blurKey);
+      setBlurred(new Set(raw ? (JSON.parse(raw) as string[]) : []));
+    } catch {
+      setBlurred(new Set());
+    }
+  }, [blurKey]);
+
+  function toggleBlur(id: string) {
+    setBlurred((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      if (blurKey) localStorage.setItem(blurKey, JSON.stringify(Array.from(next)));
+      return next;
+    });
+  }
 
   async function load() {
     try {
@@ -118,12 +144,22 @@ export function DashboardPage() {
             const status = account.live?.status ?? account.status;
             const label = account.displayName?.trim() || account.live?.name || account.name;
             const busy = busyIds.has(account.id);
+            const isBlurred = blurred.has(account.id);
             return (
               <div
                 key={account.id}
                 className="card card-hover flex flex-wrap items-center gap-x-4 gap-y-3 p-4"
               >
-                <div className="min-w-0 flex-1">
+                <div
+                  className="min-w-0 flex-1"
+                  style={{
+                    filter: isBlurred ? "blur(6px)" : undefined,
+                    userSelect: isBlurred ? "none" : undefined,
+                    pointerEvents: isBlurred ? "none" : undefined,
+                    transition: "filter 150ms ease",
+                  }}
+                  aria-hidden={isBlurred}
+                >
                   <div className="flex items-center gap-2.5">
                     <span className="truncate font-medium" style={{ color: "var(--text)" }}>
                       {label}
@@ -147,13 +183,23 @@ export function DashboardPage() {
                     )}
                   </div>
                   <p className="mt-0.5 truncate text-xs" style={{ color: "var(--text-subtle)" }}>
-                    {account.serverHost}:{account.serverPort}
+                    {account.serverHost}
                     {account.minecraftVersion ? ` · ${account.minecraftVersion}` : " · auto"}
                   </p>
                   <NotesField accountId={account.id} initial={account.notes ?? ""} />
                 </div>
 
                 <div className="flex flex-wrap items-center gap-1.5">
+                  {isAdmin && (
+                    <button
+                      onClick={() => toggleBlur(account.id)}
+                      className="btn btn-ghost btn-sm"
+                      title={isBlurred ? "Reveal account" : "Blur / censor account"}
+                      aria-label={isBlurred ? "Reveal account" : "Blur account"}
+                    >
+                      <EyeIcon off={isBlurred} />
+                    </button>
+                  )}
                   <button
                     disabled={busy || status === "ONLINE" || status === "CONNECTING"}
                     onClick={() => void runAction(account.id, "start")}
@@ -248,6 +294,25 @@ function NotesField({ accountId, initial }: { accountId: string; initial: string
         </span>
       )}
     </div>
+  );
+}
+
+/** Eye / eye-off icon used for the admin blur toggle. */
+function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {off ? (
+        <>
+          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+          <line x1="1" y1="1" x2="23" y2="23" />
+        </>
+      ) : (
+        <>
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+          <circle cx="12" cy="12" r="3" />
+        </>
+      )}
+    </svg>
   );
 }
 
