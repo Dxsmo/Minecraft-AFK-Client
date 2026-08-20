@@ -13,6 +13,7 @@ import accountsRoutes from "./accounts/routes.js";
 import systemRoutes from "./api/systemRoutes.js";
 import auditLogRoutes from "./api/auditLogRoutes.js";
 import registerWebsocketRoutes from "./websocket/routes.js";
+import { getItemTexture } from "./assets/itemTextures.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -52,6 +53,19 @@ export async function buildApp() {
   await app.register(registerWebsocketRoutes);
 
   app.get("/api/health", async () => ({ status: "ok" }));
+
+  // Public item/block texture endpoint (no auth — textures aren't sensitive).
+  // Served from the minecraft-assets package so the inventory UI can show real
+  // Minecraft icons instead of raw ids. 404 lets the frontend fall back.
+  app.get("/api/assets/item/:name", async (req, reply) => {
+    const raw = String((req.params as { name: string }).name).replace(/\.png$/i, "");
+    const buf = getItemTexture(raw);
+    if (!buf) return reply.code(404).send();
+    return reply
+      .header("Content-Type", "image/png")
+      .header("Cache-Control", "public, max-age=604800, immutable")
+      .send(buf);
+  });
 
   app.setErrorHandler((err: import("fastify").FastifyError, req, reply) => {
     req.log.error({ err }, "Unhandled request error");

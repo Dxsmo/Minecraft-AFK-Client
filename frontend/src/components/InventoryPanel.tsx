@@ -28,15 +28,73 @@ const OFFHAND_SLOT = 45;
 const POLL_MS = 2500;
 
 function shortName(id: string): string {
-  return id.replace(/^minecraft:/, "").replace(/_/g, " ");
+  return id.replace(/^(minecraft|bedrock):/, "").replace(/_/g, " ");
+}
+
+/** URL of the real Minecraft texture for an item id (served by the backend). */
+function textureUrl(id: string): string {
+  const name = id.replace(/^(minecraft|bedrock):/, "");
+  return `/api/assets/item/${encodeURIComponent(name)}.png`;
 }
 
 function itemColor(id: string): string {
-  // Deterministic pastel per item id, so stacks are visually distinguishable
-  // without a texture pack (none is bundled in this project).
+  // Deterministic pastel per item id, used only as a fallback when no texture
+  // is available for the id.
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 360;
   return `hsl(${h}, 45%, 32%)`;
+}
+
+/** Pad/trim an array to a fixed length so the slot grid never misaligns. */
+function fixed<T>(arr: (T | null)[] | undefined, len: number): (T | null)[] {
+  const out = (arr ?? []).slice(0, len);
+  while (out.length < len) out.push(null);
+  return out;
+}
+
+/**
+ * Renders the real Minecraft texture for an item, falling back to a coloured
+ * tile with the item name if the texture 404s (e.g. an unknown Bedrock id).
+ */
+function ItemIcon({ id }: { id: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          backgroundColor: itemColor(id),
+        }}
+      >
+        <span
+          style={{
+            fontSize: 8,
+            lineHeight: 1.05,
+            textAlign: "center",
+            padding: "0 2px",
+            color: "rgba(255,255,255,0.9)",
+            textTransform: "capitalize",
+            wordBreak: "break-word",
+          }}
+        >
+          {shortName(id).slice(0, 18)}
+        </span>
+      </div>
+    );
+  }
+  return (
+    <img
+      src={textureUrl(id)}
+      alt={shortName(id)}
+      draggable={false}
+      onError={() => setFailed(true)}
+      style={{ width: 32, height: 32, imageRendering: "pixelated" }}
+    />
+  );
 }
 
 /**
@@ -151,7 +209,7 @@ export function InventoryPanel({ accountId, online }: { accountId: string; onlin
         height: 50,
         borderRadius: 4,
         border: "2px solid #1f2430",
-        backgroundColor: item ? itemColor(item.id) : "#0f131b",
+        backgroundColor: item ? "#20252f" : "#0f131b",
         boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.4)",
         cursor: item && mutable ? "grab" : "default",
         display: "flex",
@@ -162,19 +220,7 @@ export function InventoryPanel({ accountId, online }: { accountId: string; onlin
     >
       {item && (
         <>
-          <span
-            style={{
-              fontSize: 8,
-              lineHeight: 1.05,
-              textAlign: "center",
-              padding: "0 2px",
-              color: "rgba(255,255,255,0.9)",
-              textTransform: "capitalize",
-              wordBreak: "break-word",
-            }}
-          >
-            {shortName(item.id).slice(0, 18)}
-          </span>
+          <ItemIcon id={item.id} />
           {item.count > 1 && (
             <span
               style={{
@@ -210,7 +256,7 @@ export function InventoryPanel({ accountId, online }: { accountId: string; onlin
         {/* Armor + offhand row */}
         <div className="mb-3 flex items-center gap-3">
           <div className="flex gap-1">
-            {inv.armor.map((it, i) => renderSlot(it, armorSlotIndex(i), `a${i}`))}
+            {fixed(inv.armor, 4).map((it, i) => renderSlot(it, armorSlotIndex(i), `a${i}`))}
           </div>
           <div style={{ width: 1, height: 40, backgroundColor: "#232a38" }} />
           {renderSlot(inv.offhand, OFFHAND_SLOT, "off")}
@@ -221,12 +267,12 @@ export function InventoryPanel({ accountId, online }: { accountId: string; onlin
 
         {/* Main storage: 3 rows of 9 */}
         <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(9, 50px)" }}>
-          {inv.main.map((it, i) => renderSlot(it, mainSlotIndex(i), `m${i}`))}
+          {fixed(inv.main, 27).map((it, i) => renderSlot(it, mainSlotIndex(i), `m${i}`))}
         </div>
 
         {/* Hotbar */}
         <div className="mt-2 grid gap-1" style={{ gridTemplateColumns: "repeat(9, 50px)" }}>
-          {inv.hotbar.map((it, i) => renderSlot(it, hotbarSlotIndex(i), `h${i}`))}
+          {fixed(inv.hotbar, 9).map((it, i) => renderSlot(it, hotbarSlotIndex(i), `h${i}`))}
         </div>
       </div>
 

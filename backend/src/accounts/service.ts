@@ -131,6 +131,21 @@ export async function updateAccount(id: string, input: UpdateAccountInput) {
   return present(account);
 }
 
+/**
+ * One-time-per-boot cleanup: remove any Minecraft passwords still stored on
+ * legacy accounts. All accounts are kept intact — only the `credentialsPassword`
+ * column is cleared, since sign-in now happens exclusively through the
+ * interactive Microsoft device-code flow and the on-disk refresh token cache.
+ * Idempotent: does nothing once no passwords remain.
+ */
+export async function purgeStoredPasswords(): Promise<number> {
+  const res = await prisma.minecraftAccount.updateMany({
+    where: { credentialsPassword: { not: null } },
+    data: { credentialsPassword: null },
+  });
+  return res.count;
+}
+
 export async function deleteAccount(id: string) {
   await prisma.minecraftAccount.delete({ where: { id } });
 }

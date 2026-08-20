@@ -148,9 +148,19 @@ async function main(): Promise<void> {
   // --- World / telemetry packets (all defensive) ---
   c.on("start_game", (packet: unknown) => {
     try {
-      const p = packet as { runtime_entity_id?: unknown };
+      const p = packet as { runtime_entity_id?: unknown; itemstates?: unknown };
       const id = toBigIntOrNull(p.runtime_entity_id);
       sender.setRuntimeEntityId(id);
+      captureItemPalette(p.itemstates);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  // 1.21.60+ delivers the item palette in a separate item_registry packet.
+  c.on("item_registry", (packet: unknown) => {
+    try {
+      captureItemPalette((packet as { itemstates?: unknown }).itemstates);
     } catch {
       /* ignore */
     }
@@ -282,8 +292,28 @@ function itemToSlot(raw: unknown): InventorySlot | null {
   const count = typeof r?.count === "number" ? r.count : 0;
   const networkId = typeof r?.network_id === "number" ? r.network_id : 0;
   if (!networkId || count <= 0) return null;
-  const id = r.name ? (r.name.includes(":") ? r.name : `minecraft:${r.name}`) : `bedrock:${networkId}`;
+  // Prefer an explicit name; otherwise resolve the network id via the item
+  // palette captured from start_game / item_registry, falling back to a raw id.
+  const resolved = r.name || itemPalette.get(networkId);
+  const id = resolved
+    ? resolved.includes(":")
+      ? resolved
+      : `minecraft:${resolved}`
+    : `bedrock:${networkId}`;
   return { id, count };
+}
+
+/** network/runtime id -> item name, captured from the server's item palette. */
+const itemPalette = new Map<number, string>();
+
+function captureItemPalette(states: unknown): void {
+  if (!Array.isArray(states)) return;
+  for (const s of states) {
+    const st = s as { name?: string; runtime_id?: number };
+    if (typeof st?.runtime_id === "number" && typeof st?.name === "string") {
+      itemPalette.set(st.runtime_id, st.name);
+    }
+  }
 }
 
 function pad<T>(arr: (T | null)[], len: number): (T | null)[] {

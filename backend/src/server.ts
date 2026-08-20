@@ -5,11 +5,16 @@ import { bootstrapAdmin } from "./auth/bootstrapAdmin.js";
 import { pruneExpiredSessions, clearAllSessions } from "./auth/session.js";
 import { clientManager } from "./minecraft/ClientManager.js";
 import { disconnectDatabase } from "./database/prisma.js";
+import { purgeStoredPasswords } from "./accounts/service.js";
 
 const SESSION_PRUNE_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
 async function main() {
   await bootstrapAdmin();
+  // Strip any Minecraft passwords still stored on legacy accounts. Accounts are
+  // preserved; only the stored password is removed (device-code sign-in only).
+  const purged = await purgeStoredPasswords();
+  if (purged > 0) logger.info({ purged }, "Cleared stored Minecraft passwords from existing accounts");
   // Every backend restart requires everyone to log in again (explicit
   // product requirement), rather than resuming previously-valid sessions.
   await clearAllSessions();
