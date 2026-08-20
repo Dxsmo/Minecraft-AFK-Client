@@ -69,6 +69,7 @@ export class MinecraftClient extends EventEmitter {
   private connectedSince: Date | null = null;
   private lastError: string | undefined;
   private msaSignIn: MsaSignInPrompt | undefined;
+  private authenticated = false;
   private readonly log: Logger;
 
   private health = 20;
@@ -135,6 +136,7 @@ export class MinecraftClient extends EventEmitter {
       lastError: this.lastError,
       reconnectAttempt: this.reconnectAttempt,
       msaSignIn: this.msaSignIn,
+      authenticated: this.authenticated,
       balance: this.balance,
       balanceUpdatedAt: this.balanceUpdatedAt?.toISOString(),
     };
@@ -394,6 +396,7 @@ export class MinecraftClient extends EventEmitter {
       case "profile": {
         const { username, uuid } = event as { username: string; uuid: string };
         this.log.info({ username, uuid }, "Resolved Minecraft profile");
+        this.authenticated = true;
         this.emitConsole("SYSTEM", `Authenticated as ${username}`);
         this.emit("profile", { minecraftAccountId: this.config.id, username, uuid } as ProfileEvent);
         break;
@@ -538,6 +541,7 @@ export class MinecraftClient extends EventEmitter {
     this.subprocess = null;
     this.connectedSince = null;
     this.msaSignIn = undefined;
+    this.authenticated = false;
     if (!child) return;
 
     this.log.debug(reason);

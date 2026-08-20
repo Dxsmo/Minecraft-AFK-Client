@@ -1,16 +1,17 @@
 import { z } from "zod";
 
 /**
- * Fields accepted when CREATING an account. `authType`, `credentialsSecret`
- * (Microsoft email) and `credentialsPassword` are only ever settable here —
- * see `updateAccountSchema` below, which deliberately omits them so they can
- * never be changed afterwards via the API. To use different credentials,
- * the account must be deleted and recreated.
+ * Fields accepted when CREATING an account. `credentialsSecret` (the Microsoft
+ * account email) is only ever settable here — see `updateAccountSchema` below,
+ * which deliberately omits it so it can never be changed afterwards via the API.
+ *
+ * All accounts are Microsoft accounts: sign-in happens once via the interactive
+ * device-code link at creation time, after which only the refresh token cached
+ * on disk is used. No Minecraft password is ever collected or stored.
  */
 export const createAccountSchema = z
   .object({
-    // The display name shown on the website. Provided by the user for every
-    // account type (for offline accounts it is also the in-game join username).
+    // The display name shown on the website.
     name: z.string().min(2).max(32).regex(/^[a-zA-Z0-9_-]+$/),
     // Optional cosmetic label shown on the website (may contain spaces). Empty
     // falls back to `name`. Never sent to the Minecraft server.
@@ -25,14 +26,10 @@ export const createAccountSchema = z
     // selection). Write-once at creation, like authType — the update schema
     // omits it so an account can't silently switch protocols after creation.
     edition: z.enum(["JAVA", "BEDROCK"]).default("JAVA"),
-    authType: z.enum(["OFFLINE", "MICROSOFT"]).default("OFFLINE"),
     // Microsoft account email. Used as the identity for the device-code sign-in
-    // and its token cache. Never exposed back to the frontend.
-    credentialsSecret: z.string().max(320).nullable().optional(),
-    // Microsoft account password. When provided, the bot signs in automatically
-    // with email + password (falling back to the device-code link if that
-    // fails, e.g. for 2FA-protected accounts). Write-once; never exposed back.
-    credentialsPassword: z.string().max(256).nullable().optional(),
+    // and its on-disk token cache. Required for every account. Never exposed
+    // back to the frontend.
+    credentialsSecret: z.string().trim().email().max(320),
     afkEnabled: z.boolean().default(true),
     movementEnabled: z.boolean().default(false),
     crouchEnabled: z.boolean().default(false),
@@ -59,10 +56,6 @@ export const createAccountSchema = z
       .transform((times) => JSON.stringify(Array.from(new Set(times)).sort())),
     balanceEnabled: z.boolean().default(false),
     balanceCommand: z.string().max(64).default("/balance"),
-  })
-  .refine((data) => data.authType !== "MICROSOFT" || !!data.credentialsSecret, {
-    message: "Microsoft accounts require an account email",
-    path: ["credentialsSecret"],
   });
 
 /**

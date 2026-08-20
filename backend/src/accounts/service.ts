@@ -109,7 +109,10 @@ export async function canAccessAccount(session: SessionContext, id: string): Pro
 export async function createAccount(input: CreateAccountInput, creator: SessionContext) {
   const name = input.name.trim();
   const account = await prisma.minecraftAccount.create({
-    data: { ...input, name, createdById: creator.user.id },
+    // Every account authenticates through the Microsoft device-code flow; no
+    // password is stored (credentialsPassword stays null — the bot falls
+    // straight through to device-code when it's absent).
+    data: { ...input, name, authType: "MICROSOFT", credentialsPassword: null, createdById: creator.user.id },
     select: publicAccountSelect,
   });
 

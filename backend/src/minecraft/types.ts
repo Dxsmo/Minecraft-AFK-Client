@@ -92,6 +92,8 @@ export interface ClientStatusSnapshot {
   reconnectAttempt: number;
   connectedSince?: string;
   msaSignIn?: MsaSignInPrompt;
+  /** True once the Microsoft profile has been resolved (device-code sign-in completed). */
+  authenticated?: boolean;
   /** Last known player balance, when balance polling is enabled. */
   balance?: number;
   /** ISO timestamp of the last balance update. */

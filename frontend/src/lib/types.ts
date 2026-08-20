@@ -53,6 +53,7 @@ export interface LiveStatus {
   reconnectAttempt: number;
   connectedSince?: string;
   msaSignIn?: MsaSignInPrompt;
+  authenticated?: boolean;
   balance?: number;
   balanceUpdatedAt?: string;
 }
