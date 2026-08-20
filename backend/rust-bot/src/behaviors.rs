@@ -638,20 +638,32 @@ fn emit_inventory_snapshot(bot: &Client) {
     }
     let mutable = inv.id() == 0;
 
-    // The player's 27 storage + 9 hotbar slots are always the last 36 of any menu.
-    let player = &slots[n - 36..n];
-    let main: Vec<Option<InventorySlot>> = player[0..27].iter().map(slot_to_snapshot).collect();
-    let hotbar: Vec<Option<InventorySlot>> = player[27..36].iter().map(slot_to_snapshot).collect();
-
-    // Armor (menu slots 5-8) and off-hand (slot 45) are only meaningful in the
-    // player's own inventory menu.
-    let (armor, offhand) = if mutable && n >= 46 {
+    // Slot layout differs between the player's own inventory menu and a container.
+    //
+    // Player inventory menu (id 0, 46 slots):
+    //   0 craft-out · 1-4 craft · 5-8 armor · 9-35 storage · 36-44 hotbar · 45 offhand
+    // Any other (container) menu appends the player's 27 storage + 9 hotbar as the
+    // final 36 slots (no armor/offhand), so "last 36" is only correct there.
+    let (main, hotbar, armor, offhand): (
+        Vec<Option<InventorySlot>>,
+        Vec<Option<InventorySlot>>,
+        Vec<Option<InventorySlot>>,
+        Option<InventorySlot>,
+    ) = if mutable && n >= 46 {
         (
+            slots[9..36].iter().map(slot_to_snapshot).collect(),
+            slots[36..45].iter().map(slot_to_snapshot).collect(),
             slots[5..9].iter().map(slot_to_snapshot).collect(),
             slot_to_snapshot(&slots[45]),
         )
     } else {
-        (vec![None; 4], None)
+        let player = &slots[n - 36..n];
+        (
+            player[0..27].iter().map(slot_to_snapshot).collect(),
+            player[27..36].iter().map(slot_to_snapshot).collect(),
+            vec![None; 4],
+            None,
+        )
     };
 
     emit(&OutEvent::Inventory {
