@@ -135,6 +135,11 @@ model MinecraftAccount {
   lastBalance                Float?
   lastBalanceAt              DateTime?
   status             ClientStatus @default(OFFLINE)
+  // Persisted "should be running" intent: set when the user starts a client and
+  // cleared when they stop it. On process/host restart the manager re-connects
+  // every account whose autoStart is true, so previously-active bots come back
+  // up automatically while stopped ones stay offline.
+  autoStart          Boolean  @default(false)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 

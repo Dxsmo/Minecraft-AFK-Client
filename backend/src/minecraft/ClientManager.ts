@@ -61,7 +61,8 @@ export class ClientManager {
     return () => this.statusListeners.delete(listener);
   }
 
-  /** Loads all accounts from the DB and registers a client for each without connecting. */
+  /** Loads all accounts from the DB and registers a client for each, then
+   * auto-connects the ones that were running before the process/host restarted. */
   async loadAll(): Promise<void> {
     const accounts = await prisma.minecraftAccount.findMany();
     for (const account of accounts) {
@@ -72,7 +73,14 @@ export class ClientManager {
         await prisma.minecraftAccount.update({ where: { id: account.id }, data: { status: "OFFLINE" } });
       }
     }
-    logger.info({ count: accounts.length }, "Loaded Minecraft accounts into ClientManager");
+    const toResume = accounts.filter((a) => a.autoStart);
+    for (const account of toResume) {
+      this.start(account.id);
+    }
+    logger.info(
+      { count: accounts.length, resumed: toResume.length },
+      "Loaded Minecraft accounts into ClientManager",
+    );
   }
 
   register(account: MinecraftAccount): MinecraftClient {
@@ -149,6 +157,7 @@ export class ClientManager {
   start(accountId: string): boolean {
     const client = this.clients.get(accountId);
     if (!client) return false;
+    this.persistAutoStart(accountId, true);
     client.connect();
     return true;
   }
@@ -156,6 +165,7 @@ export class ClientManager {
   stop(accountId: string): boolean {
     const client = this.clients.get(accountId);
     if (!client) return false;
+    this.persistAutoStart(accountId, false);
     client.disconnect();
     return true;
   }
@@ -163,8 +173,20 @@ export class ClientManager {
   async restart(accountId: string): Promise<boolean> {
     const client = this.clients.get(accountId);
     if (!client) return false;
+    this.persistAutoStart(accountId, true);
     await client.restart();
     return true;
+  }
+
+  /** Persists the "should be running" intent so a host/process restart can
+   * resume exactly the clients that were active. Fire-and-forget (harmless if
+   * the account was concurrently deleted). */
+  private persistAutoStart(accountId: string, autoStart: boolean): void {
+    prisma.minecraftAccount
+      .update({ where: { id: accountId }, data: { autoStart } })
+      .catch((err) => {
+        if (err?.code !== "P2025") logger.error({ err }, "Failed to persist autoStart");
+      });
   }
 
   cleanSpawner(accountId: string): boolean {
