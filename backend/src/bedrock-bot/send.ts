@@ -13,8 +13,12 @@ import { emit, type OutEvent } from "./protocol.js";
 type AnyClient = {
   queue(name: string, params: object): void;
   write(name: string, params: object): void;
+  versionGreaterThanOrEqualTo?(version: string): boolean;
   entityId?: bigint;
 };
+
+/** All-zero UUID: the command_request `uuid` field must be a valid UUID string. */
+const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 
 function warn(message: string): void {
   emit({ type: "warning", message } satisfies OutEvent);
@@ -51,17 +55,38 @@ export class BotSender {
   /** Run a slash command via command_request, falling back to chat text. */
   command(text: string): void {
     const command = text.startsWith("/") ? text : `/${text}`;
+    // The command_request schema differs by protocol: `version` is a varint on
+    // older versions (< 1.21.130) and a string on newer ones, and the origin
+    // needs a valid UUID (empty string throws during serialization — which is
+    // why the old code silently fell back to chat and commands never ran).
+    // bedrock-protocol serializes synchronously in queue(), so we can try the
+    // best-guess shape and, if it throws, try the other version encoding.
+    const origin = {
+      type: "player" as const,
+      uuid: ZERO_UUID,
+      request_id: "",
+      // Only present in the newer schema; ignored by protodef on older ones.
+      player_entity_id: 0,
+    };
+    const newSchema =
+      typeof this.client.versionGreaterThanOrEqualTo === "function"
+        ? this.client.versionGreaterThanOrEqualTo("1.21.130")
+        : true;
+    const primaryVersion: string | number = newSchema ? "66" : 66;
+    const fallbackVersion: string | number = newSchema ? 66 : "66";
+
+    if (this.tryCommand(command, origin, primaryVersion)) return;
+    if (this.tryCommand(command, origin, fallbackVersion)) return;
+    // Last resort: some servers execute commands typed as plain chat text.
+    this.chatText(command);
+  }
+
+  private tryCommand(command: string, origin: object, version: string | number): boolean {
     try {
-      this.client.queue("command_request", {
-        command,
-        origin: { type: "player", uuid: "", request_id: "" },
-        internal: false,
-        version: 66,
-      });
+      this.client.queue("command_request", { command, origin, internal: false, version });
+      return true;
     } catch {
-      // Older/newer schema or missing field: many servers also accept commands
-      // typed straight into chat, so fall back to that.
-      this.chatText(command);
+      return false;
     }
   }
 

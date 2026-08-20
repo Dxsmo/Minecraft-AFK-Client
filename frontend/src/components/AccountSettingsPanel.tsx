@@ -303,7 +303,6 @@ export function AccountSettingsPanel({
 
             {activeCat === "autocommand" && (
               <>
-                <Toggle label="Enabled" checked={autoCommandEnabled} onChange={setAutoCommandEnabled} />
                 <div>
                   <label className="label">Command / message</label>
                   <input
@@ -312,50 +311,72 @@ export function AccountSettingsPanel({
                     placeholder="/hub or a chat message"
                     className="input"
                   />
+                  <p className="mt-1 text-xs" style={{ color: "var(--text-subtle)" }}>
+                    Used by both schedules below. Enable interval, daily, or both.
+                  </p>
                 </div>
-                <Field label="Interval">
-                  <NumberInput value={autoCommandIntervalMinutes} onChange={setAutoCommandIntervalMinutes} min={1} max={1440} suffix="min" />
-                </Field>
 
-                <div className="mt-1 border-t pt-3" style={{ borderColor: "var(--border)" }}>
+                {/* Interval schedule — independent from the daily schedule. */}
+                <div className="border-t pt-3" style={{ borderColor: "var(--border)" }}>
                   <Toggle
-                    label="Daily command"
-                    description="Run the command above once each day at the times below (server local time)."
+                    label="Interval"
+                    description="Run the command repeatedly on a fixed timer."
+                    checked={autoCommandEnabled}
+                    onChange={setAutoCommandEnabled}
+                  />
+                  {autoCommandEnabled && (
+                    <div className="mt-2">
+                      <Field label="Every">
+                        <NumberInput value={autoCommandIntervalMinutes} onChange={setAutoCommandIntervalMinutes} min={1} max={1440} suffix="min" />
+                      </Field>
+                    </div>
+                  )}
+                </div>
+
+                {/* Daily schedule — independent from the interval schedule. */}
+                <div className="border-t pt-3" style={{ borderColor: "var(--border)" }}>
+                  <Toggle
+                    label="Daily"
+                    description="Run the command once each day at the times below (server local time)."
                     checked={dailyCommandEnabled}
                     onChange={setDailyCommandEnabled}
                   />
-                  {dailyCommandTimes.length > 0 && (
-                    <div className="mb-2 mt-2 flex flex-wrap gap-1.5">
-                      {dailyCommandTimes.map((time) => (
-                        <span
-                          key={time}
-                          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums"
-                          style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
-                        >
-                          {time}
-                          <button
-                            type="button"
-                            onClick={() => removeDailyTime(time)}
-                            className="leading-none opacity-70 hover:opacity-100"
-                            aria-label={`Remove ${time}`}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
+                  {dailyCommandEnabled && (
+                    <div className="mt-2">
+                      {dailyCommandTimes.length > 0 && (
+                        <div className="mb-2 flex flex-wrap gap-1.5">
+                          {dailyCommandTimes.map((time) => (
+                            <span
+                              key={time}
+                              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums"
+                              style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+                            >
+                              {time}
+                              <button
+                                type="button"
+                                onClick={() => removeDailyTime(time)}
+                                className="leading-none opacity-70 hover:opacity-100"
+                                aria-label={`Remove ${time}`}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <input
+                          type="time"
+                          value={dailyTimeDraft}
+                          onChange={(e) => setDailyTimeDraft(e.target.value)}
+                          className="input w-32"
+                        />
+                        <button type="button" onClick={addDailyTime} className="btn btn-secondary btn-sm shrink-0">
+                          + Add time
+                        </button>
+                      </div>
                     </div>
                   )}
-                  <div className="mt-2 flex gap-2">
-                    <input
-                      type="time"
-                      value={dailyTimeDraft}
-                      onChange={(e) => setDailyTimeDraft(e.target.value)}
-                      className="input w-32"
-                    />
-                    <button type="button" onClick={addDailyTime} className="btn btn-secondary btn-sm shrink-0">
-                      + Add time
-                    </button>
-                  </div>
                 </div>
               </>
             )}

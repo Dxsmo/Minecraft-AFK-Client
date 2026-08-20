@@ -87,6 +87,22 @@ export function AccountDetailPage() {
 
   return (
     <div className="space-y-5">
+      {account.edition === "BEDROCK" && (
+        <div
+          className="rounded-xl px-5 py-4"
+          style={{
+            backgroundColor: "rgba(37,99,235,0.15)",
+            border: "1px solid rgba(59,130,246,0.5)",
+          }}
+        >
+          <p className="text-base font-semibold" style={{ color: "#93c5fd" }}>
+            Bedrock Accounts sind derzeit noch im Aufbau
+          </p>
+          <p className="mt-0.5 text-sm" style={{ color: "rgba(191,219,254,0.9)" }}>
+            Es können Bugs auftreten.
+          </p>
+        </div>
+      )}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link

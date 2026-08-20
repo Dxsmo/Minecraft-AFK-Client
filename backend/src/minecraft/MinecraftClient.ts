@@ -38,6 +38,18 @@ const ONLINE_WATCHDOG_INTERVAL_MS = 15_000;
 /// fine for minute-granular daily times (deduped per day) and keeps overhead
 /// negligible.
 const SCHEDULER_TICK_MS = 30_000;
+
+/**
+ * Strip Minecraft formatting/color codes from a string. Servers send the
+ * section sign `§` (U+00A7) followed by a code char (0-9 colours, a-f colours,
+ * k-o styles, r reset, plus Bedrock's extra colours g-u). These control codes
+ * are meaningless in a plain-text web console and show up as garbage (e.g.
+ * `§r§c`), so we remove them from chat/server text. Only `§` is stripped (not
+ * the `&` config variant) to avoid eating legitimate text like "Tom & Jerry".
+ */
+function stripMinecraftFormatting(text: string): string {
+  return text.replace(/§[0-9a-u]/gi, "").replace(/§/g, "");
+}
 /// How often to poll the player's balance while balance polling is enabled.
 const BALANCE_POLL_INTERVAL_MS = 5 * 60_000;
 
@@ -418,8 +430,9 @@ export class MinecraftClient extends EventEmitter {
 
       case "chat": {
         const { sender, message } = event as { sender: string | null; message: string };
-        if (sender) this.emitConsole("CHAT", `<${sender}> ${message}`);
-        else this.emitConsole("SERVER_MESSAGE", message);
+        const clean = stripMinecraftFormatting(message);
+        if (sender) this.emitConsole("CHAT", `<${stripMinecraftFormatting(sender)}> ${clean}`);
+        else this.emitConsole("SERVER_MESSAGE", clean);
         break;
       }
 
