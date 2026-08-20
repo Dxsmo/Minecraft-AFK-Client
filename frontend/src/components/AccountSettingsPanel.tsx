@@ -494,11 +494,13 @@ export function AccountSettingsPanel({
                 )}
                 <div className="max-h-64 space-y-1.5 overflow-y-auto">
                   {users.map((u) => {
-                    const alwaysAccess = u.role === "ADMIN";
+                    const viewerIsAdmin = users.some(
+                      (v) => v.id === currentUserId && v.role === "ADMIN",
+                    );
                     const isSelf = u.id === currentUserId;
-                    // Admins always have access; the managing operator can't drop
-                    // their own access — both are shown locked & checked.
-                    const locked = alwaysAccess || isSelf;
+                    // A non-admin operator can't drop their own access (shown
+                    // locked & checked). Admins may tick/untick anyone freely.
+                    const locked = isSelf && !viewerIsAdmin;
                     return (
                       <label
                         key={u.id}
@@ -513,12 +515,7 @@ export function AccountSettingsPanel({
                           className="accent-emerald-500"
                         />
                         <span>{u.username}</span>
-                        {alwaysAccess && (
-                          <span className="text-[10px]" style={{ color: "var(--text-subtle)" }}>
-                            · admin · always access
-                          </span>
-                        )}
-                        {isSelf && !alwaysAccess && (
+                        {isSelf && (
                           <span className="text-[10px]" style={{ color: "var(--text-subtle)" }}>
                             · you
                           </span>
