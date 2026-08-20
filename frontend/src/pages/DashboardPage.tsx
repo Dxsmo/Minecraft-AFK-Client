@@ -129,6 +129,14 @@ export function DashboardPage() {
                       {label}
                     </span>
                     <StatusBadge status={status} />
+                    {account.edition === "BEDROCK" && (
+                      <span
+                        className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        style={{ backgroundColor: "rgba(245,158,11,0.15)", color: "var(--warning)" }}
+                      >
+                        Bedrock
+                      </span>
+                    )}
                     {account.createdBy && (
                       <span className="shrink-0 text-[11px]" style={{ color: "var(--text-subtle)" }}>
                         Erstellt von{" "}

@@ -16,6 +16,7 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     minecraftVersion: account.minecraftVersion,
     serverHost: account.serverHost,
     serverPort: account.serverPort,
+    edition: account.edition === "BEDROCK" ? "BEDROCK" : "JAVA",
     authType: account.authType,
     credentialsSecret: account.credentialsSecret,
     credentialsPassword: account.credentialsPassword,

@@ -22,6 +22,7 @@
     "@fastify/websocket": "^11.0.2",
     "@prisma/client": "^6.2.1",
     "argon2": "^0.41.1",
+    "bedrock-protocol": "^3.58.2",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
     "fastify-plugin": "^5.0.1",

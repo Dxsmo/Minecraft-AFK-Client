@@ -38,6 +38,8 @@ export interface ClientRuntimeConfig {
   minecraftVersion: string;
   serverHost: string;
   serverPort: number;
+  /** Which bot binary drives this account: Java (Azalea) or Bedrock (bedrock-protocol). */
+  edition: "JAVA" | "BEDROCK";
   authType: "OFFLINE" | "MICROSOFT";
   /** Microsoft account email, only relevant when authType === "MICROSOFT". Never exposed to the frontend. */
   credentialsSecret: string | null;

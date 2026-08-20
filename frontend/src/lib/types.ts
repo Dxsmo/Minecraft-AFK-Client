@@ -1,6 +1,7 @@
 export type Role = "ADMIN" | "USER";
 export type UserStatus = "ACTIVE" | "DISABLED";
 export type AuthType = "OFFLINE" | "MICROSOFT";
+export type Edition = "JAVA" | "BEDROCK";
 export type ClientStatus =
   | "OFFLINE"
   | "CONNECTING"
@@ -63,6 +64,7 @@ export interface MinecraftAccount {
   minecraftVersion: string;
   serverHost: string;
   serverPort: number;
+  edition: Edition;
   authType: AuthType;
   afkEnabled: boolean;
   movementEnabled: boolean;

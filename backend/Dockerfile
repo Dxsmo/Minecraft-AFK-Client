@@ -16,8 +16,10 @@ RUN cargo build --release
 FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 
-# Native deps (argon2) need a toolchain to build from source on arm64/amd64.
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ openssl \
+# Native deps (argon2, raknet-native) need a toolchain to build from source on
+# arm64/amd64. raknet-native has no arm64 prebuild, so cmake is required to
+# compile it on the Raspberry Pi 5 (arm64).
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ cmake openssl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
@@ -38,12 +40,14 @@ ENV NODE_ENV=production
 # ca-certificates is required for the azalea-bot's HTTPS auth requests
 # (login.live.com / Xbox / Minecraft services) — without it reqwest panics
 # with "No CA certificates were loaded from the system".
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ openssl ca-certificates \
+# cmake + toolchain are needed to compile raknet-native (Bedrock RakNet) and
+# argon2 during `npm ci`; they are purged again afterwards to keep the image slim.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ cmake openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev && npm cache clean --force \
-    && apt-get purge -y python3 make g++ && apt-get autoremove -y
+    && apt-get purge -y python3 make g++ cmake && apt-get autoremove -y
 
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma

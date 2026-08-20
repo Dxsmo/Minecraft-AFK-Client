@@ -45,6 +45,7 @@ const publicAccountSelect = {
   minecraftVersion: true,
   serverHost: true,
   serverPort: true,
+  edition: true,
   authType: true,
   afkEnabled: true,
   movementEnabled: true,

@@ -6,46 +6,55 @@ implemented on top of Azalea as it exists today. Rather than shipping a
 half-working or faked implementation, they are documented here together with
 what *would* be required to add them later.
 
-## 1. Minecraft Bedrock accounts (not supported)
+## 1. Minecraft Bedrock accounts (partially supported)
 
-**Status: not possible with the current stack.**
+**Status: implemented via a separate Node bot, but not yet verified against a
+live Bedrock server.**
 
-Azalea implements the **Java Edition** network protocol only. Bedrock Edition
-uses an entirely different transport (RakNet over UDP) and a different protocol,
-which Azalea does not speak. There is no Bedrock/RakNet client, encryption, or
-login handshake anywhere in the dependency.
+Azalea implements the **Java Edition** network protocol only (RakNet/UDP Bedrock
+is a different transport it does not speak). Rather than force Bedrock into
+Azalea, Bedrock accounts run through a **second, independent bot subprocess**
+built on the [`bedrock-protocol`](https://github.com/PrismarineJS/bedrock-protocol)
+Node library. It speaks the **same NDJSON contract** as the Rust Java bot, so the
+entire rest of the app (auth, accounts, console, WebSocket, behaviors config,
+dashboard) is edition-agnostic.
 
-Consequences:
+### How it is wired
 
-- A Bedrock account cannot connect through the existing Rust bot subprocess.
-- Building a Bedrock client ourselves would mean implementing a full second
-  protocol stack (RakNet + Bedrock login/Xbox Live auth + world/packet
-  handling). That is a large, separate project and explicitly out of scope —
-  the brief asks us **not** to ship a speculative half-implementation.
+- **Data model** — `MinecraftAccount.edition` (`JAVA` default) is now exposed on
+  account creation. It is write-once (not editable afterwards).
+- **Connection layer** — `MinecraftClient` picks the bot launcher by edition:
+  Java → the compiled `azalea-bot` binary; Bedrock → `node dist/bedrock-bot/index.js`.
+  `ClientManager` sets `edition` in the runtime config.
+- **Bedrock bot** — `backend/src/bedrock-bot/` (protocol/send/behaviors/index)
+  mirrors the Rust bot: lifecycle, reconnect handoff, chat, health, auto-command,
+  auto-sell (command-based), AFK swing, crouch, tpa auto-accept, balance/sell
+  chat parsing, and a best-effort inventory snapshot.
 
-### How Bedrock could be added later
+### What works vs. what is limited on Bedrock
 
-The architecture is already split so Bedrock support can be dropped in without
-touching the Java path:
+- **Works (same as Java):** connect/login (offline + Microsoft device-code),
+  chat/console, commands, auto-command, interval auto-sell, AFK swing, crouch,
+  tpa auto-accept, health telemetry, balance/sell chat parsing.
+- **Best-effort / unverified:** live inventory snapshot and drag-and-drop item
+  moves (uses `ItemStackRequest`; item names fall back to `bedrock:<id>` because
+  there is no bundled Bedrock item palette).
+- **Not available on Bedrock:** `clean_spawner` (emits a warning) and Live View
+  screenshots (headless, same as Java — see §2).
 
-- **Data model** — `MinecraftAccount` carries a reserved `edition` column
-  (`JAVA` by default). A future Bedrock integration would flip this to
-  `BEDROCK` and branch on it.
-- **Connection layer** — `MinecraftClient` (Node) spawns one bot subprocess per
-  account and speaks a small NDJSON protocol to it. A Bedrock integration would
-  provide an alternative subprocess binary (e.g. a Go/Node Bedrock client such
-  as `gophertunnel`, or a future Bedrock-capable Rust crate) that speaks the
-  **same** NDJSON protocol (`protocol.rs` / the event contract in
-  `MinecraftClient.ts`). `ClientManager` would pick the binary based on
-  `edition`.
+### Build note (arm64)
 
-Because the entire rest of the app (auth, accounts, console, WebSocket,
-behaviors config, dashboard) talks to bots only through that NDJSON contract,
-none of it would need to change — only a new edition-specific bot binary and the
-`edition` branch in `ClientManager`.
+`bedrock-protocol` pulls in `raknet-native`, which ships prebuilds for x64 only.
+On arm64 (Raspberry Pi 5, Apple-Silicon Docker) it compiles from source, so the
+backend image installs `cmake` + a C++ toolchain in the builder stage. This is
+already handled in `backend/Dockerfile` and verified building on arm64.
 
-The `edition` field is intentionally **not** exposed in the create/update API or
-UI yet, so users cannot create accounts that would silently fail to connect.
+### Caveat
+
+The Bedrock bot compiles, boots inside the arm64 production image, loads native
+RakNet, and fails gracefully (`connection_failed`) against an unreachable host —
+but it has **not** been runtime-tested against a real Bedrock server. A live
+connect should be verified before relying on Bedrock accounts in production.
 
 ## 2. Live View / automatic screenshots (not possible)
 

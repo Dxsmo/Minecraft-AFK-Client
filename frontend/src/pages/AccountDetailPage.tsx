@@ -101,6 +101,14 @@ export function AccountDetailPage() {
               {displayName}
             </h1>
             <StatusBadge status={liveStatus} />
+            {account.edition === "BEDROCK" && (
+              <span
+                className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                style={{ backgroundColor: "rgba(245,158,11,0.15)", color: "var(--warning)" }}
+              >
+                Bedrock
+              </span>
+            )}
           </div>
           <p className="mt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
             {account.serverHost}:{account.serverPort} · {account.minecraftVersion || "auto-detect"}

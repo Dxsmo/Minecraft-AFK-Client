@@ -3,8 +3,10 @@ import { api, ApiError } from "../lib/api";
 import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
 
 type AuthType = "OFFLINE" | "MICROSOFT";
+type Edition = "JAVA" | "BEDROCK";
 
 export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [edition, setEdition] = useState<Edition>("JAVA");
   const [authType, setAuthType] = useState<AuthType>("OFFLINE");
   const [username, setUsername] = useState("");
   const [name, setName] = useState("");
@@ -12,6 +14,13 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
   const [password, setPassword] = useState("");
   const [serverHost, setServerHost] = useState("");
   const [serverPort, setServerPort] = useState(25565);
+  const [portTouched, setPortTouched] = useState(false);
+
+  // Switch the default port with the edition unless the user set one explicitly.
+  function changeEdition(next: Edition) {
+    setEdition(next);
+    if (!portTouched) setServerPort(next === "BEDROCK" ? 19132 : 25565);
+  }
   const [minecraftVersion, setMinecraftVersion] = useState(AUTO_DETECT_VERSION);
   const [afkEnabled, setAfkEnabled] = useState(true);
   const [movementEnabled, setMovementEnabled] = useState(false);
@@ -29,6 +38,7 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
         // in-game username doubles as the name; Microsoft accounts get their
         // own free-form name chosen here.
         name: authType === "OFFLINE" ? username : name,
+        edition,
         authType,
         credentialsSecret: authType === "MICROSOFT" ? email : undefined,
         credentialsPassword: authType === "MICROSOFT" ? password : undefined,
@@ -58,6 +68,27 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
         </p>
 
         <form onSubmit={handleSubmit} className="mt-5 space-y-4">
+          <div>
+            <label className="label">Edition</label>
+            <div
+              className="grid grid-cols-2 gap-1 rounded-lg p-1"
+              style={{ backgroundColor: "var(--bg-elev)", border: "1px solid var(--border-strong)" }}
+            >
+              <SegButton active={edition === "JAVA"} onClick={() => changeEdition("JAVA")}>
+                Java
+              </SegButton>
+              <SegButton active={edition === "BEDROCK"} onClick={() => changeEdition("BEDROCK")}>
+                Bedrock
+              </SegButton>
+            </div>
+            {edition === "BEDROCK" && (
+              <p className="mt-1.5 text-xs" style={{ color: "var(--text-subtle)" }}>
+                Bedrock support is experimental. Container features (auto-sell menus, clean-spawner,
+                live inventory moves) are limited — see the docs.
+              </p>
+            )}
+          </div>
+
           <div>
             <label className="label">Account type</label>
             <div
@@ -140,7 +171,10 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
               <input
                 type="number"
                 value={serverPort}
-                onChange={(e) => setServerPort(Number(e.target.value))}
+                onChange={(e) => {
+                  setServerPort(Number(e.target.value));
+                  setPortTouched(true);
+                }}
                 className="input"
               />
             </Field>
@@ -153,11 +187,12 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
               className="input"
             >
               <option value={AUTO_DETECT_VERSION}>Auto-detect (recommended)</option>
-              {MINECRAFT_VERSIONS.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
+              {edition === "JAVA" &&
+                MINECRAFT_VERSIONS.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
             </select>
           </Field>
 

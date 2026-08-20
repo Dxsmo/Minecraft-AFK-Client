@@ -262,9 +262,12 @@ export class MinecraftClient extends EventEmitter {
       `Connection attempt ${this.reconnectAttempt} to ${this.config.serverHost}:${this.config.serverPort}`,
     );
 
-    const botBinaryPath = this.findBotBinary();
+    const botBinaryPath = this.resolveBotLauncher();
     if (!botBinaryPath) {
-      const err = "azalea-bot binary not found";
+      const err =
+        this.config.edition === "BEDROCK"
+          ? "bedrock-bot script not found"
+          : "azalea-bot binary not found";
       this.log.error(err);
       this.emitConsole("ERROR", err);
       this.handleConnectionFailure(err);
@@ -275,7 +278,7 @@ export class MinecraftClient extends EventEmitter {
     try {
       // RUST_LOG=error keeps Azalea's own logging off stdout so it can't
       // interfere with the NDJSON protocol (any stray line is ignored anyway).
-      child = spawn(botBinaryPath, [], {
+      child = spawn(botBinaryPath.command, botBinaryPath.args, {
         stdio: ["pipe", "pipe", "pipe"],
         env: { ...process.env, RUST_LOG: "error" },
       });
@@ -340,6 +343,8 @@ export class MinecraftClient extends EventEmitter {
       port: this.config.serverPort,
       auth_type: this.config.authType === "MICROSOFT" ? "microsoft" : "offline",
       username: this.config.name,
+      // Consumed by the Bedrock bot (empty = auto-detect); ignored by Azalea.
+      version: this.config.minecraftVersion,
       email: this.config.credentialsSecret,
       password: this.config.credentialsPassword,
       cache_dir: cacheDir,
@@ -615,6 +620,35 @@ export class MinecraftClient extends EventEmitter {
       message,
       timestamp: new Date().toISOString(),
     } as ConsoleEvent);
+  }
+
+  /**
+   * Resolve how to launch the bot subprocess for this account's edition.
+   * Both editions speak the identical NDJSON protocol over stdio, so the rest
+   * of this class is edition-agnostic:
+   *   - JAVA    → the compiled Azalea Rust binary, run directly.
+   *   - BEDROCK → the bedrock-protocol Node bot, run as `node dist/bedrock-bot/index.js`.
+   */
+  private resolveBotLauncher(): { command: string; args: string[] } | null {
+    if (this.config.edition === "BEDROCK") {
+      const script = this.findBedrockBotScript();
+      return script ? { command: process.execPath, args: [script] } : null;
+    }
+    const binary = this.findBotBinary();
+    return binary ? { command: binary, args: [] } : null;
+  }
+
+  /** Locate the compiled bedrock-bot entry (Docker image or local dev build). */
+  private findBedrockBotScript(): string | null {
+    const candidates = [
+      "/app/dist/bedrock-bot/index.js",
+      path.join(process.cwd(), "dist", "bedrock-bot", "index.js"),
+      path.join(process.cwd(), "backend", "dist", "bedrock-bot", "index.js"),
+    ];
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate;
+    }
+    return null;
   }
 
   /** Locate the compiled azalea-bot binary (Docker image or local dev build). */

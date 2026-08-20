@@ -20,6 +20,11 @@ export const createAccountSchema = z
     minecraftVersion: z.string().max(16).default(""),
     serverHost: z.string().min(1).max(255),
     serverPort: z.coerce.number().int().min(1).max(65535).default(25565),
+    // Which Minecraft edition to connect as. JAVA uses the Azalea Rust bot;
+    // BEDROCK uses the bedrock-protocol Node bot (see ClientManager binary
+    // selection). Write-once at creation, like authType — the update schema
+    // omits it so an account can't silently switch protocols after creation.
+    edition: z.enum(["JAVA", "BEDROCK"]).default("JAVA"),
     authType: z.enum(["OFFLINE", "MICROSOFT"]).default("OFFLINE"),
     // Microsoft account email. Used as the identity for the device-code sign-in
     // and its token cache. Never exposed back to the frontend.
