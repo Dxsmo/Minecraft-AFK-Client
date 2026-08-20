@@ -2,19 +2,16 @@ import { useState, type ReactNode } from "react";
 import { api, ApiError } from "../lib/api";
 import type { ManagedUser, MinecraftAccount } from "../lib/types";
 import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
-import { InventoryPanel } from "./InventoryPanel";
 
 export function AccountSettingsPanel({
   account,
   users,
   isAdmin,
-  online,
   onUpdated,
 }: {
   account: MinecraftAccount;
   users: ManagedUser[];
   isAdmin: boolean;
-  online: boolean;
   onUpdated: () => void;
 }) {
   const [afkEnabled, setAfkEnabled] = useState(account.afkEnabled);
@@ -168,6 +165,7 @@ export function AccountSettingsPanel({
         )}
       </div>
 
+      <div className="mt-4 md:columns-2 md:gap-4">
       {/* General */}
       <Section title="General" defaultOpen>
         <div>
@@ -238,11 +236,6 @@ export function AccountSettingsPanel({
         <Field label="AFK interval">
           <NumberInput value={afkIntervalSeconds} onChange={setAfkIntervalSeconds} min={5} max={3600} suffix="s" />
         </Field>
-      </Section>
-
-      {/* Live inventory */}
-      <Section title="Live inventory">
-        <InventoryPanel accountId={account.id} online={online} />
       </Section>
 
       {/* Auto-command */}
@@ -427,6 +420,8 @@ export function AccountSettingsPanel({
         </Section>
       )}
 
+      </div>
+
       {error && <p className="alert-error mt-4">{error}</p>}
       {message && <p className="alert-success mt-4">{message}</p>}
 
@@ -449,7 +444,7 @@ function Section({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <section className="mt-4 rounded-xl border p-3.5" style={{ borderColor: "var(--border)", backgroundColor: "var(--bg-elev)" }}>
+    <section className="mb-4 break-inside-avoid rounded-xl border p-3.5" style={{ borderColor: "var(--border)", backgroundColor: "var(--bg-elev)" }}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

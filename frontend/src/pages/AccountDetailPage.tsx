@@ -7,6 +7,7 @@ import type { ManagedUser, MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { ConsoleView } from "../components/ConsoleView";
 import { AccountSettingsPanel } from "../components/AccountSettingsPanel";
+import { InventoryPanel } from "../components/InventoryPanel";
 
 export function AccountDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -16,6 +17,7 @@ export function AccountDetailPage() {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [command, setCommand] = useState("");
+  const [tab, setTab] = useState<"console" | "inventory" | "settings">("console");
   const { logs, status, sendCommand } = useAccountConsole(id);
   const inputRef = useRef<HTMLInputElement>(null);
   const isAdmin = user?.role === "ADMIN";
@@ -130,6 +132,23 @@ export function AccountDetailPage() {
 
       {error && <p className="alert-error">{error}</p>}
 
+      {/* Live telemetry strip — always visible across tabs. */}
+      <div className="flex flex-wrap items-center gap-2">
+        {balance !== null && balance !== undefined && (
+          <StatPill label="Balance" value={`$${balance.toLocaleString("en-US")}`} accent />
+        )}
+        {status?.health !== undefined && <StatPill label="Health" value={`${status.health}/20`} />}
+        {status?.food !== undefined && <StatPill label="Food" value={`${status.food}/20`} />}
+        {status?.position && (
+          <StatPill
+            label="Position"
+            value={`${status.position.x.toFixed(0)}, ${status.position.y.toFixed(0)}, ${status.position.z.toFixed(0)}`}
+          />
+        )}
+        <StatPill label="Reconnects" value={String(status?.reconnectAttempt ?? 0)} />
+        {status?.lastError && <StatPill label="Last error" value={status.lastError} danger />}
+      </div>
+
       {msaSignIn && (
         <div
           className="rounded-xl p-4"
@@ -168,12 +187,26 @@ export function AccountDetailPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        <div className="space-y-3 lg:col-span-2">
-          <h2 className="text-sm font-semibold" style={{ color: "var(--text)" }}>
-            Live console
-          </h2>
-          <ConsoleView logs={logs} />
+      {/* Tab bar */}
+      <div className="tab-bar">
+        <button className="tab-btn" data-active={tab === "console"} onClick={() => setTab("console")}>
+          <TabIcon name="console" />
+          Console
+        </button>
+        <button className="tab-btn" data-active={tab === "inventory"} onClick={() => setTab("inventory")}>
+          <TabIcon name="inventory" />
+          Inventory
+        </button>
+        <button className="tab-btn" data-active={tab === "settings"} onClick={() => setTab("settings")}>
+          <TabIcon name="settings" />
+          Einstellungen
+        </button>
+      </div>
+
+      {/* Tab content — keyed so it re-mounts and animates on switch. */}
+      {tab === "console" && (
+        <div key="console" className="tab-panel space-y-3">
+          <ConsoleView logs={logs} className="h-[560px]" />
           <form onSubmit={handleSendCommand} className="flex gap-2">
             <input
               ref={inputRef}
@@ -189,52 +222,83 @@ export function AccountDetailPage() {
           </form>
           {account.autoSellEnabled && id && <EarningsBox accountId={id} />}
         </div>
+      )}
 
-        <div className="space-y-4">
-          {status && (
-            <div className="card p-4 text-sm">
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
-                Live info
-              </h3>
-              <dl className="space-y-2">
-                {balance !== null && balance !== undefined && (
-                  <Row label="Balance" value={`$${balance.toLocaleString("en-US")}`} />
-                )}
-                {status.health !== undefined && <Row label="Health" value={`${status.health}/20`} />}
-                {status.food !== undefined && <Row label="Food" value={`${status.food}/20`} />}
-                {status.position && (
-                  <Row
-                    label="Position"
-                    value={`${status.position.x.toFixed(0)}, ${status.position.y.toFixed(0)}, ${status.position.z.toFixed(0)}`}
-                  />
-                )}
-                <Row label="Reconnects" value={String(status.reconnectAttempt)} />
-                {status.lastError && <Row label="Last error" value={status.lastError} />}
-              </dl>
-            </div>
-          )}
-
-          <AccountSettingsPanel
-            account={account}
-            users={users}
-            isAdmin={isAdmin}
-            online={liveStatus === "ONLINE"}
-            onUpdated={load}
-          />
+      {tab === "inventory" && (
+        <div key="inventory" className="tab-panel">
+          <div className="card flex justify-center p-6">
+            <InventoryPanel accountId={account.id} online={liveStatus === "ONLINE"} />
+          </div>
         </div>
-      </div>
+      )}
+
+      {tab === "settings" && (
+        <div key="settings" className="tab-panel">
+          <AccountSettingsPanel account={account} users={users} isAdmin={isAdmin} onUpdated={load} />
+        </div>
+      )}
     </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function StatPill({
+  label,
+  value,
+  accent,
+  danger,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+  danger?: boolean;
+}) {
+  const valueColor = danger ? "var(--danger)" : accent ? "var(--accent)" : "var(--text)";
   return (
-    <div className="flex justify-between gap-4">
-      <dt style={{ color: "var(--text-subtle)" }}>{label}</dt>
-      <dd className="text-right font-medium" style={{ color: "var(--text)" }}>
+    <span className="stat-pill">
+      <span className="text-[11px] uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
+        {label}
+      </span>
+      <span className="font-semibold tabular-nums" style={{ color: valueColor }}>
         {value}
-      </dd>
-    </div>
+      </span>
+    </span>
+  );
+}
+
+function TabIcon({ name }: { name: "console" | "inventory" | "settings" }) {
+  const common = {
+    width: 15,
+    height: 15,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
+  if (name === "console") {
+    return (
+      <svg {...common}>
+        <polyline points="4 17 10 11 4 5" />
+        <line x1="12" y1="19" x2="20" y2="19" />
+      </svg>
+    );
+  }
+  if (name === "inventory") {
+    return (
+      <svg {...common}>
+        <rect x="3" y="3" width="7" height="7" rx="1" />
+        <rect x="14" y="3" width="7" height="7" rx="1" />
+        <rect x="3" y="14" width="7" height="7" rx="1" />
+        <rect x="14" y="14" width="7" height="7" rx="1" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
   );
 }
 

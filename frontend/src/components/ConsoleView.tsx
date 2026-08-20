@@ -23,7 +23,7 @@ function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString([], { hour12: false });
 }
 
-export function ConsoleView({ logs }: { logs: ConsoleLogEntry[] }) {
+export function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLogEntry[]; className?: string }) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -31,7 +31,7 @@ export function ConsoleView({ logs }: { logs: ConsoleLogEntry[] }) {
   }, [logs.length]);
 
   return (
-    <div className="console-output h-[440px]">
+    <div className={`console-output ${className}`}>
       {logs.length === 0 && (
         <p style={{ color: "#52525b" }}>No console output yet. Start the client to see live output.</p>
       )}

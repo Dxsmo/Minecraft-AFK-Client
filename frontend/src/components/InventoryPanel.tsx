@@ -147,8 +147,8 @@ export function InventoryPanel({ accountId, online }: { accountId: string; onlin
       title={item ? `${shortName(item.id)} ×${item.count}${mutable ? " · right-click to drop" : ""}` : "Empty"}
       style={{
         position: "relative",
-        width: 44,
-        height: 44,
+        width: 50,
+        height: 50,
         borderRadius: 4,
         border: "2px solid #1f2430",
         backgroundColor: item ? itemColor(item.id) : "#0f131b",
@@ -220,12 +220,12 @@ export function InventoryPanel({ accountId, online }: { accountId: string; onlin
         </div>
 
         {/* Main storage: 3 rows of 9 */}
-        <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(9, 44px)" }}>
+        <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(9, 50px)" }}>
           {inv.main.map((it, i) => renderSlot(it, mainSlotIndex(i), `m${i}`))}
         </div>
 
         {/* Hotbar */}
-        <div className="mt-2 grid gap-1" style={{ gridTemplateColumns: "repeat(9, 44px)" }}>
+        <div className="mt-2 grid gap-1" style={{ gridTemplateColumns: "repeat(9, 50px)" }}>
           {inv.hotbar.map((it, i) => renderSlot(it, hotbarSlotIndex(i), `h${i}`))}
         </div>
       </div>
