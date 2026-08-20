@@ -114,6 +114,10 @@ pub struct BehaviorState {
     /// inventory move/drop, so the UI resyncs with the bot's real state once the
     /// click packets have been processed).
     inventory_resync_at: Option<Instant>,
+    /// Signature of the last inventory we emitted, so we can push a fresh
+    /// snapshot whenever the bot's real inventory changes (e.g. after the server
+    /// corrects a rejected click) instead of relying only on a fixed delay.
+    last_inventory_sig: Option<u64>,
     last_heartbeat_at: Instant,
 }
 
@@ -146,6 +150,7 @@ impl BehaviorState {
             active_task: None,
             last_tpaccept: None,
             inventory_resync_at: None,
+            last_inventory_sig: None,
             last_heartbeat_at: now,
         }
     }
@@ -293,6 +298,18 @@ impl BehaviorState {
         if let Some(at) = self.inventory_resync_at {
             if now >= at {
                 self.inventory_resync_at = None;
+                emit_inventory_snapshot(bot);
+                self.last_inventory_sig = inventory_signature(bot);
+            }
+        }
+
+        // Push a fresh snapshot whenever the bot's real inventory changes (item
+        // pickups, server corrections of a rejected click, etc.). This is what
+        // keeps a dropped stack from lingering as a "ghost" in the UI: once the
+        // server sends its authoritative slot update, we detect it and re-emit.
+        if let Some(sig) = inventory_signature(bot) {
+            if self.last_inventory_sig != Some(sig) {
+                self.last_inventory_sig = Some(sig);
                 emit_inventory_snapshot(bot);
             }
         }
@@ -604,6 +621,27 @@ impl BehaviorState {
 /// refuse inventory edits while one is open).
 fn inventory_is_mutable(bot: &Client) -> bool {
     matches!(bot.get_inventory(), Ok(inv) if inv.id() == 0)
+}
+
+/// A cheap signature of the bot's current menu inventory (menu id + each slot's
+/// item kind and count). Changes whenever the real inventory changes, which lets
+/// the tick loop re-emit a snapshot so the UI never shows a stale "ghost" slot.
+fn inventory_signature(bot: &Client) -> Option<u64> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let inv = bot.get_inventory().ok()?;
+    let slots = inv.slots()?;
+    let mut hasher = DefaultHasher::new();
+    inv.id().hash(&mut hasher);
+    for stack in slots.iter() {
+        if stack.is_present() {
+            stack.kind().to_str().hash(&mut hasher);
+            stack.count().hash(&mut hasher);
+        } else {
+            0u8.hash(&mut hasher);
+        }
+    }
+    Some(hasher.finish())
 }
 
 /// Convert an item stack into a snapshot slot, or `None` if the slot is empty.
