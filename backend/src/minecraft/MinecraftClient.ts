@@ -94,6 +94,9 @@ export class MinecraftClient extends EventEmitter {
   private homes: string[] = [];
   /** While > now, incoming chat is scanned for /homes output lines. */
   private homesQueryUntil = 0;
+  /** While > now, lines like "- homeName" are treated as /homes list entries. */
+  private homesCollectUntil = 0;
+  private homesCollect: string[] = [];
 
   /** Drives the daily-command + balance-poll schedulers (see runScheduledTasks). */
   private schedulerTimer: NodeJS.Timeout | null = null;
@@ -655,6 +658,25 @@ export class MinecraftClient extends EventEmitter {
   }
 
   private tryUpdateHomesFromChat(message: string): void {
+    const now = Date.now();
+
+    // Header line from servers like HugoSMP; following bullet lines carry names.
+    if (/deine\s+homes\s*:/i.test(message) || /^homes\s*:/i.test(message)) {
+      this.homesCollectUntil = now + 4_000;
+      this.homesCollect = [];
+      return;
+    }
+
+    // While collecting, accept bullet-list lines like "- spawner".
+    if (now <= this.homesCollectUntil) {
+      const bullet = message.match(/^\s*[-•]\s*([A-Za-z0-9_\-]{1,32})\s*$/);
+      if (bullet?.[1]) {
+        this.homesCollect.push(bullet[1]);
+        this.applyHomes(this.homesCollect);
+        return;
+      }
+    }
+
     // Always parse explicit "/home <name>" mentions; users may run /homes
     // manually at any time and still expect shortcuts to update.
     const explicit = Array.from(message.matchAll(/\/home\s+([A-Za-z0-9_\-]+)/gi)).map((m) => m[1]);
@@ -663,7 +685,7 @@ export class MinecraftClient extends EventEmitter {
       return;
     }
 
-    if (Date.now() > this.homesQueryUntil) return;
+    if (now > this.homesQueryUntil) return;
     const parsed = this.parseHomesLine(message);
     if (parsed === null) return;
     this.applyHomes(parsed);
