@@ -31,6 +31,12 @@ pub struct Config {
     pub auto_command_enabled: bool,
     pub auto_command_text: String,
     pub auto_command_interval_minutes: u64,
+    #[serde(default)]
+    pub auto_command_span_enabled: bool,
+    #[serde(default = "default_auto_command_span_min_seconds")]
+    pub auto_command_span_min_seconds: u64,
+    #[serde(default = "default_auto_command_span_max_seconds")]
+    pub auto_command_span_max_seconds: u64,
 
     /// Auto-accept incoming `/tpa` teleport requests (but never `/tpahere`).
     #[serde(default)]
@@ -59,6 +65,14 @@ fn default_autosell_command() -> String {
     "/sell".to_string()
 }
 
+fn default_auto_command_span_min_seconds() -> u64 {
+    600
+}
+
+fn default_auto_command_span_max_seconds() -> u64 {
+    1800
+}
+
 /// Behavior-only subset of [`Config`], sent again later to update settings
 /// live without needing to reconnect.
 #[derive(Debug, Clone, Deserialize)]
@@ -71,6 +85,12 @@ pub struct BehaviorConfig {
     pub auto_command_enabled: bool,
     pub auto_command_text: String,
     pub auto_command_interval_minutes: u64,
+    #[serde(default)]
+    pub auto_command_span_enabled: bool,
+    #[serde(default = "default_auto_command_span_min_seconds")]
+    pub auto_command_span_min_seconds: u64,
+    #[serde(default = "default_auto_command_span_max_seconds")]
+    pub auto_command_span_max_seconds: u64,
     #[serde(default)]
     pub tpauto_enabled: bool,
     /// If non-empty, only auto-accept `/tpa` requests from these Minecraft

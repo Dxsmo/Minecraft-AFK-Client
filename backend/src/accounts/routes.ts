@@ -3,6 +3,7 @@ import {
   createAccountSchema,
   updateAccountSchema,
   assignUsersSchema,
+  reorderAccountsSchema,
   commandSchema,
   moveItemSchema,
   dropItemSchema,
@@ -72,7 +73,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
   // Creating an account is open to any authenticated user (they become the
   // sole assignee automatically); editing/deleting an account is allowed for
   // admins OR any user already assigned to it. Granting *other* users access
-  // (the /assignments endpoint below) stays admin-only by design.
+  // is allowed for admins and for the account's creator/operator.
 
   app.post("/api/minecraft/accounts", { preHandler: app.requireCsrf }, async (req, reply) => {
     const body = parseOrReject(createAccountSchema, req.body, reply);
@@ -158,6 +159,27 @@ export default async function accountsRoutes(app: FastifyInstance) {
     });
     reply.code(204).send();
   });
+
+  app.put(
+    "/api/minecraft/accounts/reorder",
+    { preHandler: app.requireCsrf },
+    async (req, reply) => {
+      const body = parseOrReject(reorderAccountsSchema, req.body, reply);
+      if (!body) return;
+      const ok = await accountsService.reorderAccountsForSession(req.session!, body.accountIds);
+      if (!ok) {
+        reply.code(400).send({ error: "Invalid account order payload" });
+        return;
+      }
+      await recordAuditLog({
+        userId: req.session!.user.id,
+        action: "ACCOUNT_REORDER",
+        targetType: "MinecraftAccount",
+        details: { count: body.accountIds.length },
+      });
+      reply.send({ ok: true });
+    },
+  );
 
   app.put(
     "/api/minecraft/accounts/:id/assignments",

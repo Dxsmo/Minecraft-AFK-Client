@@ -30,7 +30,7 @@ const SUBPROCESS_HANG_TIMEOUT_MS = 5 * 60_000;
 /// If an ONLINE bot emits nothing (not even a heartbeat, which fires every ~20s)
 /// for this long, treat it as hung and recycle it. Recovers frozen bots that
 /// previously required a manual restart.
-const SUBPROCESS_ONLINE_SILENCE_MS = 90_000;
+const SUBPROCESS_ONLINE_SILENCE_MS = 45_000;
 /// How often the online-hang watchdog checks for subprocess silence.
 const ONLINE_WATCHDOG_INTERVAL_MS = 15_000;
 
@@ -90,6 +90,10 @@ export class MinecraftClient extends EventEmitter {
   private balanceUpdatedAt: Date | undefined;
   /** Most recent live inventory snapshot from the bot, if any. */
   private inventory: InventorySnapshot | undefined;
+  /** Last discovered /homes list for this account. */
+  private homes: string[] = [];
+  /** While > now, incoming chat is scanned for /homes output lines. */
+  private homesQueryUntil = 0;
 
   /** Drives the daily-command + balance-poll schedulers (see runScheduledTasks). */
   private schedulerTimer: NodeJS.Timeout | null = null;
@@ -126,6 +130,9 @@ export class MinecraftClient extends EventEmitter {
         auto_command_enabled: config.autoCommandEnabled,
         auto_command_text: config.autoCommandText,
         auto_command_interval_minutes: config.autoCommandIntervalMinutes,
+        auto_command_span_enabled: config.autoCommandSpanEnabled,
+        auto_command_span_min_seconds: config.autoCommandSpanMinSeconds,
+        auto_command_span_max_seconds: config.autoCommandSpanMaxSeconds,
         tpauto_enabled: config.tpAutoEnabled,
         tpauto_allowlist: config.tpAutoAllowlist,
         autosell_enabled: config.autoSellEnabled,
@@ -151,6 +158,7 @@ export class MinecraftClient extends EventEmitter {
       authenticated: this.authenticated,
       balance: this.balance,
       balanceUpdatedAt: this.balanceUpdatedAt?.toISOString(),
+      homes: this.homes,
     };
   }
 
@@ -369,6 +377,9 @@ export class MinecraftClient extends EventEmitter {
       auto_command_enabled: this.config.autoCommandEnabled,
       auto_command_text: this.config.autoCommandText,
       auto_command_interval_minutes: this.config.autoCommandIntervalMinutes,
+      auto_command_span_enabled: this.config.autoCommandSpanEnabled,
+      auto_command_span_min_seconds: this.config.autoCommandSpanMinSeconds,
+      auto_command_span_max_seconds: this.config.autoCommandSpanMaxSeconds,
       tpauto_enabled: this.config.tpAutoEnabled,
       tpauto_allowlist: this.config.tpAutoAllowlist,
       autosell_enabled: this.config.autoSellEnabled,
@@ -426,11 +437,15 @@ export class MinecraftClient extends EventEmitter {
         this.reconnectAttempt = 0;
         this.setStatus("ONLINE");
         this.emitConsole("SYSTEM", "Spawned into the world");
+        // Auto-refresh saved homes after each successful join.
+        this.homesQueryUntil = Date.now() + 10_000;
+        this.sendToBot({ type: "chat", text: "/homes" });
         break;
 
       case "chat": {
         const { sender, message } = event as { sender: string | null; message: string };
         const clean = stripMinecraftFormatting(message);
+        this.tryUpdateHomesFromChat(clean);
         if (sender) this.emitConsole("CHAT", `<${stripMinecraftFormatting(sender)}> ${clean}`);
         else this.emitConsole("SERVER_MESSAGE", clean);
         break;
@@ -496,9 +511,7 @@ export class MinecraftClient extends EventEmitter {
       case "disconnect": {
         const reason = (event as { reason?: string | null }).reason ?? "unknown reason";
         this.emitConsole("SYSTEM", `Disconnected: ${reason}`);
-        // The subprocess will exit right after; the exit handler drives the
-        // reconnect. We record the reason for display.
-        this.lastError = reason;
+        this.handleConnectionFailure(reason);
         break;
       }
 
@@ -555,6 +568,7 @@ export class MinecraftClient extends EventEmitter {
     this.connectedSince = null;
     this.msaSignIn = undefined;
     this.authenticated = false;
+    this.homesQueryUntil = 0;
     if (!child) return;
 
     this.log.debug(reason);
@@ -637,6 +651,47 @@ export class MinecraftClient extends EventEmitter {
       message,
       timestamp: new Date().toISOString(),
     } as ConsoleEvent);
+  }
+
+  private tryUpdateHomesFromChat(message: string): void {
+    if (Date.now() > this.homesQueryUntil) return;
+    const parsed = this.parseHomesLine(message);
+    if (parsed === null) return;
+    const next = Array.from(new Set(parsed.map((h) => h.trim()).filter(Boolean)));
+    const changed = next.length !== this.homes.length || next.some((h, i) => h !== this.homes[i]);
+    if (!changed) return;
+    this.homes = next;
+    this.emit("homes", { minecraftAccountId: this.config.id, homes: this.homes });
+    this.emitStatus();
+  }
+
+  private parseHomesLine(line: string): string[] | null {
+    const lower = line.toLowerCase();
+    // Explicit "no homes" style replies.
+    if (
+      (lower.includes("home") || lower.includes("homes")) &&
+      (lower.includes("no home") || lower.includes("no homes") || lower.includes("keine homes"))
+    ) {
+      return [];
+    }
+
+    // Common server output style: "/home Name" entries in one line.
+    const cmdMatches = Array.from(line.matchAll(/\/home\s+([A-Za-z0-9_\-]+)/g)).map((m) => m[1]);
+    if (cmdMatches.length > 0) return cmdMatches;
+
+    // Fallback: "Homes: Name1, Name2, Name3"
+    if (lower.includes("homes")) {
+      const idx = line.indexOf(":");
+      if (idx !== -1) {
+        const tail = line.slice(idx + 1);
+        const names = tail
+          .split(/[,\|]/)
+          .map((s) => s.trim())
+          .filter((s) => /^[A-Za-z0-9_\-]{1,32}$/.test(s));
+        if (names.length > 0) return names;
+      }
+    }
+    return null;
   }
 
   /**

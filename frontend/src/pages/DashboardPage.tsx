@@ -14,6 +14,7 @@ export function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  const [reorderBusy, setReorderBusy] = useState(false);
   // Admin-only: locally censor (blur) individual account cards, e.g. while
   // screen-sharing. Persisted per admin in localStorage so it survives reloads.
   const blurKey = user ? `afk.blurredAccounts.${user.id}` : null;
@@ -98,6 +99,25 @@ export function DashboardPage() {
     }
   }
 
+  async function moveAccount(id: string, direction: -1 | 1) {
+    if (!accounts || reorderBusy) return;
+    const idx = accounts.findIndex((a) => a.id === id);
+    const nextIdx = idx + direction;
+    if (idx < 0 || nextIdx < 0 || nextIdx >= accounts.length) return;
+    const next = [...accounts];
+    [next[idx], next[nextIdx]] = [next[nextIdx], next[idx]];
+    setAccounts(next);
+    setReorderBusy(true);
+    try {
+      await api.put("/minecraft/accounts/reorder", { accountIds: next.map((a) => a.id) });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to reorder accounts");
+      await load();
+    } finally {
+      setReorderBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-end justify-between">
@@ -140,7 +160,7 @@ export function DashboardPage() {
         </div>
       ) : (
         <div className="space-y-2.5">
-          {merged.map((account) => {
+          {merged.map((account, index) => {
             const status = account.live?.status ?? account.status;
             const label = account.displayName?.trim() || account.live?.name || account.name;
             const busy = busyIds.has(account.id);
@@ -150,6 +170,30 @@ export function DashboardPage() {
                 key={account.id}
                 className="card card-hover flex flex-wrap items-center gap-x-4 gap-y-3 p-4"
               >
+                <div className="flex items-center">
+                  <div className="mr-3 flex shrink-0 flex-col gap-1">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm px-2"
+                      onClick={() => void moveAccount(account.id, -1)}
+                      disabled={reorderBusy || index === 0}
+                      title="Move up"
+                      aria-label="Move up"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm px-2"
+                      onClick={() => void moveAccount(account.id, 1)}
+                      disabled={reorderBusy || index === merged.length - 1}
+                      title="Move down"
+                      aria-label="Move down"
+                    >
+                      ↓
+                    </button>
+                  </div>
+                </div>
                 <div
                   className="min-w-0 flex-1"
                   style={{

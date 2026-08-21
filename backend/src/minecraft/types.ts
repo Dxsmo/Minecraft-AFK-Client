@@ -53,6 +53,9 @@ export interface ClientRuntimeConfig {
   autoCommandEnabled: boolean;
   autoCommandText: string;
   autoCommandIntervalMinutes: number;
+  autoCommandSpanEnabled: boolean;
+  autoCommandSpanMinSeconds: number;
+  autoCommandSpanMaxSeconds: number;
   /** Auto-accept incoming /tpa teleport requests (never /tpahere). */
   tpAutoEnabled: boolean;
   /** Only auto-accept /tpa from these Minecraft names; empty = accept anyone. */
@@ -98,6 +101,8 @@ export interface ClientStatusSnapshot {
   balance?: number;
   /** ISO timestamp of the last balance update. */
   balanceUpdatedAt?: string;
+  /** Last discovered /homes names for this account. */
+  homes?: string[];
 }
 
 /** A single occupied inventory slot in a live inventory snapshot. */

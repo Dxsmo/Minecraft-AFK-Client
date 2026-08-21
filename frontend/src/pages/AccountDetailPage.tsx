@@ -99,6 +99,7 @@ export function AccountDetailPage() {
   const displayName = account.displayName?.trim() || status?.name || account.name;
   const msaSignIn = status?.msaSignIn;
   const balance = status?.balance ?? account.lastBalance ?? undefined;
+  const homes = status?.status === "ONLINE" ? status.homes ?? [] : account.homes ?? [];
 
   return (
     <div className="space-y-5">
@@ -259,6 +260,21 @@ export function AccountDetailPage() {
               Send
             </button>
           </form>
+          {homes.length > 0 && (
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+              {homes.map((home) => (
+                <button
+                  key={home}
+                  type="button"
+                  onClick={() => sendCommand(`/home ${home}`)}
+                  className="btn btn-ghost btn-sm"
+                  disabled={liveStatus !== "ONLINE"}
+                >
+                  /home {home}
+                </button>
+              ))}
+            </div>
+          )}
           {account.autoSellEnabled && id && <EarningsBox accountId={id} />}
         </div>
       )}

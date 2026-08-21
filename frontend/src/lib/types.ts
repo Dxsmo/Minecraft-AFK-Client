@@ -56,6 +56,7 @@ export interface LiveStatus {
   authenticated?: boolean;
   balance?: number;
   balanceUpdatedAt?: string;
+  homes?: string[];
 }
 
 export interface MinecraftAccount {
@@ -76,6 +77,9 @@ export interface MinecraftAccount {
   autoCommandEnabled: boolean;
   autoCommandText: string;
   autoCommandIntervalMinutes: number;
+  autoCommandSpanEnabled: boolean;
+  autoCommandSpanMinSeconds: number;
+  autoCommandSpanMaxSeconds: number;
   tpAutoEnabled: boolean;
   tpAutoAllowlist: string[];
   autoSellEnabled: boolean;
@@ -87,6 +91,8 @@ export interface MinecraftAccount {
   balanceCommand: string;
   lastBalance: number | null;
   lastBalanceAt: string | null;
+  homes: string[];
+  dashboardOrder: number;
   status: ClientStatus;
   createdAt: string;
   updatedAt: string;

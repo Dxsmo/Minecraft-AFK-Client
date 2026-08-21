@@ -54,6 +54,7 @@ export class BehaviorState {
   private lastAfkAt = 0;
   private lastMoveAt = 0;
   private lastAutoCommandAt = Date.now();
+  private nextRandomAutoCommandAt: number | null = null;
   private lastAutosellAt = Date.now();
 
   private queue: ForegroundTask[] = [];
@@ -78,6 +79,9 @@ export class BehaviorState {
       auto_command_enabled: config.auto_command_enabled,
       auto_command_text: config.auto_command_text,
       auto_command_interval_minutes: config.auto_command_interval_minutes,
+      auto_command_span_enabled: config.auto_command_span_enabled ?? false,
+      auto_command_span_min_seconds: config.auto_command_span_min_seconds ?? 600,
+      auto_command_span_max_seconds: config.auto_command_span_max_seconds ?? 1800,
       tpauto_enabled: config.tpauto_enabled ?? false,
       tpauto_allowlist: config.tpauto_allowlist ?? [],
       autosell_enabled: config.autosell_enabled ?? false,
@@ -89,6 +93,7 @@ export class BehaviorState {
   updateConfig(cfg: BehaviorConfig): void {
     const wasCrouch = this.cfg.crouch_enabled;
     this.cfg = { ...cfg, tpauto_allowlist: cfg.tpauto_allowlist ?? [] };
+    this.nextRandomAutoCommandAt = null;
     // Apply crouch changes immediately rather than waiting for the next tick.
     if (this.cfg.crouch_enabled && !wasCrouch) this.applyCrouch(true);
     if (!this.cfg.crouch_enabled && wasCrouch) this.applyCrouch(false);
@@ -163,11 +168,22 @@ export class BehaviorState {
 
     // Auto-command at its own interval, independent of AFK/movement.
     if (this.cfg.auto_command_enabled && this.cfg.auto_command_text.trim()) {
-      const interval = Math.max(1, this.cfg.auto_command_interval_minutes) * 60_000;
-      if (now - this.lastAutoCommandAt >= interval) {
-        this.lastAutoCommandAt = now;
-        this.sender.send(this.cfg.auto_command_text.trim());
-        emit({ type: "behavior_log", message: "Auto-command sent" });
+      if (this.cfg.auto_command_span_enabled) {
+        if (this.nextRandomAutoCommandAt == null) {
+          this.nextRandomAutoCommandAt = now + this.randomAutoCommandDelayMs();
+        }
+        if (now >= this.nextRandomAutoCommandAt) {
+          this.sender.send(this.cfg.auto_command_text.trim());
+          this.nextRandomAutoCommandAt = now + this.randomAutoCommandDelayMs();
+          emit({ type: "behavior_log", message: "Auto-command sent (random range)" });
+        }
+      } else {
+        const interval = Math.max(1, this.cfg.auto_command_interval_minutes) * 60_000;
+        if (now - this.lastAutoCommandAt >= interval) {
+          this.lastAutoCommandAt = now;
+          this.sender.send(this.cfg.auto_command_text.trim());
+          emit({ type: "behavior_log", message: "Auto-command sent" });
+        }
       }
     }
 
@@ -302,6 +318,13 @@ export class BehaviorState {
   private applyCrouch(on: boolean): void {
     this.sneaking = on;
     this.sender.setSneak(on);
+  }
+
+  private randomAutoCommandDelayMs(): number {
+    const minS = Math.max(1, Math.min(this.cfg.auto_command_span_min_seconds ?? 600, this.cfg.auto_command_span_max_seconds ?? 1800));
+    const maxS = Math.max(1, Math.max(this.cfg.auto_command_span_min_seconds ?? 600, this.cfg.auto_command_span_max_seconds ?? 1800));
+    const sec = minS === maxS ? minS : Math.floor(Math.random() * (maxS - minS + 1)) + minS;
+    return sec * 1000;
   }
 
   // ItemStackRequest-based moves are best-effort and unverified on Bedrock.

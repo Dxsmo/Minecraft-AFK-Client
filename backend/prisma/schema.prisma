@@ -113,6 +113,11 @@ model MinecraftAccount {
   autoCommandEnabled         Boolean @default(false)
   autoCommandText            String  @default("")
   autoCommandIntervalMinutes Int     @default(5)
+  // Optional random interval mode for auto-command. When enabled, the command
+  // is sent repeatedly with a freshly random delay between min/max after each run.
+  autoCommandSpanEnabled     Boolean @default(false)
+  autoCommandSpanMinSeconds  Int     @default(600)
+  autoCommandSpanMaxSeconds  Int     @default(1800)
   // Auto-accept incoming /tpa teleport requests (never /tpahere).
   tpAutoEnabled              Boolean @default(false)
   // JSON-encoded array of Minecraft names; when non-empty, only /tpa requests
@@ -134,7 +139,12 @@ model MinecraftAccount {
   // immediately after a restart before the next poll runs.
   lastBalance                Float?
   lastBalanceAt              DateTime?
+  // JSON-encoded array of discovered /homes names for this account, refreshed
+  // after every successful server join.
+  homesJson           String  @default("[]")
   status             ClientStatus @default(OFFLINE)
+  // Persistent dashboard ordering key (smaller = earlier in list).
+  dashboardOrder     Int      @default(0)
   // Persisted "should be running" intent: set when the user starts a client and
   // cleared when they stop it. On process/host restart the manager re-connects
   // every account whose autoStart is true, so previously-active bots come back

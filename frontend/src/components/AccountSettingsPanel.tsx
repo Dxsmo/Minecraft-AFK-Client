@@ -27,6 +27,19 @@ export function AccountSettingsPanel({
   const [autoCommandEnabled, setAutoCommandEnabled] = useState(account.autoCommandEnabled);
   const [autoCommandText, setAutoCommandText] = useState(account.autoCommandText);
   const [autoCommandIntervalMinutes, setAutoCommandIntervalMinutes] = useState(account.autoCommandIntervalMinutes);
+  const [autoCommandSpanEnabled, setAutoCommandSpanEnabled] = useState(account.autoCommandSpanEnabled);
+  const [autoCommandSpanMinValue, setAutoCommandSpanMinValue] = useState(
+    spanValueFromSeconds(account.autoCommandSpanMinSeconds ?? 600),
+  );
+  const [autoCommandSpanMinUnit, setAutoCommandSpanMinUnit] = useState<"minutes" | "hours">(
+    spanUnitFromSeconds(account.autoCommandSpanMinSeconds ?? 600),
+  );
+  const [autoCommandSpanMaxValue, setAutoCommandSpanMaxValue] = useState(
+    spanValueFromSeconds(account.autoCommandSpanMaxSeconds ?? 1800),
+  );
+  const [autoCommandSpanMaxUnit, setAutoCommandSpanMaxUnit] = useState<"minutes" | "hours">(
+    spanUnitFromSeconds(account.autoCommandSpanMaxSeconds ?? 1800),
+  );
   const [dailyCommandEnabled, setDailyCommandEnabled] = useState(account.dailyCommandEnabled);
   const [dailyCommandTimes, setDailyCommandTimes] = useState<string[]>(account.dailyCommandTimes ?? []);
   const [dailyTimeDraft, setDailyTimeDraft] = useState("08:00");
@@ -67,6 +80,9 @@ export function AccountSettingsPanel({
         autoCommandEnabled,
         autoCommandText,
         autoCommandIntervalMinutes,
+        autoCommandSpanEnabled,
+        autoCommandSpanMinSeconds: toSpanSeconds(autoCommandSpanMinValue, autoCommandSpanMinUnit),
+        autoCommandSpanMaxSeconds: toSpanSeconds(autoCommandSpanMaxValue, autoCommandSpanMaxUnit),
         dailyCommandEnabled,
         dailyCommandTimes,
         balanceEnabled,
@@ -147,7 +163,7 @@ export function AccountSettingsPanel({
     { id: "general", label: "General", icon: "user", meta: displayName.trim() || account.name },
     { id: "connection", label: "Connection", icon: "server", meta: `${serverHost}:${serverPort}` },
     { id: "behavior", label: "Behavior", icon: "activity", on: afkEnabled || movementEnabled || crouchEnabled },
-    { id: "autocommand", label: "Auto-command", icon: "terminal", on: autoCommandEnabled || dailyCommandEnabled },
+    { id: "autocommand", label: "Auto-command", icon: "terminal", on: autoCommandEnabled || dailyCommandEnabled || autoCommandSpanEnabled },
     { id: "balance", label: "Balance", icon: "coin", on: balanceEnabled },
     { id: "autotpa", label: "Auto-TPA", icon: "portal", on: tpAutoEnabled },
     { id: "autosell", label: "Auto-sell", icon: "tag", on: autoSellEnabled },
@@ -330,6 +346,45 @@ export function AccountSettingsPanel({
                     <div className="mt-2">
                       <Field label="Every">
                         <NumberInput value={autoCommandIntervalMinutes} onChange={setAutoCommandIntervalMinutes} min={1} max={1440} suffix="min" />
+                      </Field>
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t pt-3" style={{ borderColor: "var(--border)" }}>
+                  <Toggle
+                    label="Zeitspanne"
+                    description="Use a random delay between two limits; a new delay is chosen after each run."
+                    checked={autoCommandSpanEnabled}
+                    onChange={setAutoCommandSpanEnabled}
+                  />
+                  {autoCommandSpanEnabled && (
+                    <div className="mt-2 space-y-2">
+                      <Field label="Zahl 1">
+                        <div className="flex items-center gap-2">
+                          <NumberInput value={autoCommandSpanMinValue} onChange={setAutoCommandSpanMinValue} min={1} max={1440} />
+                          <select
+                            value={autoCommandSpanMinUnit}
+                            onChange={(e) => setAutoCommandSpanMinUnit(e.target.value as "minutes" | "hours")}
+                            className="input w-28"
+                          >
+                            <option value="minutes">Minuten</option>
+                            <option value="hours">Stunden</option>
+                          </select>
+                        </div>
+                      </Field>
+                      <Field label="Zahl 2">
+                        <div className="flex items-center gap-2">
+                          <NumberInput value={autoCommandSpanMaxValue} onChange={setAutoCommandSpanMaxValue} min={1} max={1440} />
+                          <select
+                            value={autoCommandSpanMaxUnit}
+                            onChange={(e) => setAutoCommandSpanMaxUnit(e.target.value as "minutes" | "hours")}
+                            className="input w-28"
+                          >
+                            <option value="minutes">Minuten</option>
+                            <option value="hours">Stunden</option>
+                          </select>
+                        </div>
                       </Field>
                     </div>
                   )}
@@ -540,6 +595,19 @@ export function AccountSettingsPanel({
       </div>
     </div>
   );
+}
+
+function spanUnitFromSeconds(seconds: number): "minutes" | "hours" {
+  return seconds % 3600 === 0 ? "hours" : "minutes";
+}
+
+function spanValueFromSeconds(seconds: number): number {
+  return spanUnitFromSeconds(seconds) === "hours" ? Math.max(1, Math.round(seconds / 3600)) : Math.max(1, Math.round(seconds / 60));
+}
+
+function toSpanSeconds(value: number, unit: "minutes" | "hours"): number {
+  const clamped = Math.max(1, Math.floor(value));
+  return unit === "hours" ? clamped * 3600 : clamped * 60;
 }
 
 type CatIcon = "user" | "server" | "activity" | "terminal" | "coin" | "portal" | "tag" | "users";

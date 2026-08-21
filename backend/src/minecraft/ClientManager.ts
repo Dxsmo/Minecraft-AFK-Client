@@ -28,6 +28,9 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     autoCommandEnabled: account.autoCommandEnabled,
     autoCommandText: account.autoCommandText,
     autoCommandIntervalMinutes: account.autoCommandIntervalMinutes,
+    autoCommandSpanEnabled: account.autoCommandSpanEnabled,
+    autoCommandSpanMinSeconds: account.autoCommandSpanMinSeconds,
+    autoCommandSpanMaxSeconds: account.autoCommandSpanMaxSeconds,
     tpAutoEnabled: account.tpAutoEnabled,
     tpAutoAllowlist: parseAllowlist(account.tpAutoAllowlist),
     autoSellEnabled: account.autoSellEnabled,
@@ -132,6 +135,13 @@ export class ClientManager {
         .create({ data: { minecraftAccountId, amount } })
         .catch((err) => {
           if (err?.code !== "P2025") logger.error({ err }, "Failed to persist sell earning");
+        });
+    });
+    client.on("homes", ({ minecraftAccountId, homes }: { minecraftAccountId: string; homes: string[] }) => {
+      prisma.minecraftAccount
+        .update({ where: { id: minecraftAccountId }, data: { homesJson: JSON.stringify(homes) } })
+        .catch((err) => {
+          if (err?.code !== "P2025") logger.error({ err }, "Failed to persist homes");
         });
     });
     this.clients.set(account.id, client);

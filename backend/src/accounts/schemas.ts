@@ -39,6 +39,9 @@ export const createAccountSchema = z
     autoCommandEnabled: z.boolean().default(false),
     autoCommandText: z.string().max(256).default(""),
     autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).default(5),
+    autoCommandSpanEnabled: z.boolean().default(false),
+    autoCommandSpanMinSeconds: z.coerce.number().int().min(60).max(86_400).default(600),
+    autoCommandSpanMaxSeconds: z.coerce.number().int().min(60).max(86_400).default(1800),
     tpAutoEnabled: z.boolean().default(false),
     tpAutoAllowlist: z
       .array(z.string().trim().min(1).max(16))
@@ -80,6 +83,9 @@ export const updateAccountSchema = z.object({
   autoCommandEnabled: z.boolean().optional(),
   autoCommandText: z.string().max(256).optional(),
   autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).optional(),
+  autoCommandSpanEnabled: z.boolean().optional(),
+  autoCommandSpanMinSeconds: z.coerce.number().int().min(60).max(86_400).optional(),
+  autoCommandSpanMaxSeconds: z.coerce.number().int().min(60).max(86_400).optional(),
   tpAutoEnabled: z.boolean().optional(),
   tpAutoAllowlist: z
     .array(z.string().trim().min(1).max(16))
@@ -101,6 +107,10 @@ export const updateAccountSchema = z.object({
 
 export const assignUsersSchema = z.object({
   userIds: z.array(z.string()),
+});
+
+export const reorderAccountsSchema = z.object({
+  accountIds: z.array(z.string().min(1)).min(1),
 });
 
 export const commandSchema = z.object({

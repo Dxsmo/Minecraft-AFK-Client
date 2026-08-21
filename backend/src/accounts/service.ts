@@ -22,14 +22,26 @@ export function parseDailyTimes(raw: string): string[] {
   }
 }
 
+/** Parses the JSON-encoded homes column into a string array. */
+export function parseHomes(raw: string): string[] {
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && v.trim().length > 0) : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Presents a stored account to API clients, decoding JSON-encoded list columns to arrays. */
-function present<T extends { tpAutoAllowlist: string; dailyCommandTimes: string }>(
+function present<T extends { tpAutoAllowlist: string; dailyCommandTimes: string; homesJson: string }>(
   account: T,
-): Omit<T, "tpAutoAllowlist" | "dailyCommandTimes"> & { tpAutoAllowlist: string[]; dailyCommandTimes: string[] } {
+): Omit<T, "tpAutoAllowlist" | "dailyCommandTimes" | "homesJson"> & { tpAutoAllowlist: string[]; dailyCommandTimes: string[]; homes: string[] } {
+  const { tpAutoAllowlist, dailyCommandTimes, homesJson, ...rest } = account;
   return {
-    ...account,
-    tpAutoAllowlist: parseAllowlist(account.tpAutoAllowlist),
-    dailyCommandTimes: parseDailyTimes(account.dailyCommandTimes),
+    ...rest,
+    tpAutoAllowlist: parseAllowlist(tpAutoAllowlist),
+    dailyCommandTimes: parseDailyTimes(dailyCommandTimes),
+    homes: parseHomes(homesJson),
   };
 }
 
@@ -56,6 +68,9 @@ const publicAccountSelect = {
   autoCommandEnabled: true,
   autoCommandText: true,
   autoCommandIntervalMinutes: true,
+  autoCommandSpanEnabled: true,
+  autoCommandSpanMinSeconds: true,
+  autoCommandSpanMaxSeconds: true,
   tpAutoEnabled: true,
   tpAutoAllowlist: true,
   autoSellEnabled: true,
@@ -67,7 +82,9 @@ const publicAccountSelect = {
   balanceCommand: true,
   lastBalance: true,
   lastBalanceAt: true,
+  homesJson: true,
   status: true,
+  dashboardOrder: true,
   createdAt: true,
   updatedAt: true,
   createdBy: { select: { id: true, username: true } },
@@ -79,11 +96,11 @@ const publicAccountSelect = {
 export async function listAccountsForSession(session: SessionContext) {
   const accounts =
     session.user.role === "ADMIN"
-      ? await prisma.minecraftAccount.findMany({ select: publicAccountSelect, orderBy: { name: "asc" } })
+      ? await prisma.minecraftAccount.findMany({ select: publicAccountSelect, orderBy: [{ dashboardOrder: "asc" }, { name: "asc" }] })
       : await prisma.minecraftAccount.findMany({
           where: { assignments: { some: { userId: session.user.id } } },
           select: publicAccountSelect,
-          orderBy: { name: "asc" },
+          orderBy: [{ dashboardOrder: "asc" }, { name: "asc" }],
         });
   return accounts.map(present);
 }
@@ -131,11 +148,19 @@ export async function listAssignableUsers() {
 
 export async function createAccount(input: CreateAccountInput, creator: SessionContext) {
   const name = input.name.trim();
+  const maxOrder = await prisma.minecraftAccount.aggregate({ _max: { dashboardOrder: true } });
   const account = await prisma.minecraftAccount.create({
     // Every account authenticates through the Microsoft device-code flow; no
     // password is stored (credentialsPassword stays null — the bot falls
     // straight through to device-code when it's absent).
-    data: { ...input, name, authType: "MICROSOFT", credentialsPassword: null, createdById: creator.user.id },
+    data: {
+      ...input,
+      name,
+      authType: "MICROSOFT",
+      credentialsPassword: null,
+      createdById: creator.user.id,
+      dashboardOrder: (maxOrder._max.dashboardOrder ?? -1) + 1,
+    },
     select: publicAccountSelect,
   });
 
@@ -181,6 +206,32 @@ export async function setAssignments(accountId: string, userIds: string[]) {
       data: uniqueUserIds.map((userId) => ({ userId, minecraftAccountId: accountId })),
     }),
   ]);
+}
+
+/** Persist a full dashboard order for all accounts visible to the session user. */
+export async function reorderAccountsForSession(session: SessionContext, accountIds: string[]): Promise<boolean> {
+  const visible =
+    session.user.role === "ADMIN"
+      ? await prisma.minecraftAccount.findMany({ select: { id: true } })
+      : await prisma.minecraftAccount.findMany({
+          where: { assignments: { some: { userId: session.user.id } } },
+          select: { id: true },
+        });
+  const visibleIds = visible.map((a) => a.id);
+  if (visibleIds.length !== accountIds.length) return false;
+  const wanted = new Set(accountIds);
+  if (wanted.size !== visibleIds.length) return false;
+  for (const id of visibleIds) if (!wanted.has(id)) return false;
+
+  await prisma.$transaction(
+    accountIds.map((id, idx) =>
+      prisma.minecraftAccount.update({
+        where: { id },
+        data: { dashboardOrder: idx },
+      }),
+    ),
+  );
+  return true;
 }
 
 /** Internal helper for ClientManager/commands module: includes the credentials field. */

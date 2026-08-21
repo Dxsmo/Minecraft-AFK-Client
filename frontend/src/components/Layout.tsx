@@ -112,8 +112,8 @@ export function Layout() {
           >
             Hosted by Desmodus
           </div>
-          <p className="text-[10px]" style={{ color: "var(--text-subtle)" }}>
-            v1 · Azalea engine
+          <p className="text-[10px] font-medium" style={{ color: "var(--text-subtle)" }}>
+            V3.0
           </p>
         </div>
       </aside>

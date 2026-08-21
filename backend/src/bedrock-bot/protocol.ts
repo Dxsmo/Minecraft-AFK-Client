@@ -36,6 +36,9 @@ export interface Config {
   auto_command_enabled: boolean;
   auto_command_text: string;
   auto_command_interval_minutes: number;
+  auto_command_span_enabled?: boolean;
+  auto_command_span_min_seconds?: number;
+  auto_command_span_max_seconds?: number;
 
   /** Auto-accept incoming /tpa teleport requests (but never /tpahere). */
   tpauto_enabled?: boolean;
@@ -55,6 +58,9 @@ export interface BehaviorConfig {
   auto_command_enabled: boolean;
   auto_command_text: string;
   auto_command_interval_minutes: number;
+  auto_command_span_enabled?: boolean;
+  auto_command_span_min_seconds?: number;
+  auto_command_span_max_seconds?: number;
   tpauto_enabled?: boolean;
   tpauto_allowlist?: string[];
   autosell_enabled?: boolean;

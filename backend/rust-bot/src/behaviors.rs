@@ -51,9 +51,6 @@ const SPAWNER_MAX_REACH: f64 = 5.0;
 /// How long to wait for a right-clicked spawner to open its container before
 /// giving up on the clean-spawner cycle.
 const SPAWNER_MENU_TIMEOUT: Duration = Duration::from_millis(2000);
-/// Stop scanning a spawner container after this many consecutive empty slots,
-/// assuming no further items remain.
-const SPAWNER_EMPTY_STREAK: usize = 3;
 /// After an inventory move/drop, wait this long before emitting a fresh
 /// snapshot so the server's click acknowledgement has been applied and the UI
 /// resyncs with the bot's real inventory state.
@@ -98,6 +95,8 @@ pub struct BehaviorState {
     last_afk_at: Instant,
     last_movement_at: Instant,
     last_auto_command_at: Instant,
+    /// Next due time for random-range auto-command mode.
+    next_random_auto_command_at: Option<Instant>,
     /// When `Some`, the bot is currently walking and should stop at this time.
     stop_walking_at: Option<Instant>,
     last_autosell_at: Instant,
@@ -133,6 +132,9 @@ impl BehaviorState {
                 auto_command_enabled: config.auto_command_enabled,
                 auto_command_text: config.auto_command_text.clone(),
                 auto_command_interval_minutes: config.auto_command_interval_minutes,
+                auto_command_span_enabled: config.auto_command_span_enabled,
+                auto_command_span_min_seconds: config.auto_command_span_min_seconds,
+                auto_command_span_max_seconds: config.auto_command_span_max_seconds,
                 tpauto_enabled: config.tpauto_enabled,
                 tpauto_allowlist: config.tpauto_allowlist.clone(),
                 autosell_enabled: config.autosell_enabled,
@@ -142,6 +144,7 @@ impl BehaviorState {
             last_afk_at: now,
             last_movement_at: now,
             last_auto_command_at: now,
+            next_random_auto_command_at: None,
             stop_walking_at: None,
             last_autosell_at: now,
             autosell_phase: AutoSellPhase::Idle,
@@ -158,6 +161,8 @@ impl BehaviorState {
     /// Apply a live settings update (from a `Command::Configure`).
     pub fn update_config(&mut self, config: BehaviorConfig) {
         self.config = config;
+        // Re-arm random scheduling from "now" whenever span settings change.
+        self.next_random_auto_command_at = None;
     }
 
     /// Enqueue a scheduled chat command as a foreground one-shot task. Auto-sell
@@ -278,16 +283,33 @@ impl BehaviorState {
         if self.config.auto_command_enabled {
             let text = self.config.auto_command_text.trim().to_string();
             if !text.is_empty() {
-                let interval =
-                    Duration::from_secs(self.config.auto_command_interval_minutes.max(1) * 60);
-                if now.duration_since(self.last_auto_command_at) >= interval {
-                    self.last_auto_command_at = now;
-                    bot.chat(text.clone());
-                    emit(&OutEvent::BehaviorLog {
-                        message: format!("Auto-command sent: {text}"),
-                    });
+                if self.config.auto_command_span_enabled {
+                    if self.next_random_auto_command_at.is_none() {
+                        self.next_random_auto_command_at =
+                            Some(now + random_auto_command_delay(&self.config));
+                    }
+                    if now >= self.next_random_auto_command_at.expect("set above") {
+                        bot.chat(text.clone());
+                        self.next_random_auto_command_at =
+                            Some(now + random_auto_command_delay(&self.config));
+                        emit(&OutEvent::BehaviorLog {
+                            message: format!("Auto-command sent (random range): {text}"),
+                        });
+                    }
+                } else {
+                    let interval =
+                        Duration::from_secs(self.config.auto_command_interval_minutes.max(1) * 60);
+                    if now.duration_since(self.last_auto_command_at) >= interval {
+                        self.last_auto_command_at = now;
+                        bot.chat(text.clone());
+                        emit(&OutEvent::BehaviorLog {
+                            message: format!("Auto-command sent: {text}"),
+                        });
+                    }
                 }
             }
+        } else {
+            self.next_random_auto_command_at = None;
         }
 
         self.tick_foreground(bot, now);
@@ -384,7 +406,7 @@ impl BehaviorState {
                             });
                         }
                         None => emit(&OutEvent::BehaviorLog {
-                            message: "CleanSpawner: no spawner within reach".into(),
+                            message: "Finden von Spawner fehlgeschlagen".into(),
                         }),
                     },
                     ForegroundTask::MoveItem { from, to } => {
@@ -424,9 +446,9 @@ impl BehaviorState {
     /// player's own inventory), false while still waiting for it to open.
     ///
     /// Only the container's own slots are dropped (the player's 36 slots are the
-    /// last slots of the menu and are left untouched). Scanning stops after
-    /// [`SPAWNER_EMPTY_STREAK`] consecutive empty slots — but a single gap does
-    /// not abort, so items after an empty slot are still processed.
+    /// last slots of the menu and are left untouched). The task finishes once
+    /// the 3rd slot of the top row (container slot index 2) is empty, matching
+    /// the requested stop condition.
     fn try_clean_spawner_container(&mut self, bot: &Client) -> bool {
         let Ok(inv) = bot.get_inventory() else {
             return false;
@@ -436,28 +458,30 @@ impl BehaviorState {
             return false;
         }
 
-        let mut dropped = 0;
+        let mut dropped = 0usize;
         if let Some(slots) = inv.slots() {
             let container_len = slots.len().saturating_sub(36);
-            let mut empty_streak = 0;
+            // Stop condition: as soon as the 3rd slot in the top row is empty.
+            if container_len > 2 && !slots[2].is_present() {
+                inv.close();
+                emit(&OutEvent::BehaviorLog {
+                    message: "Spawner aufgeräumt und geschlossen".into(),
+                });
+                return true;
+            }
             for slot in 0..container_len {
                 if slots[slot].is_present() {
                     inv.click(ThrowClick::All { slot: slot as u16 });
                     dropped += 1;
-                    empty_streak = 0;
-                } else {
-                    empty_streak += 1;
-                    if empty_streak >= SPAWNER_EMPTY_STREAK {
-                        break;
-                    }
                 }
             }
         }
-        inv.close();
-        emit(&OutEvent::BehaviorLog {
-            message: format!("CleanSpawner: dropped {dropped} stack(s), closing container"),
-        });
-        true
+        if dropped > 0 {
+            emit(&OutEvent::BehaviorLog {
+                message: format!("CleanSpawner: dropped {dropped} stack(s)"),
+            });
+        }
+        false
     }
 
     /// Drives the periodic auto-sell cycle. When enabled, every
@@ -623,6 +647,20 @@ fn inventory_is_mutable(bot: &Client) -> bool {
     matches!(bot.get_inventory(), Ok(inv) if inv.id() == 0)
 }
 
+fn random_auto_command_delay(cfg: &BehaviorConfig) -> Duration {
+    let mut min_s = cfg.auto_command_span_min_seconds.max(1);
+    let mut max_s = cfg.auto_command_span_max_seconds.max(1);
+    if min_s > max_s {
+        std::mem::swap(&mut min_s, &mut max_s);
+    }
+    let seconds = if min_s == max_s {
+        min_s
+    } else {
+        rand::thread_rng().gen_range(min_s..=max_s)
+    };
+    Duration::from_secs(seconds)
+}
+
 /// A cheap signature of the bot's current menu inventory (menu id + each slot's
 /// item kind and count). Changes whenever the real inventory changes, which lets
 /// the tick loop re-emit a snapshot so the UI never shows a stale "ghost" slot.
@@ -775,10 +813,14 @@ fn parse_sell_amount(text: &str) -> Option<f64> {
         || lower.contains("sale")
         || lower.contains("selling")
         || lower.contains("verkauft")
-        || lower.contains("verkauf");
+        || lower.contains("verkauf")
+        // Servers often format sell payouts as a plain "+$X" line with base/bonus
+        // details and no explicit "sold" keyword.
+        || lower.contains("+$")
+        || lower.contains("+ $")
+        || lower.contains("bonus");
     let is_transfer = lower.contains("pay")
         || lower.contains("paid")
-        || lower.contains("received")
         || lower.contains("bezahlt")
         || lower.contains("erhalten von");
     if !is_sale || is_transfer {
@@ -896,6 +938,10 @@ mod tests {
             Some(500.0)
         );
         assert_eq!(parse_sell_amount("Verkauft für $1,250"), Some(1250.0));
+        assert_eq!(
+            parse_sell_amount("CHAT <HUGE> +$14,492.50 (Basis: $8,525.00, Bonus: +$5,967.50 durch 1.7x)"),
+            Some(14492.50)
+        );
     }
 
     #[test]
