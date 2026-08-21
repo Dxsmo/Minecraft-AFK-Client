@@ -3,7 +3,7 @@ import type { ClientRuntimeConfig, ClientStatusSnapshot, ConsoleEvent } from "./
 import { prisma } from "../database/prisma.js";
 import { persistConsoleLog } from "../logging/consoleLogService.js";
 import { logger } from "../logging/logger.js";
-import { parseAllowlist, parseDailyTimes } from "../accounts/service.js";
+import { parseAllowlist, parseDailyTimes, parseHomes } from "../accounts/service.js";
 import type { MinecraftAccount } from "@prisma/client";
 
 export type ConsoleEventListener = (event: ConsoleEvent) => void;
@@ -40,6 +40,7 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     dailyCommandTimes: parseDailyTimes(account.dailyCommandTimes),
     balanceEnabled: account.balanceEnabled,
     balanceCommand: account.balanceCommand,
+    homes: parseHomes(account.homesJson),
   };
 }
 

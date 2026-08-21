@@ -72,6 +72,8 @@ export interface ClientRuntimeConfig {
   balanceEnabled: boolean;
   /** Command used to query the balance (e.g. "/balance"). */
   balanceCommand: string;
+  /** Persisted /homes names from previous joins. */
+  homes: string[];
 }
 
 /** Microsoft device-code sign-in details, shown live in the account console/UI. */

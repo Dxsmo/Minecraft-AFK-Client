@@ -105,6 +105,7 @@ export class MinecraftClient extends EventEmitter {
   constructor(private config: ClientRuntimeConfig) {
     super();
     this.log = accountLogger(config.id, config.name);
+    this.homes = [...(config.homes ?? [])];
     this.schedulerTimer = setInterval(() => this.runScheduledTasks(), SCHEDULER_TICK_MS);
   }
 
@@ -438,7 +439,7 @@ export class MinecraftClient extends EventEmitter {
         this.setStatus("ONLINE");
         this.emitConsole("SYSTEM", "Spawned into the world");
         // Auto-refresh saved homes after each successful join.
-        this.homesQueryUntil = Date.now() + 10_000;
+        this.homesQueryUntil = Date.now() + 60_000;
         this.sendToBot({ type: "chat", text: "/homes" });
         break;
 
@@ -654,12 +655,23 @@ export class MinecraftClient extends EventEmitter {
   }
 
   private tryUpdateHomesFromChat(message: string): void {
+    // Always parse explicit "/home <name>" mentions; users may run /homes
+    // manually at any time and still expect shortcuts to update.
+    const explicit = Array.from(message.matchAll(/\/home\s+([A-Za-z0-9_\-]+)/gi)).map((m) => m[1]);
+    if (explicit.length > 0) {
+      this.applyHomes(explicit);
+      return;
+    }
+
     if (Date.now() > this.homesQueryUntil) return;
     const parsed = this.parseHomesLine(message);
     if (parsed === null) return;
-    const next = Array.from(new Set(parsed.map((h) => h.trim()).filter(Boolean)));
-    const changed = next.length !== this.homes.length || next.some((h, i) => h !== this.homes[i]);
-    if (!changed) return;
+    this.applyHomes(parsed);
+  }
+
+  private applyHomes(candidates: string[]): void {
+    const next = Array.from(new Set(candidates.map((h) => h.trim()).filter(Boolean)));
+    if (next.length === this.homes.length && next.every((h, i) => h === this.homes[i])) return;
     this.homes = next;
     this.emit("homes", { minecraftAccountId: this.config.id, homes: this.homes });
     this.emitStatus();
@@ -679,12 +691,13 @@ export class MinecraftClient extends EventEmitter {
     const cmdMatches = Array.from(line.matchAll(/\/home\s+([A-Za-z0-9_\-]+)/g)).map((m) => m[1]);
     if (cmdMatches.length > 0) return cmdMatches;
 
-    // Fallback: "Homes: Name1, Name2, Name3"
-    if (lower.includes("homes")) {
+    // Fallback: "Homes: Name1, Name2, Name3" / "Häuser: ..."
+    if (lower.includes("homes") || lower.includes("häuser") || lower.includes("haeuser")) {
       const idx = line.indexOf(":");
       if (idx !== -1) {
         const tail = line.slice(idx + 1);
         const names = tail
+          .replace(/[\[\]()]/g, " ")
           .split(/[,\|]/)
           .map((s) => s.trim())
           .filter((s) => /^[A-Za-z0-9_\-]{1,32}$/.test(s));
