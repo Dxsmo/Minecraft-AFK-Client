@@ -261,18 +261,26 @@ export function AccountDetailPage() {
             </button>
           </form>
           {homes.length > 0 && (
-            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-              {homes.map((home) => (
-                <button
-                  key={home}
-                  type="button"
-                  onClick={() => sendCommand(`/home ${home}`)}
-                  className="btn btn-ghost btn-sm"
-                  disabled={liveStatus !== "ONLINE"}
-                >
-                  /home {home}
-                </button>
-              ))}
+            <div
+              className="rounded-xl p-2.5"
+              style={{ border: "1px solid var(--border)", backgroundColor: "var(--surface)" }}
+            >
+              <div className="mb-2 text-center text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
+                Homes
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {homes.map((home) => (
+                  <button
+                    key={home}
+                    type="button"
+                    onClick={() => sendCommand(`/home ${home}`)}
+                    className="btn btn-secondary btn-sm"
+                    disabled={liveStatus !== "ONLINE"}
+                  >
+                    Home {home}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {account.autoSellEnabled && id && <EarningsBox accountId={id} />}
