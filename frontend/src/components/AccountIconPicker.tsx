@@ -10,6 +10,12 @@ function displayName(name: string): string {
   return name.replace(/_/g, " ");
 }
 
+// The full catalogue is ~5.1k icons (every inventory sprite the Minecraft
+// Wiki has). Rendering that many <img> tags at once would be slow, so the
+// grid only ever renders a bounded slice — search already narrows results
+// down to a manageable, relevant set for any real query.
+const MAX_RENDERED_RESULTS = 200;
+
 /**
  * Small square button showing the account's chosen Minecraft item/block icon
  * (or a neutral placeholder). Clicking it opens a searchable popover backed by
@@ -45,9 +51,14 @@ export function AccountIconPicker({
 
   useEffect(() => {
     if (!open) return;
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setResults([]);
+      return;
+    }
     const t = setTimeout(() => {
       api
-        .get<string[]>(`/assets/items?q=${encodeURIComponent(query.trim())}`)
+        .get<string[]>(`/assets/items?q=${encodeURIComponent(trimmed)}`)
         .then(setResults)
         .catch(() => setResults([]));
     }, 150);
@@ -146,7 +157,7 @@ export function AccountIconPicker({
               className="input w-full text-sm"
             />
             <div className="mt-2 grid max-h-64 grid-cols-6 gap-1 overflow-y-auto">
-              {results.map((name) => (
+              {results.slice(0, MAX_RENDERED_RESULTS).map((name) => (
                 <button
                   key={name}
                   type="button"
@@ -169,12 +180,22 @@ export function AccountIconPicker({
                   />
                 </button>
               ))}
-              {results.length === 0 && (
+              {!query.trim() && (
+                <p className="col-span-6 py-3 text-center text-xs" style={{ color: "var(--text-subtle)" }}>
+                  Type to search 5,073 icons…
+                </p>
+              )}
+              {query.trim() !== "" && results.length === 0 && (
                 <p className="col-span-6 py-3 text-center text-xs" style={{ color: "var(--text-subtle)" }}>
                   No matches
                 </p>
               )}
             </div>
+            {results.length > MAX_RENDERED_RESULTS && (
+              <p className="mt-1 text-center text-[11px]" style={{ color: "var(--text-subtle)" }}>
+                Showing first {MAX_RENDERED_RESULTS} of {results.length} — refine your search
+              </p>
+            )}
             {iconName && (
               <button
                 type="button"

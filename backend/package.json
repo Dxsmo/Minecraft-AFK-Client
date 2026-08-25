@@ -26,7 +26,6 @@
     "dotenv": "^16.4.7",
     "fastify": "^5.2.1",
     "fastify-plugin": "^5.0.1",
-    "minecraft-assets": "^1.18.0",
     "nanoid": "^5.0.9",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",

@@ -55,8 +55,9 @@ export async function buildApp() {
   app.get("/api/health", async () => ({ status: "ok" }));
 
   // Public item/block texture endpoint (no auth — textures aren't sensitive).
-  // Served from the minecraft-assets package so the inventory UI can show real
-  // Minecraft icons instead of raw ids. 404 lets the frontend fall back.
+  // Served from the pre-fetched Minecraft Wiki icon set (see
+  // scripts/fetch-invicons.mjs) so the inventory UI can show real Minecraft
+  // icons instead of raw ids. 404 lets the frontend fall back.
   app.get("/api/assets/item/:name", async (req, reply) => {
     const raw = String((req.params as { name: string }).name).replace(/\.png$/i, "");
     const buf = getItemTexture(raw);
@@ -84,12 +85,12 @@ export async function buildApp() {
         return tokens.every((t) => display.includes(t) || name.includes(t));
       });
     }
-    // Cap comfortably above the full texture catalogue size (~1.3k) so every
-    // texture remains reachable via search; only the query-less "browse all"
+    // Cap comfortably above the full icon catalogue size (~5.1k) so every
+    // icon remains reachable via search; only the query-less "browse all"
     // case is ever near this limit, and thumbnails load lazily client-side.
     return reply
       .header("Cache-Control", "public, max-age=604800, immutable")
-      .send(filtered.slice(0, 1500));
+      .send(filtered.slice(0, 5200));
   });
 
   app.setErrorHandler((err: import("fastify").FastifyError, req, reply) => {
