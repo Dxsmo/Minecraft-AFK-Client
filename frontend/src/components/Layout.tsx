@@ -64,9 +64,9 @@ export function Layout() {
   const initial = user?.username?.charAt(0).toUpperCase() ?? "?";
 
   return (
-    <div className="flex min-h-screen" style={{ backgroundColor: "var(--bg)" }}>
+    <div className="flex h-screen overflow-hidden" style={{ backgroundColor: "var(--bg)" }}>
       <aside
-        className="flex w-60 shrink-0 flex-col px-3 py-5"
+        className="flex w-60 shrink-0 flex-col overflow-y-auto px-3 py-5"
         style={{ borderRight: "1px solid var(--border)", backgroundColor: "var(--bg-elev)" }}
       >
         <div className="flex items-center gap-2.5 px-2">

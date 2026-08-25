@@ -68,15 +68,28 @@ export async function buildApp() {
   });
 
   // Public list of every valid icon id, for the dashboard account icon picker.
+  // The frontend shows names with "_" replaced by spaces, so matching accepts
+  // the query in either form (e.g. "diamond sword" finds "diamond_sword").
+  // Every texture the game has is included — nothing is pre-filtered out.
   app.get("/api/assets/items", async (req, reply) => {
-    const q = String((req.query as { q?: string }).q ?? "")
-      .trim()
-      .toLowerCase();
+    const rawQuery = String((req.query as { q?: string }).q ?? "").trim().toLowerCase();
     const all = listItemNames();
-    const filtered = q ? all.filter((name) => name.includes(q)) : all;
+    let filtered = all;
+    if (rawQuery) {
+      // Match all whitespace-separated tokens (in any order) against the
+      // display form of the name, so partial multi-word searches work too.
+      const tokens = rawQuery.split(/\s+/).filter(Boolean);
+      filtered = all.filter((name) => {
+        const display = name.replace(/_/g, " ");
+        return tokens.every((t) => display.includes(t) || name.includes(t));
+      });
+    }
+    // Cap comfortably above the full texture catalogue size (~1.3k) so every
+    // texture remains reachable via search; only the query-less "browse all"
+    // case is ever near this limit, and thumbnails load lazily client-side.
     return reply
       .header("Cache-Control", "public, max-age=604800, immutable")
-      .send(filtered.slice(0, 200));
+      .send(filtered.slice(0, 1500));
   });
 
   app.setErrorHandler((err: import("fastify").FastifyError, req, reply) => {

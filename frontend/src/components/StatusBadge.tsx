@@ -1,7 +1,7 @@
 import type { ClientStatus } from "../lib/types";
 
-const CONFIG: Record<ClientStatus, { label: string; color: string; bg: string; pulse?: boolean }> = {
-  ONLINE: { label: "Online", color: "#34d399", bg: "rgba(16,185,129,0.12)" },
+const CONFIG: Record<ClientStatus, { label: string; color: string; bg: string; pulse?: boolean; glow?: boolean }> = {
+  ONLINE: { label: "Online", color: "#34d399", bg: "rgba(16,185,129,0.12)", glow: true },
   OFFLINE: { label: "Offline", color: "#8a8a93", bg: "rgba(140,140,150,0.10)" },
   CONNECTING: { label: "Connecting", color: "#fbbf24", bg: "rgba(251,191,36,0.12)", pulse: true },
   RECONNECTING: { label: "Reconnecting", color: "#fbbf24", bg: "rgba(251,191,36,0.12)", pulse: true },
@@ -17,7 +17,7 @@ export function StatusBadge({ status }: { status: ClientStatus }) {
       style={{ color: c.color, backgroundColor: c.bg }}
     >
       <span
-        className={`h-1.5 w-1.5 rounded-full ${c.pulse ? "animate-pulse" : ""}`}
+        className={`h-1.5 w-1.5 rounded-full ${c.pulse ? "animate-pulse" : ""} ${c.glow ? "glow-pulse" : ""}`}
         style={{ backgroundColor: c.color }}
       />
       {c.label}

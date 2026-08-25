@@ -26,23 +26,21 @@ export function LoginPage() {
   }
 
   return (
-    <div className="app-aurora flex min-h-screen items-center justify-center px-4">
-      <div className="w-full max-w-sm">
-        <div className="mb-6 flex items-center gap-2.5">
+    <div className="app-aurora relative flex min-h-screen items-center justify-center px-4">
+      <div className="relative w-full max-w-sm animate-fadein">
+        <div className="mb-7 flex flex-col items-center text-center">
           <span
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-base font-bold"
+            className="glow-ring flex h-12 w-12 items-center justify-center rounded-xl text-xl font-bold"
             style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
           >
             ◆
           </span>
-          <div className="leading-tight">
-            <h1 className="text-sm font-semibold" style={{ color: "var(--text)" }}>
-              Minecraft AFK
-            </h1>
-            <p className="text-[11px] font-semibold" style={{ color: "var(--accent)" }}>
-              Hosted by Desmodus
-            </p>
-          </div>
+          <h1 className="mt-3 text-base font-semibold" style={{ color: "var(--text)" }}>
+            Minecraft AFK
+          </h1>
+          <p className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--accent)" }}>
+            Hosted by Desmodus
+          </p>
         </div>
 
         <div className="card p-7">
@@ -76,7 +74,22 @@ export function LoginPage() {
             </button>
           </form>
         </div>
+
+        <div className="mt-5 flex items-center justify-center gap-4 text-[11px]" style={{ color: "var(--text-subtle)" }}>
+          <FeaturePill label="Live console" />
+          <FeaturePill label="Multi-account" />
+          <FeaturePill label="Auto-reconnect" />
+        </div>
       </div>
     </div>
+  );
+}
+
+function FeaturePill({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="h-1 w-1 rounded-full" style={{ backgroundColor: "var(--accent)" }} />
+      {label}
+    </span>
   );
 }

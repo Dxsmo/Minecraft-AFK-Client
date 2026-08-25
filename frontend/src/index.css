@@ -41,11 +41,30 @@ body {
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
-/* Subtle depth for full-page auth screens. */
+/* Subtle depth for full-page auth screens: layered aurora glow + a faint dot
+   grid so the background feels intentional rather than flat, while staying
+   restrained (no loud colours, no movement). */
 .app-aurora {
+  position: relative;
   background:
-    radial-gradient(55rem 38rem at 50% -12rem, rgba(16, 185, 129, 0.08), transparent 70%),
+    radial-gradient(48rem 32rem at 18% -10%, rgba(16, 185, 129, 0.1), transparent 60%),
+    radial-gradient(40rem 30rem at 100% 10%, rgba(96, 165, 250, 0.06), transparent 65%),
+    radial-gradient(60rem 40rem at 50% 110%, rgba(16, 185, 129, 0.05), transparent 70%),
     var(--bg);
+}
+.app-aurora::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: radial-gradient(60rem 40rem at 50% 20%, black, transparent 75%);
+  pointer-events: none;
+}
+
+/* Soft ambient glow ring behind a brand mark / avatar. */
+.glow-ring {
+  box-shadow: 0 0 0 1px var(--border), 0 0 24px -4px var(--accent);
 }
 
 @layer components {
@@ -82,7 +101,7 @@ body {
   }
   .input:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
+    box-shadow: 0 0 0 3px var(--accent-soft), 0 0 12px -4px var(--accent);
   }
   select.input option {
     background-color: var(--bg-elev);
@@ -188,9 +207,9 @@ body {
     color: var(--text);
   }
   .nav-active {
-    background-color: var(--surface-hover);
     color: var(--text);
-    box-shadow: inset 2px 0 0 var(--accent);
+    background: linear-gradient(90deg, var(--accent-soft), transparent);
+    box-shadow: inset 2px 0 0 var(--accent), 0 0 16px -6px var(--accent);
   }
 
   /* Terminal-style console, intentionally distinct from the rest of the app. */
@@ -315,6 +334,27 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .tab-panel {
+    animation: none;
+  }
+}
+
+/* Soft breathing glow for "live" indicators (e.g. an ONLINE status dot). */
+@keyframes glow-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 currentColor;
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 8px 1px currentColor;
+    opacity: 0.85;
+  }
+}
+.glow-pulse {
+  animation: glow-pulse 2.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .glow-pulse {
     animation: none;
   }
 }
