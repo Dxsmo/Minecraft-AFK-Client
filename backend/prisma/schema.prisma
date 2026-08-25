@@ -145,9 +145,6 @@ model MinecraftAccount {
   status             ClientStatus @default(OFFLINE)
   // Persistent dashboard ordering key (smaller = earlier in list).
   dashboardOrder     Int      @default(0)
-  // Optional Minecraft item/block texture id shown as a small icon on the
-  // dashboard row (e.g. "diamond_sword"). Purely cosmetic, null = no icon.
-  iconName           String?
   // Persisted "should be running" intent: set when the user starts a client and
   // cleared when they stop it. On process/host restart the manager re-connects
   // every account whose autoStart is true, so previously-active bots come back

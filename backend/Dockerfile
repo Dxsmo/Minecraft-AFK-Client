@@ -26,16 +26,6 @@ COPY rust-bot/Cargo.toml rust-bot/Cargo.lock ./
 COPY rust-bot/src ./src
 RUN cargo build --release
 
-# ---- Assets stage: fetch inventory icon sprites from the Minecraft Wiki ----
-# Downloads the full "Category:InvSprite files" set (~5073 item/block icons)
-# once via the public MediaWiki API. Kept as its own early stage so unrelated
-# source changes don't invalidate this layer / re-trigger ~5k downloads;
-# only bumps if fetch-invicons.mjs itself changes.
-FROM node:20-bookworm-slim AS assets-builder
-WORKDIR /assets
-COPY scripts/fetch-invicons.mjs ./
-RUN node fetch-invicons.mjs
-
 # ---- Build stage: compile TypeScript + generate the Prisma client ----
 FROM node:20-bookworm-slim AS builder
 WORKDIR /app
@@ -80,9 +70,6 @@ COPY prisma ./prisma
 # Compiled Azalea bot binary from the Rust build stage.
 COPY --from=rust-builder /rust-bot/target/release/azalea-bot /app/azalea-bot
 RUN chmod +x /app/azalea-bot
-
-# Pre-fetched inventory icon sprites (dashboard account icon picker).
-COPY --from=assets-builder /assets/invicons ./assets/invicons
 
 RUN mkdir -p /app/data
 VOLUME ["/app/data"]

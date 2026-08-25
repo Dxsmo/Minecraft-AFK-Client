@@ -6,7 +6,6 @@ import { useDashboardSocket } from "../lib/sockets";
 import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { CreateAccountDialog } from "../components/CreateAccountDialog";
-import { AccountIconPicker } from "../components/AccountIconPicker";
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -119,10 +118,6 @@ export function DashboardPage() {
     }
   }
 
-  function updateAccountIcon(id: string, iconName: string | null) {
-    setAccounts((prev) => (prev ? prev.map((a) => (a.id === id ? { ...a, iconName } : a)) : prev));
-  }
-
   return (
     <div className="space-y-6">
       <div className="flex items-end justify-between">
@@ -198,11 +193,6 @@ export function DashboardPage() {
                       ↓
                     </button>
                   </div>
-                  <AccountIconPicker
-                    accountId={account.id}
-                    iconName={account.iconName ?? null}
-                    onChanged={(iconName) => updateAccountIcon(account.id, iconName)}
-                  />
                 </div>
                 <div
                   className="min-w-0 flex-1"

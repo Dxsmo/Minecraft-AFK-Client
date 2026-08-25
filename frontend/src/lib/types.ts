@@ -93,7 +93,6 @@ export interface MinecraftAccount {
   lastBalanceAt: string | null;
   homes: string[];
   dashboardOrder: number;
-  iconName: string | null;
   status: ClientStatus;
   createdAt: string;
   updatedAt: string;

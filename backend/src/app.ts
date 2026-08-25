@@ -13,7 +13,7 @@ import accountsRoutes from "./accounts/routes.js";
 import systemRoutes from "./api/systemRoutes.js";
 import auditLogRoutes from "./api/auditLogRoutes.js";
 import registerWebsocketRoutes from "./websocket/routes.js";
-import { getItemTexture, listItemNames } from "./assets/itemTextures.js";
+import { getItemTexture } from "./assets/itemTextures.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -55,9 +55,8 @@ export async function buildApp() {
   app.get("/api/health", async () => ({ status: "ok" }));
 
   // Public item/block texture endpoint (no auth — textures aren't sensitive).
-  // Served from the pre-fetched Minecraft Wiki icon set (see
-  // scripts/fetch-invicons.mjs) so the inventory UI can show real Minecraft
-  // icons instead of raw ids. 404 lets the frontend fall back.
+  // Served from the minecraft-assets package so the inventory UI can show real
+  // Minecraft icons instead of raw ids. 404 lets the frontend fall back.
   app.get("/api/assets/item/:name", async (req, reply) => {
     const raw = String((req.params as { name: string }).name).replace(/\.png$/i, "");
     const buf = getItemTexture(raw);
@@ -66,31 +65,6 @@ export async function buildApp() {
       .header("Content-Type", "image/png")
       .header("Cache-Control", "public, max-age=604800, immutable")
       .send(buf);
-  });
-
-  // Public list of every valid icon id, for the dashboard account icon picker.
-  // The frontend shows names with "_" replaced by spaces, so matching accepts
-  // the query in either form (e.g. "diamond sword" finds "diamond_sword").
-  // Every texture the game has is included — nothing is pre-filtered out.
-  app.get("/api/assets/items", async (req, reply) => {
-    const rawQuery = String((req.query as { q?: string }).q ?? "").trim().toLowerCase();
-    const all = listItemNames();
-    let filtered = all;
-    if (rawQuery) {
-      // Match all whitespace-separated tokens (in any order) against the
-      // display form of the name, so partial multi-word searches work too.
-      const tokens = rawQuery.split(/\s+/).filter(Boolean);
-      filtered = all.filter((name) => {
-        const display = name.replace(/_/g, " ");
-        return tokens.every((t) => display.includes(t) || name.includes(t));
-      });
-    }
-    // Cap comfortably above the full icon catalogue size (~5.1k) so every
-    // icon remains reachable via search; only the query-less "browse all"
-    // case is ever near this limit, and thumbnails load lazily client-side.
-    return reply
-      .header("Cache-Control", "public, max-age=604800, immutable")
-      .send(filtered.slice(0, 5200));
   });
 
   app.setErrorHandler((err: import("fastify").FastifyError, req, reply) => {
