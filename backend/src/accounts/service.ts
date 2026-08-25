@@ -85,6 +85,7 @@ const publicAccountSelect = {
   homesJson: true,
   status: true,
   dashboardOrder: true,
+  iconName: true,
   createdAt: true,
   updatedAt: true,
   createdBy: { select: { id: true, username: true } },

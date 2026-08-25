@@ -24,14 +24,27 @@ function formatTime(iso: string): string {
 }
 
 export function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLogEntry[]; className?: string }) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Tracks whether the user is (roughly) scrolled to the bottom already, so we only
+  // auto-follow new output when they haven't scrolled up to read history.
+  const stickToBottomRef = useRef(true);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = containerRef.current;
+    if (!el || !stickToBottomRef.current) return;
+    // Scroll only this container - never the page/ancestors (unlike scrollIntoView).
+    el.scrollTop = el.scrollHeight;
   }, [logs.length]);
 
+  const handleScroll = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distanceFromBottom < 48;
+  };
+
   return (
-    <div className={`console-output ${className}`}>
+    <div ref={containerRef} onScroll={handleScroll} className={`console-output ${className}`}>
       {logs.length === 0 && (
         <p style={{ color: "#52525b" }}>No console output yet. Start the client to see live output.</p>
       )}
@@ -46,7 +59,6 @@ export function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLo
           <span style={{ color: TYPE_STYLES[log.type] }}>{log.message}</span>
         </div>
       ))}
-      <div ref={bottomRef} />
     </div>
   );
 }

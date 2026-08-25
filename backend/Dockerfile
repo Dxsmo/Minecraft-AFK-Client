@@ -6,7 +6,21 @@
 # binary links against a compatible glibc — the default trixie-based
 # rustlang/rust:nightly produces a binary that needs a newer glibc than
 # node:20-bookworm-slim provides.
-FROM rustlang/rust:nightly-bookworm AS rust-builder
+#
+# Pinned to an EXACT nightly date (via rustup) rather than the floating
+# "nightly"/"nightly-bookworm" tag. Azalea relies on the unstable
+# `generic_const_exprs` feature (see azalea-core's FixedBitSet), which is
+# still actively changing upstream in rustc — a newer nightly can (and did)
+# start rejecting code that an older nightly accepted. Pinning makes builds
+# reproducible; bump RUST_NIGHTLY_DATE deliberately (and re-verify the build)
+# rather than silently riding whatever nightly happens to be current.
+FROM debian:bookworm-slim AS rust-builder
+ARG RUST_NIGHTLY_DATE=2026-08-11
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
+    --default-toolchain "nightly-${RUST_NIGHTLY_DATE}"
+ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /rust-bot
 COPY rust-bot/Cargo.toml rust-bot/Cargo.lock ./
 COPY rust-bot/src ./src

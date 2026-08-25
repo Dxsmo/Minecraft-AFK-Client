@@ -12,6 +12,11 @@ services:
       # frontend/Caddy container reaches the backend by service name.
       HOST: "0.0.0.0"
       PORT: "4000"
+      # Containers default to UTC, which silently shifts "Daily" auto-command
+      # times and scheduled tasks away from the times shown/entered in the
+      # browser. Set to your local timezone so scheduling matches wall-clock
+      # time as seen by users. Override via TZ in .env if needed.
+      TZ: "${TZ:-Europe/Berlin}"
     volumes:
       - backend_data:/app/data
     healthcheck:

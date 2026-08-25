@@ -103,6 +103,8 @@ export const updateAccountSchema = z.object({
     .transform((times) => (times ? JSON.stringify(Array.from(new Set(times)).sort()) : undefined)),
   balanceEnabled: z.boolean().optional(),
   balanceCommand: z.string().max(64).optional(),
+  // Cosmetic dashboard icon id (a minecraft-assets item/block name), or null to clear it.
+  iconName: z.string().trim().max(64).nullable().optional(),
 });
 
 export const assignUsersSchema = z.object({

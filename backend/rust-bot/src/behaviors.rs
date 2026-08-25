@@ -279,8 +279,10 @@ impl BehaviorState {
         }
 
         // Auto-command: type a configured chat message/command at a fixed
-        // interval, independent of the AFK/movement behaviors.
-        if self.config.auto_command_enabled {
+        // interval, independent of the AFK/movement behaviors. "Zeitspanne"
+        // (random-range) mode is its own independent toggle, so it must run
+        // even if the fixed-interval "Interval" toggle is off.
+        if self.config.auto_command_enabled || self.config.auto_command_span_enabled {
             let text = self.config.auto_command_text.trim().to_string();
             if !text.is_empty() {
                 if self.config.auto_command_span_enabled {

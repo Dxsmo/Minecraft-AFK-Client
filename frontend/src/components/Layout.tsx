@@ -71,7 +71,7 @@ export function Layout() {
       >
         <div className="flex items-center gap-2.5 px-2">
           <span
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-bold"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-sm font-bold shadow-sm"
             style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
           >
             ◆
@@ -80,7 +80,7 @@ export function Layout() {
             <h1 className="text-sm font-semibold" style={{ color: "var(--text)" }}>
               Minecraft AFK
             </h1>
-            <p className="text-[11px] font-semibold" style={{ color: "var(--accent)" }}>
+            <p className="text-[11px] font-medium" style={{ color: "var(--text-subtle)" }}>
               Hosted by Desmodus
             </p>
           </div>
@@ -94,7 +94,7 @@ export function Layout() {
                 key={item.to}
                 to={item.to}
                 className={({ isActive }) =>
-                  `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
+                  `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-all ${
                     isActive ? "nav-active" : "nav-idle"
                   }`
                 }
@@ -105,14 +105,8 @@ export function Layout() {
             ))}
         </nav>
 
-        <div className="mt-auto px-1 pt-4">
-          <div
-            className="mb-2 rounded-lg px-2.5 py-2 text-center text-xs font-semibold"
-            style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
-          >
-            Hosted by Desmodus
-          </div>
-          <p className="text-[10px] font-medium" style={{ color: "var(--text-subtle)" }}>
+        <div className="mt-auto px-1.5 pt-4">
+          <p className="text-[10px] font-medium tracking-wide" style={{ color: "var(--text-subtle)" }}>
             V3.0
           </p>
         </div>
@@ -120,8 +114,8 @@ export function Layout() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header
-          className="flex items-center justify-end gap-3 px-6 py-3"
-          style={{ borderBottom: "1px solid var(--border)" }}
+          className="sticky top-0 z-10 flex items-center justify-end gap-3 px-6 py-3 backdrop-blur"
+          style={{ borderBottom: "1px solid var(--border)", backgroundColor: "rgba(10,10,11,0.75)" }}
         >
           <div className="text-right leading-tight">
             <p className="text-sm font-medium" style={{ color: "var(--text)" }}>

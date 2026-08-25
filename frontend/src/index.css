@@ -53,14 +53,17 @@ body {
     background-color: var(--surface);
     border: 1px solid var(--border);
     border-radius: 0.85rem;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 28px -16px rgba(0, 0, 0, 0.45);
   }
 
   .card-hover {
-    transition: border-color 0.15s ease, background-color 0.15s ease;
+    transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
   }
   .card-hover:hover {
     border-color: var(--border-strong);
     background-color: var(--surface-hover);
+    transform: translateY(-1px);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.24), 0 16px 32px -16px rgba(0, 0, 0, 0.55);
   }
 
   .input {
@@ -103,7 +106,8 @@ body {
     padding: 0.5rem 0.9rem;
     font-size: 0.875rem;
     font-weight: 500;
-    transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, color 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, color 0.15s ease,
+      transform 0.1s ease, box-shadow 0.15s ease;
     cursor: pointer;
     white-space: nowrap;
   }
@@ -111,10 +115,14 @@ body {
     opacity: 0.45;
     cursor: not-allowed;
   }
+  .btn:active:not(:disabled) {
+    transform: scale(0.97);
+  }
 
   .btn-primary {
     background-color: #fafafa;
     color: #0a0a0b;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15), 0 6px 16px -8px rgba(250, 250, 250, 0.25);
   }
   .btn-primary:hover:not(:disabled) {
     background-color: #ffffff;
@@ -196,6 +204,7 @@ body {
     border: 1px solid var(--border);
     padding: 0.9rem 1rem;
     overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   /* Segmented tab bar for the account detail view. */

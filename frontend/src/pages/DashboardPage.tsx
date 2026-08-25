@@ -6,6 +6,7 @@ import { useDashboardSocket } from "../lib/sockets";
 import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { CreateAccountDialog } from "../components/CreateAccountDialog";
+import { AccountIconPicker } from "../components/AccountIconPicker";
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -118,6 +119,10 @@ export function DashboardPage() {
     }
   }
 
+  function updateAccountIcon(id: string, iconName: string | null) {
+    setAccounts((prev) => (prev ? prev.map((a) => (a.id === id ? { ...a, iconName } : a)) : prev));
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-end justify-between">
@@ -170,8 +175,8 @@ export function DashboardPage() {
                 key={account.id}
                 className="card card-hover flex flex-wrap items-center gap-x-4 gap-y-3 p-4"
               >
-                <div className="flex items-center">
-                  <div className="mr-3 flex shrink-0 flex-col gap-1">
+                <div className="flex items-center gap-2.5">
+                  <div className="mr-0.5 flex shrink-0 flex-col gap-1">
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm px-2"
@@ -193,6 +198,11 @@ export function DashboardPage() {
                       ↓
                     </button>
                   </div>
+                  <AccountIconPicker
+                    accountId={account.id}
+                    iconName={account.iconName ?? null}
+                    onChanged={(iconName) => updateAccountIcon(account.id, iconName)}
+                  />
                 </div>
                 <div
                   className="min-w-0 flex-1"
@@ -209,12 +219,19 @@ export function DashboardPage() {
                       {label}
                     </span>
                     <StatusBadge status={status} />
-                    {account.edition === "BEDROCK" && (
+                    {account.edition === "BEDROCK" ? (
                       <span
                         className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
                         style={{ backgroundColor: "rgba(245,158,11,0.15)", color: "var(--warning)" }}
                       >
                         Bedrock
+                      </span>
+                    ) : (
+                      <span
+                        className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        style={{ backgroundColor: "rgba(96,165,250,0.15)", color: "#60a5fa" }}
+                      >
+                        Java
                       </span>
                     )}
                     {account.createdBy && (
@@ -360,10 +377,16 @@ function EyeIcon({ off }: { off: boolean }) {
   );
 }
 
-function StatCard({ label, value, accent }: { label: string; value: number; accent: string }) {  return (
-    <div className="card p-4">
+function StatCard({ label, value, accent }: { label: string; value: number; accent: string }) {
+  return (
+    <div className="card relative overflow-hidden p-4">
+      <span
+        className="absolute inset-y-0 left-0 w-1"
+        style={{ backgroundColor: accent, opacity: 0.7 }}
+        aria-hidden="true"
+      />
       <div className="flex items-center gap-2">
-        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accent }} />
+        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: accent, boxShadow: `0 0 0 3px ${accent}22` }} />
         <p className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
           {label}
         </p>

@@ -35,3 +35,13 @@ export function getItemTexture(rawName: string): Buffer | null {
   cache.set(key, buf);
   return buf;
 }
+
+let cachedNames: string[] | null = null;
+
+/** Sorted list of every item/block id with a texture, for the icon picker UI. */
+export function listItemNames(): string[] {
+  if (cachedNames) return cachedNames;
+  const all = Object.keys(assets?.textureContent ?? {});
+  cachedNames = all.filter((name) => getItemTexture(name) !== null).sort();
+  return cachedNames;
+}

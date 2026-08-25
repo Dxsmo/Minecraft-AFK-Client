@@ -13,7 +13,7 @@ import accountsRoutes from "./accounts/routes.js";
 import systemRoutes from "./api/systemRoutes.js";
 import auditLogRoutes from "./api/auditLogRoutes.js";
 import registerWebsocketRoutes from "./websocket/routes.js";
-import { getItemTexture } from "./assets/itemTextures.js";
+import { getItemTexture, listItemNames } from "./assets/itemTextures.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -65,6 +65,18 @@ export async function buildApp() {
       .header("Content-Type", "image/png")
       .header("Cache-Control", "public, max-age=604800, immutable")
       .send(buf);
+  });
+
+  // Public list of every valid icon id, for the dashboard account icon picker.
+  app.get("/api/assets/items", async (req, reply) => {
+    const q = String((req.query as { q?: string }).q ?? "")
+      .trim()
+      .toLowerCase();
+    const all = listItemNames();
+    const filtered = q ? all.filter((name) => name.includes(q)) : all;
+    return reply
+      .header("Cache-Control", "public, max-age=604800, immutable")
+      .send(filtered.slice(0, 200));
   });
 
   app.setErrorHandler((err: import("fastify").FastifyError, req, reply) => {

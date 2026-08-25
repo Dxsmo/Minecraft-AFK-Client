@@ -166,8 +166,10 @@ export class BehaviorState {
       }
     }
 
-    // Auto-command at its own interval, independent of AFK/movement.
-    if (this.cfg.auto_command_enabled && this.cfg.auto_command_text.trim()) {
+    // Auto-command at its own interval, independent of AFK/movement. The
+    // "Zeitspanne" (random-range) toggle is independent of the fixed-interval
+    // toggle, so it must run even if the "Interval" toggle itself is off.
+    if ((this.cfg.auto_command_enabled || this.cfg.auto_command_span_enabled) && this.cfg.auto_command_text.trim()) {
       if (this.cfg.auto_command_span_enabled) {
         if (this.nextRandomAutoCommandAt == null) {
           this.nextRandomAutoCommandAt = now + this.randomAutoCommandDelayMs();
