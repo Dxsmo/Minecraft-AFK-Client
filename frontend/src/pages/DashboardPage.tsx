@@ -135,7 +135,7 @@ export function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatCard label="Online" value={counts.online} accent="#34d399" />
+        <StatCard label="Online" value={counts.online} accent="#38bdf8" />
         <StatCard label="Offline" value={counts.offline} accent="#8a8a93" />
         <StatCard label="Errors" value={counts.error} accent="#f87171" />
       </div>

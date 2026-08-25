@@ -5,7 +5,7 @@ const TYPE_STYLES: Record<ConsoleLogEntry["type"], string> = {
   SYSTEM: "#60a5fa",
   CHAT: "#e4e4e7",
   SERVER_MESSAGE: "#c4b5fd",
-  USER_COMMAND: "#34d399",
+  USER_COMMAND: "#38bdf8",
   ERROR: "#f87171",
   WARNING: "#fbbf24",
 };

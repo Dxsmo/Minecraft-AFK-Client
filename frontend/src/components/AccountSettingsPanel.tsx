@@ -567,7 +567,7 @@ export function AccountSettingsPanel({
                           checked={locked || assigned.has(u.id)}
                           disabled={locked}
                           onChange={() => toggleUser(u.id)}
-                          className="accent-emerald-500"
+                          className="accent-blue-500"
                         />
                         <span>{u.username}</span>
                         {isSelf && (
@@ -759,7 +759,7 @@ function Toggle({
           type="checkbox"
           checked={checked}
           onChange={(e) => onChange(e.target.checked)}
-          className="accent-emerald-500"
+          className="accent-blue-500"
         />
       </label>
       {description && (

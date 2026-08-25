@@ -123,7 +123,7 @@ export function UsersPage() {
                 <Td><span style={{ color: "var(--text)" }} className="font-medium">{u.username}</span></Td>
                 <Td>{u.role}</Td>
                 <Td>
-                  <span style={{ color: u.status === "ACTIVE" ? "#34d399" : "var(--text-subtle)" }}>{u.status}</span>
+                  <span style={{ color: u.status === "ACTIVE" ? "#38bdf8" : "var(--text-subtle)" }}>{u.status}</span>
                 </Td>
                 <Td>{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : "Never"}</Td>
                 <Td>

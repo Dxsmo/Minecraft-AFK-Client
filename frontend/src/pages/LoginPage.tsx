@@ -30,10 +30,10 @@ export function LoginPage() {
       <div className="relative w-full max-w-sm animate-fadein">
         <div className="mb-7 flex flex-col items-center text-center">
           <span
-            className="glow-ring flex h-12 w-12 items-center justify-center rounded-xl text-xl font-bold"
-            style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+            className="glow-ring flex h-14 w-14 items-center justify-center rounded-xl p-2.5"
+            style={{ backgroundColor: "var(--accent-soft)" }}
           >
-            ◆
+            <img src="/favicon.png" alt="" className="h-full w-full object-contain" />
           </span>
           <h1 className="mt-3 text-base font-semibold" style={{ color: "var(--text)" }}>
             Minecraft AFK

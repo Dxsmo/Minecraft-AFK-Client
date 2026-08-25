@@ -71,10 +71,10 @@ export function Layout() {
       >
         <div className="flex items-center gap-2.5 px-2">
           <span
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-sm font-bold shadow-sm"
-            style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
+            className="glow-ring flex h-9 w-9 shrink-0 items-center justify-center rounded-lg p-1.5"
+            style={{ backgroundColor: "var(--accent-soft)" }}
           >
-            ◆
+            <img src="/favicon.png" alt="" className="h-full w-full object-contain" />
           </span>
           <div className="leading-tight">
             <h1 className="text-sm font-semibold" style={{ color: "var(--text)" }}>
