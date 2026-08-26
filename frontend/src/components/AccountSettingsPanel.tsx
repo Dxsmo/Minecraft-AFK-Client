@@ -531,7 +531,7 @@ export function AccountSettingsPanel({
                   />
                 </div>
                 <Field label="Interval">
-                  <NumberInput value={autoSellIntervalSeconds} onChange={setAutoSellIntervalSeconds} min={1} max={3600} suffix="s" />
+                  <NumberInput value={autoSellIntervalSeconds} onChange={setAutoSellIntervalSeconds} min={0.5} max={3600} step={0.5} suffix="s" />
                 </Field>
               </>
             )}
@@ -712,12 +712,14 @@ function NumberInput({
   onChange,
   min,
   max,
+  step = 1,
   suffix,
 }: {
   value: number;
   onChange: (v: number) => void;
   min: number;
   max: number;
+  step?: number;
   suffix?: string;
 }) {
   return (
@@ -726,6 +728,7 @@ function NumberInput({
         type="number"
         min={min}
         max={max}
+        step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
         className="input w-20 text-right"

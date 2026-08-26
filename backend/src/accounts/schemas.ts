@@ -49,7 +49,7 @@ export const createAccountSchema = z
       .default([])
       .transform((names) => JSON.stringify(Array.from(new Set(names)))),
     autoSellEnabled: z.boolean().default(false),
-    autoSellIntervalSeconds: z.coerce.number().int().min(1).max(3600).default(60),
+    autoSellIntervalSeconds: z.coerce.number().min(0.5).max(3600).default(60),
     autoSellCommand: z.string().max(64).default("/sell"),
     dailyCommandEnabled: z.boolean().default(false),
     dailyCommandTimes: z
@@ -93,7 +93,7 @@ export const updateAccountSchema = z.object({
     .optional()
     .transform((names) => (names ? JSON.stringify(Array.from(new Set(names))) : undefined)),
   autoSellEnabled: z.boolean().optional(),
-  autoSellIntervalSeconds: z.coerce.number().int().min(1).max(3600).optional(),
+  autoSellIntervalSeconds: z.coerce.number().min(0.5).max(3600).optional(),
   autoSellCommand: z.string().max(64).optional(),
   dailyCommandEnabled: z.boolean().optional(),
   dailyCommandTimes: z

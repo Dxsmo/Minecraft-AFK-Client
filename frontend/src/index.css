@@ -109,6 +109,31 @@ body {
     color: var(--text);
   }
 
+  /* Borderless input that reads like a heading until hovered/focused, used for
+     inline-editable titles (e.g. the Name Sniper account name). */
+  .input-ghost {
+    border-radius: 0.5rem;
+    border: 1px solid transparent;
+    background-color: transparent;
+    padding: 0.15rem 0.4rem;
+    margin-left: -0.4rem;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .input-ghost:hover {
+    border-color: var(--border);
+    background-color: var(--bg-elev);
+  }
+  .input-ghost:focus {
+    border-color: var(--accent);
+    background-color: var(--bg-elev);
+    box-shadow: 0 0 0 3px var(--accent-soft), 0 0 16px -3px var(--accent);
+  }
+  .input-ghost::placeholder {
+    color: var(--text-subtle);
+  }
+
   .label {
     display: block;
     margin-bottom: 0.35rem;

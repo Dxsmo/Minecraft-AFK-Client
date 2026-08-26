@@ -505,7 +505,8 @@ impl BehaviorState {
                 if self.foreground_busy() {
                     return;
                 }
-                let interval = Duration::from_secs(self.config.autosell_interval_seconds.max(1));
+                let secs = self.config.autosell_interval_seconds.max(0.05);
+                let interval = Duration::from_secs_f64(secs);
                 if now.duration_since(self.last_autosell_at) >= interval {
                     self.last_autosell_at = now;
                     let command = self.config.autosell_command.trim();

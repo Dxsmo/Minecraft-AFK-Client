@@ -126,7 +126,7 @@ model MinecraftAccount {
   tpAutoAllowlist            String  @default("[]")
   // Periodically run the sell command and shift all items into the sell menu.
   autoSellEnabled            Boolean @default(false)
-  autoSellIntervalSeconds    Int     @default(60)
+  autoSellIntervalSeconds    Float   @default(60)
   autoSellCommand            String  @default("/sell")
   // Daily scheduler for the existing auto-command text: when enabled, the
   // configured autoCommandText is run once at each time of day listed in

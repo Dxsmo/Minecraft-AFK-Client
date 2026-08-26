@@ -49,16 +49,16 @@ pub struct Config {
     /// all items into the sell menu the server opens.
     #[serde(default)]
     pub autosell_enabled: bool,
-    /// Seconds between two auto-sell cycles.
+    /// Seconds between two auto-sell cycles (supports fractional seconds, e.g. 1.5).
     #[serde(default = "default_autosell_interval")]
-    pub autosell_interval_seconds: u64,
+    pub autosell_interval_seconds: f64,
     /// The command that opens the server's sell menu (e.g. "/sell").
     #[serde(default = "default_autosell_command")]
     pub autosell_command: String,
 }
 
-fn default_autosell_interval() -> u64 {
-    60
+fn default_autosell_interval() -> f64 {
+    60.0
 }
 
 fn default_autosell_command() -> String {
@@ -100,7 +100,7 @@ pub struct BehaviorConfig {
     #[serde(default)]
     pub autosell_enabled: bool,
     #[serde(default = "default_autosell_interval")]
-    pub autosell_interval_seconds: u64,
+    pub autosell_interval_seconds: f64,
     #[serde(default = "default_autosell_command")]
     pub autosell_command: String,
 }

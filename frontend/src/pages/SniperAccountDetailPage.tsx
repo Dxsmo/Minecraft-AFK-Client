@@ -14,13 +14,14 @@ export function SniperAccountDetailPage() {
   const navigate = useNavigate();
   const [account, setAccount] = useState<SniperAccount | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [label, setLabel] = useState("");
   const [desiredName, setDesiredName] = useState("");
   const [cooldown, setCooldown] = useState(5);
   const [rateLimitProtection, setRateLimitProtection] = useState(false);
   const [proxies, setProxies] = useState("");
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
-  const savedRef = useRef({ desiredName: "", cooldown: 5, rateLimitProtection: false, proxies: "" });
+  const savedRef = useRef({ label: "", desiredName: "", cooldown: 5, rateLimitProtection: false, proxies: "" });
   const { logs, status } = useSniperConsole(id);
 
   async function load() {
@@ -28,11 +29,13 @@ export function SniperAccountDetailPage() {
     try {
       const a = await api.get<SniperAccount>(`/namesniper/accounts/${id}`);
       setAccount(a);
+      setLabel(a.label);
       setDesiredName(a.desiredName);
       setCooldown(a.cooldownSeconds);
       setRateLimitProtection(a.rateLimitProtection);
       setProxies(a.proxies);
       savedRef.current = {
+        label: a.label,
         desiredName: a.desiredName,
         cooldown: a.cooldownSeconds,
         rateLimitProtection: a.rateLimitProtection,
@@ -48,11 +51,12 @@ export function SniperAccountDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // Debounced autosave for the desired name + cooldown + rate-limit
+  // Debounced autosave for the label + desired name + cooldown + rate-limit
   // protection + proxies, mirroring the dashboard's inline notes field.
   useEffect(() => {
     if (!id) return;
     if (
+      label === savedRef.current.label &&
       desiredName === savedRef.current.desiredName &&
       cooldown === savedRef.current.cooldown &&
       rateLimitProtection === savedRef.current.rateLimitProtection &&
@@ -65,12 +69,13 @@ export function SniperAccountDetailPage() {
     const t = setTimeout(async () => {
       try {
         await api.patch(`/namesniper/accounts/${id}`, {
+          label,
           desiredName,
           cooldownSeconds: cooldown,
           rateLimitProtection,
           proxies,
         });
-        savedRef.current = { desiredName, cooldown, rateLimitProtection, proxies };
+        savedRef.current = { label, desiredName, cooldown, rateLimitProtection, proxies };
         setSaved(true);
         setTimeout(() => setSaved(false), 1500);
         void load();
@@ -80,7 +85,7 @@ export function SniperAccountDetailPage() {
     }, 600);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desiredName, cooldown, rateLimitProtection, proxies, id]);
+  }, [label, desiredName, cooldown, rateLimitProtection, proxies, id]);
 
   async function toggleEnabled(next: boolean) {
     if (!id) return;
@@ -112,7 +117,6 @@ export function SniperAccountDetailPage() {
   }
 
   const liveStatus = status?.status ?? account.status;
-  const label = account.label?.trim() || account.email;
   const msaSignIn = status?.msaSignIn;
   const isRunning = liveStatus === "ONLINE" || liveStatus === "CONNECTING";
   const canStart = desiredName.trim().length >= 3;
@@ -121,22 +125,51 @@ export function SniperAccountDetailPage() {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0 flex-1">
           <Link to="/namesniper" className="text-xs font-medium transition-colors" style={{ color: "var(--text-subtle)" }}>
             ← Back to Name Sniper
           </Link>
           <div className="mt-1.5 flex items-center gap-3">
-            <h1 className="text-xl font-semibold" style={{ color: "var(--text)" }}>
-              {label}
-            </h1>
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              className="input-ghost text-xl font-semibold"
+              placeholder="Account-Name"
+              maxLength={48}
+              style={{ maxWidth: 360 }}
+            />
             <StatusBadge status={liveStatus} />
+            {saved && (
+              <span className="text-[11px]" style={{ color: "var(--accent)" }}>
+                gespeichert
+              </span>
+            )}
           </div>
-          <p className="mt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
-            {account.email}
-            {account.currentName ? ` · aktuell: ${account.currentName}` : ""}
-          </p>
+          {account.currentName && (
+            <p className="mt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
+              aktuell: {account.currentName}
+            </p>
+          )}
         </div>
         <div className="flex gap-1.5">
+          {isRunning || account.enabled ? (
+            <button
+              onClick={() => void toggleEnabled(false)}
+              disabled={busy}
+              className="btn btn-secondary btn-sm"
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              onClick={() => void toggleEnabled(true)}
+              disabled={busy || !canStart}
+              className="btn btn-primary btn-sm"
+              title={canStart ? undefined : "Erst einen Wunschnamen (min. 3 Zeichen) eingeben"}
+            >
+              Start
+            </button>
+          )}
           <button onClick={() => void handleDelete()} className="btn btn-danger btn-sm">
             Delete
           </button>
@@ -201,11 +234,6 @@ export function SniperAccountDetailPage() {
               Solange aktiviert, wird im konfigurierten Intervall versucht, den Namen zu übernehmen.
             </p>
           </div>
-          {saved && (
-            <span className="text-[11px]" style={{ color: "var(--accent)" }}>
-              gespeichert
-            </span>
-          )}
         </div>
 
         <div>
@@ -286,27 +314,6 @@ export function SniperAccountDetailPage() {
             Ein Proxy pro Zeile (http/https/socks5). Pro Proxy läuft ein eigener, unabhängiger Versuchs-Strang über eine
             andere IP – so umgeht man das IP-Rate-Limit und deckt mehr Zeit ab. Änderungen starten den laufenden Sniper neu.
           </p>
-        </div>
-
-        <div className="flex items-center justify-between rounded-lg p-3.5" style={{ border: "1px solid var(--border)", backgroundColor: "var(--bg-elev)" }}>
-          <div>
-            <p className="text-sm font-medium" style={{ color: "var(--text)" }}>
-              Name Sniper aktiv
-            </p>
-            <p className="mt-0.5 text-xs" style={{ color: "var(--text-subtle)" }}>
-              {canStart ? "Startet die Anmeldung und den Versuchs-Loop." : "Erst einen Wunschnamen (min. 3 Zeichen) eingeben."}
-            </p>
-          </div>
-          <label className="flex cursor-pointer items-center">
-            <input
-              type="checkbox"
-              checked={isRunning || account.enabled}
-              disabled={busy || (!canStart && !isRunning && !account.enabled)}
-              onChange={(e) => void toggleEnabled(e.target.checked)}
-              className="accent-blue-500"
-              style={{ width: 20, height: 20 }}
-            />
-          </label>
         </div>
       </div>
 
