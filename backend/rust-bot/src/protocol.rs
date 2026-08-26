@@ -201,13 +201,22 @@ pub enum OutEvent {
     /// bot from a healthy but idle one.
     Heartbeat,
     /// Emitted by `namesniper-bot` right before each rename request.
-    RenameAttempt { desired_name: String },
+    RenameAttempt {
+        desired_name: String,
+        /// Which worker/proxy strand issued this attempt (e.g. "Direkt",
+        /// "Proxy 1"); `None` for single-strand mode.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+    },
     /// Emitted by `namesniper-bot` after a rename request completes.
     RenameResult {
         success: bool,
         message: String,
         /// The account's current in-game name, when known (set on success).
         current_name: Option<String>,
+        /// Which worker/proxy strand produced this result.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
     },
 }
 
@@ -240,6 +249,13 @@ pub struct SniperConfig {
     /// instead of the normal cooldown (see `bin/namesniper.rs`).
     #[serde(default)]
     pub rate_limit_protection: bool,
+    /// Optional list of proxy URLs (http/https/socks5). When non-empty, one
+    /// independent rename-attempt worker is spawned per proxy so requests are
+    /// distributed across multiple outbound IPs — the per-IP rate limit then
+    /// applies separately to each, genuinely increasing coverage. Empty means
+    /// a single direct (no-proxy) worker.
+    #[serde(default)]
+    pub proxies: Vec<String>,
 }
 
 /// Live-updatable settings for a running `namesniper-bot`, sent as

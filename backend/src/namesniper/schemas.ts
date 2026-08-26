@@ -31,6 +31,8 @@ export const updateSniperAccountSchema = z.object({
   desiredName: desiredNameSchema.optional(),
   cooldownSeconds: z.coerce.number().int().min(1).max(60).optional(),
   rateLimitProtection: z.coerce.boolean().optional(),
+  // Newline/comma-separated proxy URLs (http/https/socks5), one strand each.
+  proxies: z.string().max(8000).optional(),
 });
 
 export const reorderSniperAccountsSchema = z.object({

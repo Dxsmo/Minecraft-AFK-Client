@@ -17,9 +17,10 @@ export function SniperAccountDetailPage() {
   const [desiredName, setDesiredName] = useState("");
   const [cooldown, setCooldown] = useState(5);
   const [rateLimitProtection, setRateLimitProtection] = useState(false);
+  const [proxies, setProxies] = useState("");
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
-  const savedRef = useRef({ desiredName: "", cooldown: 5, rateLimitProtection: false });
+  const savedRef = useRef({ desiredName: "", cooldown: 5, rateLimitProtection: false, proxies: "" });
   const { logs, status } = useSniperConsole(id);
 
   async function load() {
@@ -30,7 +31,13 @@ export function SniperAccountDetailPage() {
       setDesiredName(a.desiredName);
       setCooldown(a.cooldownSeconds);
       setRateLimitProtection(a.rateLimitProtection);
-      savedRef.current = { desiredName: a.desiredName, cooldown: a.cooldownSeconds, rateLimitProtection: a.rateLimitProtection };
+      setProxies(a.proxies);
+      savedRef.current = {
+        desiredName: a.desiredName,
+        cooldown: a.cooldownSeconds,
+        rateLimitProtection: a.rateLimitProtection,
+        proxies: a.proxies,
+      };
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to load account");
     }
@@ -42,13 +49,14 @@ export function SniperAccountDetailPage() {
   }, [id]);
 
   // Debounced autosave for the desired name + cooldown + rate-limit
-  // protection, mirroring the dashboard's inline notes field.
+  // protection + proxies, mirroring the dashboard's inline notes field.
   useEffect(() => {
     if (!id) return;
     if (
       desiredName === savedRef.current.desiredName &&
       cooldown === savedRef.current.cooldown &&
-      rateLimitProtection === savedRef.current.rateLimitProtection
+      rateLimitProtection === savedRef.current.rateLimitProtection &&
+      proxies === savedRef.current.proxies
     )
       return;
     // Mirror the backend's Mojang username rule so we don't fire off requests
@@ -56,8 +64,13 @@ export function SniperAccountDetailPage() {
     if (desiredName !== "" && desiredName.length < 3) return;
     const t = setTimeout(async () => {
       try {
-        await api.patch(`/namesniper/accounts/${id}`, { desiredName, cooldownSeconds: cooldown, rateLimitProtection });
-        savedRef.current = { desiredName, cooldown, rateLimitProtection };
+        await api.patch(`/namesniper/accounts/${id}`, {
+          desiredName,
+          cooldownSeconds: cooldown,
+          rateLimitProtection,
+          proxies,
+        });
+        savedRef.current = { desiredName, cooldown, rateLimitProtection, proxies };
         setSaved(true);
         setTimeout(() => setSaved(false), 1500);
         void load();
@@ -67,7 +80,7 @@ export function SniperAccountDetailPage() {
     }, 600);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desiredName, cooldown, rateLimitProtection, id]);
+  }, [desiredName, cooldown, rateLimitProtection, proxies, id]);
 
   async function toggleEnabled(next: boolean) {
     if (!id) return;
@@ -103,6 +116,7 @@ export function SniperAccountDetailPage() {
   const msaSignIn = status?.msaSignIn;
   const isRunning = liveStatus === "ONLINE" || liveStatus === "CONNECTING";
   const canStart = desiredName.trim().length >= 3;
+  const proxyCount = proxies.split(/[\r\n,]+/).map((p) => p.trim()).filter(Boolean).length;
 
   return (
     <div className="space-y-5">
@@ -250,6 +264,28 @@ export function SniperAccountDetailPage() {
               style={{ width: 20, height: 20 }}
             />
           </label>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between">
+            <label className="label">Proxies (optional)</label>
+            <span className="text-[11px]" style={{ color: proxyCount > 0 ? "var(--accent)" : "var(--text-subtle)" }}>
+              {proxyCount > 0 ? `${proxyCount} Strang${proxyCount > 1 ? "e" : ""}` : "1 Strang (direkt)"}
+            </span>
+          </div>
+          <textarea
+            value={proxies}
+            onChange={(e) => setProxies(e.target.value)}
+            className="input font-mono text-xs"
+            rows={4}
+            spellCheck={false}
+            placeholder={"socks5://user:pass@host:1080\nhttp://host:8080"}
+            style={{ resize: "vertical" }}
+          />
+          <p className="mt-1 text-xs" style={{ color: "var(--text-subtle)" }}>
+            Ein Proxy pro Zeile (http/https/socks5). Pro Proxy läuft ein eigener, unabhängiger Versuchs-Strang über eine
+            andere IP – so umgeht man das IP-Rate-Limit und deckt mehr Zeit ab. Änderungen starten den laufenden Sniper neu.
+          </p>
         </div>
 
         <div className="flex items-center justify-between rounded-lg p-3.5" style={{ border: "1px solid var(--border)", backgroundColor: "var(--bg-elev)" }}>

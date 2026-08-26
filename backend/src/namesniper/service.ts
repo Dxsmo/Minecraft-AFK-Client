@@ -14,6 +14,7 @@ const publicSniperSelect = {
   desiredName: true,
   cooldownSeconds: true,
   rateLimitProtection: true,
+  proxies: true,
   enabled: true,
   status: true,
   currentName: true,

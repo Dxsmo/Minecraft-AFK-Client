@@ -20,6 +20,9 @@ export interface SniperRuntimeConfig {
   /** When true, the Rust subprocess backs off on HTTP 429 (rate limited)
    * instead of retrying at the normal cooldown. */
   rateLimitProtection: boolean;
+  /** Proxy URLs (http/https/socks5); one parallel request strand per entry.
+   * Empty means a single direct (no-proxy) strand. */
+  proxies: string[];
 }
 
 export interface SniperStatusSnapshot {

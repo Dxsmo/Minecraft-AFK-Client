@@ -63,7 +63,23 @@ export class SniperClient extends EventEmitter {
   }
 
   updateConfig(config: SniperRuntimeConfig): void {
+    const proxiesChanged =
+      JSON.stringify(config.proxies) !== JSON.stringify(this.config.proxies);
+    const wasRunning = this.subprocess !== null && !this.manuallyStopped;
     this.config = config;
+
+    // Proxies define how many request strands (subprocesses' internal workers)
+    // exist and can't be reconfigured live, so a change requires a restart.
+    if (proxiesChanged && wasRunning) {
+      this.log.info("Proxy list changed while running, restarting sniper subprocess");
+      this.stopRequested = true;
+      this.teardownSubprocess("Restarting for proxy change");
+      this.manuallyStopped = false;
+      this.stopRequested = false;
+      this.attemptStart();
+      return;
+    }
+
     if (this.subprocess && this.status === "ONLINE") {
       this.sendToBot({
         type: "configure",
@@ -181,6 +197,7 @@ export class SniperClient extends EventEmitter {
       desired_name: this.config.desiredName,
       cooldown_seconds: this.config.cooldownSeconds,
       rate_limit_protection: this.config.rateLimitProtection,
+      proxies: this.config.proxies,
     });
 
     this.hangTimer = setTimeout(() => {
@@ -224,23 +241,26 @@ export class SniperClient extends EventEmitter {
       }
 
       case "rename_attempt": {
-        const { desired_name } = event as { desired_name: string };
+        const { desired_name, source } = event as { desired_name: string; source?: string };
         this.lastAttemptAt = new Date();
-        this.emitConsole("SERVER_MESSAGE", `Versuche Namensänderung zu "${desired_name}"...`);
+        const prefix = source ? `[${source}] ` : "";
+        this.emitConsole("SERVER_MESSAGE", `${prefix}Versuche Namensänderung zu "${desired_name}"...`);
         this.emitStatus();
         break;
       }
 
       case "rename_result": {
-        const { success, message, current_name } = event as {
+        const { success, message, current_name, source } = event as {
           success: boolean;
           message: string;
           current_name: string | null;
+          source?: string;
         };
         this.lastResult = message;
         this.lastSuccess = success;
         if (current_name) this.currentName = current_name;
-        this.emitConsole(success ? "SYSTEM" : "ERROR", message);
+        const prefix = source ? `[${source}] ` : "";
+        this.emitConsole(success ? "SYSTEM" : "ERROR", `${prefix}${message}`);
         this.emitStatus();
         break;
       }

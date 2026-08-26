@@ -233,6 +233,7 @@ dependencies = [
  "azalea",
  "azalea-inventory",
  "eyre",
+ "futures",
  "parking_lot",
  "rand 0.8.7",
  "regex",

@@ -28,6 +28,7 @@ use std::io::{BufRead, Write};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+use azalea::prelude::*;
 use parking_lot::Mutex;
 use protocol::{OutEvent, SniperCommand, SniperConfig};
 
@@ -56,13 +57,16 @@ fn flush_stdout() {
     let _ = std::io::stdout().flush();
 }
 
-/// State shared between the stdin-reader thread (producer) and the main loop
-/// (consumer).
+/// State shared between the stdin-reader thread (producer) and the worker
+/// loops (consumers).
 struct Shared {
     desired_name: String,
     cooldown_seconds: u64,
     rate_limit_protection: bool,
     stop: bool,
+    /// Set by the first worker that succeeds (carries the claimed name), which
+    /// also flips `stop` so the remaining workers wind down.
+    success_name: Option<String>,
 }
 
 static SHARED: OnceLock<Arc<Mutex<Shared>>> = OnceLock::new();
@@ -95,6 +99,7 @@ async fn async_main() {
         cooldown_seconds: config.cooldown_seconds.clamp(1, 60),
         rate_limit_protection: config.rate_limit_protection,
         stop: false,
+        success_name: None,
     })));
 
     spawn_command_reader();
@@ -116,11 +121,53 @@ async fn async_main() {
         }
     };
 
-    let http = reqwest::Client::new();
-    let mut last_refresh = Instant::now();
-    // Counts consecutive HTTP 429 responses so the backoff (when rate-limit
-    // protection is enabled) grows the longer Mojang keeps rejecting us,
-    // resetting on any other outcome.
+    // Build one HTTP client (and thus one independent request strand) per
+    // configured proxy. With no proxies, a single direct client is used.
+    let workers = build_workers(&config.proxies);
+    if workers.len() > 1 {
+        emit(&OutEvent::Warning {
+            message: format!(
+                "{} parallele Stränge aktiv (ein Worker pro Proxy) für maximale Abdeckung.",
+                workers.len()
+            ),
+        });
+    }
+
+    let account = Arc::new(account);
+    let last_refresh = Arc::new(Mutex::new(Instant::now()));
+
+    // Run every worker concurrently on the single-threaded runtime; they
+    // interleave at await points (all work is network I/O). The first to
+    // succeed sets `success_name` + `stop`, so the rest wind down promptly.
+    let futures = workers.into_iter().map(|(label, client)| {
+        let account = Arc::clone(&account);
+        let last_refresh = Arc::clone(&last_refresh);
+        run_worker(label, client, account, last_refresh)
+    });
+    futures::future::join_all(futures).await;
+
+    if let Some(name) = shared().lock().success_name.clone() {
+        emit(&OutEvent::RenameResult {
+            success: true,
+            message: format!("Name erfolgreich zu \"{name}\" geändert! Sniper wird gestoppt."),
+            current_name: Some(name),
+            source: None,
+        });
+    }
+    flush_stdout();
+    std::process::exit(0);
+}
+
+/// One independent rename-attempt loop, bound to a single HTTP client (which
+/// may route through a specific proxy). Returns when the shared `stop` flag is
+/// set (by a user stop command or by another worker succeeding).
+async fn run_worker(
+    label: String,
+    http: reqwest::Client,
+    account: Arc<Account>,
+    last_refresh: Arc<Mutex<Instant>>,
+) {
+    // Per-worker 429 streak so each proxy backs off on its own schedule.
     let mut consecutive_rate_limits: u32 = 0;
 
     loop {
@@ -129,8 +176,7 @@ async fn async_main() {
             (s.stop, s.desired_name.clone(), s.cooldown_seconds, s.rate_limit_protection)
         };
         if stop {
-            flush_stdout();
-            std::process::exit(0);
+            return;
         }
 
         if desired_name.trim().is_empty() {
@@ -138,9 +184,19 @@ async fn async_main() {
             continue;
         }
 
-        if last_refresh.elapsed() > TOKEN_REFRESH_INTERVAL {
+        // Proactive token refresh, coordinated across workers so only one
+        // refreshes per interval (the others see the bumped timestamp).
+        let needs_refresh = {
+            let mut lr = last_refresh.lock();
+            if lr.elapsed() > TOKEN_REFRESH_INTERVAL {
+                *lr = Instant::now();
+                true
+            } else {
+                false
+            }
+        };
+        if needs_refresh {
             let _ = account.refresh().await;
-            last_refresh = Instant::now();
         }
 
         let Some(token) = account.access_token() else {
@@ -152,30 +208,23 @@ async fn async_main() {
 
         emit(&OutEvent::RenameAttempt {
             desired_name: desired_name.clone(),
+            source: Some(label.clone()),
         });
 
         match attempt_rename(&http, &token, &desired_name).await {
             RenameOutcome::Success { current_name } => {
-                emit(&OutEvent::RenameResult {
-                    success: true,
-                    message: format!(
-                        "Name erfolgreich zu \"{current_name}\" geändert! Sniper wird gestoppt."
-                    ),
-                    current_name: Some(current_name),
-                });
-                // Goal achieved: nothing more to do. Node distinguishes this
-                // clean exit(0) from a user-requested stop (which sends a
-                // `Stop` command first) and marks the account as disabled.
-                flush_stdout();
-                std::process::exit(0);
+                // Record the win and signal every other worker to stop; the
+                // final success event is emitted centrally in `async_main`.
+                let mut s = shared().lock();
+                s.success_name = Some(current_name);
+                s.stop = true;
+                return;
             }
             RenameOutcome::Unauthorized => {
-                // Token expired/invalid: refresh immediately rather than
-                // waiting out the full proactive-refresh interval.
                 let _ = account.refresh().await;
-                last_refresh = Instant::now();
+                *last_refresh.lock() = Instant::now();
                 emit(&OutEvent::Warning {
-                    message: "Zugriffstoken abgelaufen, wird erneuert...".into(),
+                    message: format!("[{label}] Zugriffstoken abgelaufen, wird erneuert..."),
                 });
             }
             RenameOutcome::RateLimited { retry_after } => {
@@ -191,7 +240,7 @@ async fn async_main() {
                     });
                     emit(&OutEvent::Warning {
                         message: format!(
-                            "Rate-Limit erkannt (HTTP 429), warte {backoff}s bevor der nächste Versuch unternommen wird..."
+                            "[{label}] Rate-Limit erkannt (HTTP 429), warte {backoff}s bevor der nächste Versuch unternommen wird..."
                         ),
                     });
                     sleep_checking_stop(Duration::from_secs(backoff)).await;
@@ -201,8 +250,9 @@ async fn async_main() {
                 consecutive_rate_limits = 0;
                 emit(&OutEvent::RenameResult {
                     success: false,
-                    message: "Rate-Limit erreicht (HTTP 429) – zu viele Anfragen. Aktiviere den Rate-Limit-Schutz in den Einstellungen.".into(),
+                    message: "Rate-Limit erreicht (HTTP 429) – zu viele Anfragen. Aktiviere den Rate-Limit-Schutz oder füge Proxies hinzu.".into(),
                     current_name: None,
+                    source: Some(label.clone()),
                 });
             }
             RenameOutcome::Failed { message } => {
@@ -211,11 +261,51 @@ async fn async_main() {
                     success: false,
                     message,
                     current_name: None,
+                    source: Some(label.clone()),
                 });
             }
         }
 
         sleep_checking_stop(Duration::from_secs(cooldown_seconds.clamp(1, 60))).await;
+    }
+}
+
+/// Turn the configured proxy list into `(label, client)` pairs — one request
+/// strand each. An empty list yields a single direct client.
+fn build_workers(proxies: &[String]) -> Vec<(String, reqwest::Client)> {
+    let cleaned: Vec<&String> = proxies.iter().filter(|p| !p.trim().is_empty()).collect();
+    if cleaned.is_empty() {
+        return vec![("Direkt".to_string(), reqwest::Client::new())];
+    }
+
+    let mut workers = Vec::new();
+    for (idx, proxy) in cleaned.iter().enumerate() {
+        let raw = proxy.trim();
+        let label = format!("Proxy {} ({})", idx + 1, proxy_display(raw));
+        match reqwest::Proxy::all(raw).and_then(|px| reqwest::Client::builder().proxy(px).build()) {
+            Ok(client) => workers.push((label, client)),
+            Err(e) => emit(&OutEvent::Warning {
+                message: format!("Proxy \"{}\" wird übersprungen (ungültig: {e})", proxy_display(raw)),
+            }),
+        }
+    }
+
+    // If every proxy was invalid, fall back to a direct strand so the sniper
+    // still runs rather than silently doing nothing.
+    if workers.is_empty() {
+        workers.push(("Direkt".to_string(), reqwest::Client::new()));
+    }
+    workers
+}
+
+/// Strip any `user:pass@` credentials from a proxy URL for safe display/logging.
+fn proxy_display(proxy: &str) -> String {
+    match (proxy.rfind('@'), proxy.find("://")) {
+        (Some(at), Some(scheme)) => {
+            format!("{}{}", &proxy[..scheme + 3], &proxy[at + 1..])
+        }
+        (Some(at), None) => proxy[at + 1..].to_string(),
+        _ => proxy.to_string(),
     }
 }
 

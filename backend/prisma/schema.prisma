@@ -236,6 +236,10 @@ model SniperAccount {
   // Mojang and backs off (honoring a Retry-After header if present, else an
   // increasing delay) instead of retrying at the normal cooldown.
   rateLimitProtection Boolean  @default(false)
+  // Optional newline-separated list of proxy URLs (http/https/socks5). When
+  // set, the sniper runs one independent request strand per proxy so attempts
+  // are spread across multiple outbound IPs (each with its own per-IP limit).
+  proxies         String       @default("")
   // Persisted "should be running" intent, mirrors MinecraftAccount.autoStart.
   enabled         Boolean      @default(false)
   status          ClientStatus @default(OFFLINE)

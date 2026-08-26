@@ -15,7 +15,16 @@ function toRuntimeConfig(account: SniperAccount): SniperRuntimeConfig {
     desiredName: account.desiredName,
     cooldownSeconds: account.cooldownSeconds,
     rateLimitProtection: account.rateLimitProtection,
+    proxies: parseProxies(account.proxies),
   };
+}
+
+/** Split the stored newline/comma-separated proxy blob into clean entries. */
+function parseProxies(raw: string): string[] {
+  return raw
+    .split(/[\r\n,]+/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
 }
 
 /**

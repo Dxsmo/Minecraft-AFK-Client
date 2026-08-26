@@ -138,6 +138,7 @@ export interface SniperAccount {
   desiredName: string;
   cooldownSeconds: number;
   rateLimitProtection: boolean;
+  proxies: string;
   enabled: boolean;
   status: ClientStatus;
   currentName: string | null;
