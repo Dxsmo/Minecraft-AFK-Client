@@ -69,6 +69,7 @@ export class SniperClient extends EventEmitter {
         type: "configure",
         desired_name: config.desiredName,
         cooldown_seconds: config.cooldownSeconds,
+        rate_limit_protection: config.rateLimitProtection,
       });
     }
   }
@@ -179,6 +180,7 @@ export class SniperClient extends EventEmitter {
       cache_dir: cacheDir,
       desired_name: this.config.desiredName,
       cooldown_seconds: this.config.cooldownSeconds,
+      rate_limit_protection: this.config.rateLimitProtection,
     });
 
     this.hangTimer = setTimeout(() => {

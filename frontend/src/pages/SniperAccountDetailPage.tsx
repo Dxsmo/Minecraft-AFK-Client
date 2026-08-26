@@ -16,9 +16,10 @@ export function SniperAccountDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [desiredName, setDesiredName] = useState("");
   const [cooldown, setCooldown] = useState(5);
+  const [rateLimitProtection, setRateLimitProtection] = useState(false);
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
-  const savedRef = useRef({ desiredName: "", cooldown: 5 });
+  const savedRef = useRef({ desiredName: "", cooldown: 5, rateLimitProtection: false });
   const { logs, status } = useSniperConsole(id);
 
   async function load() {
@@ -28,7 +29,8 @@ export function SniperAccountDetailPage() {
       setAccount(a);
       setDesiredName(a.desiredName);
       setCooldown(a.cooldownSeconds);
-      savedRef.current = { desiredName: a.desiredName, cooldown: a.cooldownSeconds };
+      setRateLimitProtection(a.rateLimitProtection);
+      savedRef.current = { desiredName: a.desiredName, cooldown: a.cooldownSeconds, rateLimitProtection: a.rateLimitProtection };
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to load account");
     }
@@ -39,18 +41,23 @@ export function SniperAccountDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // Debounced autosave for the desired name + cooldown, mirroring the
-  // dashboard's inline notes field.
+  // Debounced autosave for the desired name + cooldown + rate-limit
+  // protection, mirroring the dashboard's inline notes field.
   useEffect(() => {
     if (!id) return;
-    if (desiredName === savedRef.current.desiredName && cooldown === savedRef.current.cooldown) return;
+    if (
+      desiredName === savedRef.current.desiredName &&
+      cooldown === savedRef.current.cooldown &&
+      rateLimitProtection === savedRef.current.rateLimitProtection
+    )
+      return;
     // Mirror the backend's Mojang username rule so we don't fire off requests
     // that are guaranteed to 400 while the user is still mid-typing a short name.
     if (desiredName !== "" && desiredName.length < 3) return;
     const t = setTimeout(async () => {
       try {
-        await api.patch(`/namesniper/accounts/${id}`, { desiredName, cooldownSeconds: cooldown });
-        savedRef.current = { desiredName, cooldown };
+        await api.patch(`/namesniper/accounts/${id}`, { desiredName, cooldownSeconds: cooldown, rateLimitProtection });
+        savedRef.current = { desiredName, cooldown, rateLimitProtection };
         setSaved(true);
         setTimeout(() => setSaved(false), 1500);
         void load();
@@ -60,7 +67,7 @@ export function SniperAccountDetailPage() {
     }, 600);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desiredName, cooldown, id]);
+  }, [desiredName, cooldown, rateLimitProtection, id]);
 
   async function toggleEnabled(next: boolean) {
     if (!id) return;
@@ -223,6 +230,26 @@ export function SniperAccountDetailPage() {
             <span>1s</span>
             <span>60s</span>
           </div>
+        </div>
+
+        <div className="flex items-center justify-between rounded-lg p-3.5" style={{ border: "1px solid var(--border)", backgroundColor: "var(--bg-elev)" }}>
+          <div>
+            <p className="text-sm font-medium" style={{ color: "var(--text)" }}>
+              Rate-Limit-Schutz
+            </p>
+            <p className="mt-0.5 text-xs" style={{ color: "var(--text-subtle)" }}>
+              Erkennt HTTP 429 (zu viele Anfragen) und wartet automatisch länger statt weiter zu hämmern.
+            </p>
+          </div>
+          <label className="flex cursor-pointer items-center">
+            <input
+              type="checkbox"
+              checked={rateLimitProtection}
+              onChange={(e) => setRateLimitProtection(e.target.checked)}
+              className="accent-blue-500"
+              style={{ width: 20, height: 20 }}
+            />
+          </label>
         </div>
 
         <div className="flex items-center justify-between rounded-lg p-3.5" style={{ border: "1px solid var(--border)", backgroundColor: "var(--bg-elev)" }}>

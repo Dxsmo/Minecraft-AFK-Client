@@ -232,6 +232,10 @@ model SniperAccount {
   desiredName     String       @default("")
   // 1-60 seconds between rename attempts, enforced in the zod schema.
   cooldownSeconds Int          @default(5)
+  // When true, the sniper detects HTTP 429 (rate limited) responses from
+  // Mojang and backs off (honoring a Retry-After header if present, else an
+  // increasing delay) instead of retrying at the normal cooldown.
+  rateLimitProtection Boolean  @default(false)
   // Persisted "should be running" intent, mirrors MinecraftAccount.autoStart.
   enabled         Boolean      @default(false)
   status          ClientStatus @default(OFFLINE)

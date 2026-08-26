@@ -61,6 +61,7 @@ fn flush_stdout() {
 struct Shared {
     desired_name: String,
     cooldown_seconds: u64,
+    rate_limit_protection: bool,
     stop: bool,
 }
 
@@ -92,6 +93,7 @@ async fn async_main() {
     let _ = SHARED.set(Arc::new(Mutex::new(Shared {
         desired_name: config.desired_name.clone(),
         cooldown_seconds: config.cooldown_seconds.clamp(1, 60),
+        rate_limit_protection: config.rate_limit_protection,
         stop: false,
     })));
 
@@ -116,11 +118,15 @@ async fn async_main() {
 
     let http = reqwest::Client::new();
     let mut last_refresh = Instant::now();
+    // Counts consecutive HTTP 429 responses so the backoff (when rate-limit
+    // protection is enabled) grows the longer Mojang keeps rejecting us,
+    // resetting on any other outcome.
+    let mut consecutive_rate_limits: u32 = 0;
 
     loop {
-        let (stop, desired_name, cooldown_seconds) = {
+        let (stop, desired_name, cooldown_seconds, rate_limit_protection) = {
             let s = shared().lock();
-            (s.stop, s.desired_name.clone(), s.cooldown_seconds)
+            (s.stop, s.desired_name.clone(), s.cooldown_seconds, s.rate_limit_protection)
         };
         if stop {
             flush_stdout();
@@ -172,7 +178,35 @@ async fn async_main() {
                     message: "Zugriffstoken abgelaufen, wird erneuert...".into(),
                 });
             }
+            RenameOutcome::RateLimited { retry_after } => {
+                if rate_limit_protection {
+                    consecutive_rate_limits += 1;
+                    // Prefer the server's own Retry-After value; otherwise back
+                    // off with a delay that doubles per consecutive 429,
+                    // starting no lower than 10s and capped at 5 minutes.
+                    let backoff = retry_after.unwrap_or_else(|| {
+                        let base = cooldown_seconds.max(10);
+                        base.saturating_mul(1u64 << consecutive_rate_limits.min(5).saturating_sub(1))
+                            .min(300)
+                    });
+                    emit(&OutEvent::Warning {
+                        message: format!(
+                            "Rate-Limit erkannt (HTTP 429), warte {backoff}s bevor der nächste Versuch unternommen wird..."
+                        ),
+                    });
+                    sleep_checking_stop(Duration::from_secs(backoff)).await;
+                    continue;
+                }
+
+                consecutive_rate_limits = 0;
+                emit(&OutEvent::RenameResult {
+                    success: false,
+                    message: "Rate-Limit erreicht (HTTP 429) – zu viele Anfragen. Aktiviere den Rate-Limit-Schutz in den Einstellungen.".into(),
+                    current_name: None,
+                });
+            }
             RenameOutcome::Failed { message } => {
+                consecutive_rate_limits = 0;
                 emit(&OutEvent::RenameResult {
                     success: false,
                     message,
@@ -188,6 +222,9 @@ async fn async_main() {
 enum RenameOutcome {
     Success { current_name: String },
     Unauthorized,
+    /// HTTP 429: rate limited by Mojang. Carries the `Retry-After` header
+    /// value in seconds, if the server sent one.
+    RateLimited { retry_after: Option<u64> },
     Failed { message: String },
 }
 
@@ -204,6 +241,16 @@ async fn attempt_rename(client: &reqwest::Client, token: &str, desired_name: &st
     };
 
     let status = res.status();
+
+    if status.as_u16() == 429 {
+        let retry_after = res
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        return RenameOutcome::RateLimited { retry_after };
+    }
+
     let body = res.text().await.unwrap_or_default();
 
     if status.is_success() {
@@ -273,10 +320,11 @@ fn spawn_command_reader() {
                 continue;
             }
             match serde_json::from_str::<SniperCommand>(line) {
-                Ok(SniperCommand::Configure { desired_name, cooldown_seconds }) => {
+                Ok(SniperCommand::Configure { desired_name, cooldown_seconds, rate_limit_protection }) => {
                     let mut s = shared().lock();
                     s.desired_name = desired_name;
                     s.cooldown_seconds = cooldown_seconds.clamp(1, 60);
+                    s.rate_limit_protection = rate_limit_protection;
                 }
                 Ok(SniperCommand::Stop) => {
                     shared().lock().stop = true;

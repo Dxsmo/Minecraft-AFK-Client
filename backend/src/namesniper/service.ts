@@ -13,6 +13,7 @@ const publicSniperSelect = {
   email: true,
   desiredName: true,
   cooldownSeconds: true,
+  rateLimitProtection: true,
   enabled: true,
   status: true,
   currentName: true,

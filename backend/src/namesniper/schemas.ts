@@ -30,6 +30,7 @@ export const updateSniperAccountSchema = z.object({
   label: z.string().max(48).optional(),
   desiredName: desiredNameSchema.optional(),
   cooldownSeconds: z.coerce.number().int().min(1).max(60).optional(),
+  rateLimitProtection: z.coerce.boolean().optional(),
 });
 
 export const reorderSniperAccountsSchema = z.object({

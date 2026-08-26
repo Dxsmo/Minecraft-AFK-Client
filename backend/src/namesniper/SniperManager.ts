@@ -14,6 +14,7 @@ function toRuntimeConfig(account: SniperAccount): SniperRuntimeConfig {
     email: account.email,
     desiredName: account.desiredName,
     cooldownSeconds: account.cooldownSeconds,
+    rateLimitProtection: account.rateLimitProtection,
   };
 }
 

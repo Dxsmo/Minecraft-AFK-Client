@@ -236,6 +236,10 @@ pub struct SniperConfig {
     /// Seconds to wait between two rename attempts (1-60, enforced by the
     /// Node.js backend's validation but clamped here too as a safety net).
     pub cooldown_seconds: u64,
+    /// When true, HTTP 429 responses trigger a Retry-After-aware backoff
+    /// instead of the normal cooldown (see `bin/namesniper.rs`).
+    #[serde(default)]
+    pub rate_limit_protection: bool,
 }
 
 /// Live-updatable settings for a running `namesniper-bot`, sent as
@@ -244,7 +248,12 @@ pub struct SniperConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SniperCommand {
-    Configure { desired_name: String, cooldown_seconds: u64 },
+    Configure {
+        desired_name: String,
+        cooldown_seconds: u64,
+        #[serde(default)]
+        rate_limit_protection: bool,
+    },
     /// Gracefully stop the attempt loop and exit.
     Stop,
 }

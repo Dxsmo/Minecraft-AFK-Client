@@ -137,6 +137,7 @@ export interface SniperAccount {
   email: string;
   desiredName: string;
   cooldownSeconds: number;
+  rateLimitProtection: boolean;
   enabled: boolean;
   status: ClientStatus;
   currentName: string | null;

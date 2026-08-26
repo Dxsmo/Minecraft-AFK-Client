@@ -17,6 +17,9 @@ export interface SniperRuntimeConfig {
   email: string;
   desiredName: string;
   cooldownSeconds: number;
+  /** When true, the Rust subprocess backs off on HTTP 429 (rate limited)
+   * instead of retrying at the normal cooldown. */
+  rateLimitProtection: boolean;
 }
 
 export interface SniperStatusSnapshot {
