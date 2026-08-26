@@ -30,6 +30,7 @@ out/
 bin/
 !**/src/main/**/bin/
 !**/src/test/**/bin/
+!backend/rust-bot/src/bin/
 
 ### NetBeans ###
 /nbproject/private/

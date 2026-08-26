@@ -56,6 +56,7 @@ model User {
   assignments     UserMinecraftAccount[]
   auditLogs       AuditLog[]
   createdAccounts MinecraftAccount[]     @relation("CreatedAccounts")
+  createdSniperAccounts SniperAccount[]  @relation("CreatedSniperAccounts")
 }
 
 model Session {
@@ -215,4 +216,49 @@ model AuditLog {
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
+}
+
+// A "Name Sniper" account: a Microsoft/Minecraft account that a background
+// subprocess continuously tries to rename to a desired name. Completely
+// independent of MinecraftAccount (no shared rows, no shared subprocess type)
+// even though it reuses the same ClientStatus/ConsoleLogType enums and the
+// same NDJSON-over-stdio subprocess pattern (see SniperClient/SniperManager).
+// Admin-only feature end to end (API, websocket, UI nav item).
+model SniperAccount {
+  id              String       @id @default(cuid())
+  // Cosmetic label shown in the list; the email is what's actually used to sign in.
+  label           String       @default("")
+  email           String       @unique
+  desiredName     String       @default("")
+  // 1-60 seconds between rename attempts, enforced in the zod schema.
+  cooldownSeconds Int          @default(5)
+  // Persisted "should be running" intent, mirrors MinecraftAccount.autoStart.
+  enabled         Boolean      @default(false)
+  status          ClientStatus @default(OFFLINE)
+  // The account's current in-game name, updated whenever a rename succeeds or
+  // the account authenticates (best-effort; may lag behind reality otherwise).
+  currentName     String?
+  lastAttemptAt   DateTime?
+  lastResult      String?
+  lastSuccess     Boolean      @default(false)
+  dashboardOrder  Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  createdById String?
+  createdBy   User?   @relation("CreatedSniperAccounts", fields: [createdById], references: [id], onDelete: SetNull)
+
+  logs SniperLog[]
+}
+
+model SniperLog {
+  id              String         @id @default(cuid())
+  sniperAccountId String
+  type            ConsoleLogType
+  message         String
+  createdAt       DateTime       @default(now())
+
+  sniperAccount SniperAccount @relation(fields: [sniperAccountId], references: [id], onDelete: Cascade)
+
+  @@index([sniperAccountId, createdAt])
 }

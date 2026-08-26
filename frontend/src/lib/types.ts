@@ -116,3 +116,36 @@ export interface SystemStatus {
   memory: { totalBytes: number; freeBytes: number; usedBytes: number };
   clients: { total: number; online: number; offline: number; error: number };
 }
+
+// ---- Name Sniper (admin-only, fully independent of MinecraftAccount) ----
+
+export interface SniperLiveStatus {
+  id: string;
+  status: ClientStatus;
+  msaSignIn?: MsaSignInPrompt;
+  authenticated?: boolean;
+  lastError?: string;
+  currentName?: string;
+  lastAttemptAt?: string;
+  lastResult?: string;
+  lastSuccess?: boolean;
+}
+
+export interface SniperAccount {
+  id: string;
+  label: string;
+  email: string;
+  desiredName: string;
+  cooldownSeconds: number;
+  enabled: boolean;
+  status: ClientStatus;
+  currentName: string | null;
+  lastAttemptAt: string | null;
+  lastResult: string | null;
+  lastSuccess: boolean;
+  dashboardOrder: number;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: { id: string; username: string } | null;
+  live?: SniperLiveStatus;
+}

@@ -1,7 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 
-type IconName = "dashboard" | "users" | "logs" | "settings";
+type IconName = "dashboard" | "sniper" | "users" | "logs" | "settings";
 
 function Icon({ name }: { name: IconName }) {
   const common = {
@@ -22,6 +22,14 @@ function Icon({ name }: { name: IconName }) {
           <rect x="14" y="3" width="7" height="5" rx="1.5" />
           <rect x="14" y="12" width="7" height="9" rx="1.5" />
           <rect x="3" y="16" width="7" height="5" rx="1.5" />
+        </svg>
+      );
+    case "sniper":
+      return (
+        <svg {...common}>
+          <circle cx="12" cy="12" r="8" />
+          <circle cx="12" cy="12" r="2.5" />
+          <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
         </svg>
       );
     case "users":
@@ -54,6 +62,7 @@ function Icon({ name }: { name: IconName }) {
 
 const navItems: { to: string; label: string; icon: IconName; adminOnly: boolean }[] = [
   { to: "/dashboard", label: "Dashboard", icon: "dashboard", adminOnly: false },
+  { to: "/namesniper", label: "Name Sniper", icon: "sniper", adminOnly: true },
   { to: "/users", label: "Users", icon: "users", adminOnly: true },
   { to: "/logs", label: "Audit Logs", icon: "logs", adminOnly: true },
   { to: "/settings", label: "Settings", icon: "settings", adminOnly: false },

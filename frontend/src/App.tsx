@@ -8,6 +8,8 @@ import { AccountDetailPage } from "./pages/AccountDetailPage";
 import { UsersPage } from "./pages/UsersPage";
 import { LogsPage } from "./pages/LogsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { NameSniperPage } from "./pages/NameSniperPage";
+import { SniperAccountDetailPage } from "./pages/SniperAccountDetailPage";
 
 export default function App() {
   return (
@@ -23,6 +25,8 @@ export default function App() {
               <Route path="/settings" element={<SettingsPage />} />
 
               <Route element={<RequireAdmin />}>
+                <Route path="/namesniper" element={<NameSniperPage />} />
+                <Route path="/namesniper/:id" element={<SniperAccountDetailPage />} />
                 <Route path="/users" element={<UsersPage />} />
                 <Route path="/logs" element={<LogsPage />} />
               </Route>

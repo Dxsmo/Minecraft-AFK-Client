@@ -69,7 +69,8 @@ COPY prisma ./prisma
 
 # Compiled Azalea bot binary from the Rust build stage.
 COPY --from=rust-builder /rust-bot/target/release/azalea-bot /app/azalea-bot
-RUN chmod +x /app/azalea-bot
+COPY --from=rust-builder /rust-bot/target/release/namesniper-bot /app/namesniper-bot
+RUN chmod +x /app/azalea-bot /app/namesniper-bot
 
 RUN mkdir -p /app/data
 VOLUME ["/app/data"]

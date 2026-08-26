@@ -200,6 +200,15 @@ pub enum OutEvent {
     /// Periodic liveness signal so the Node supervisor can distinguish a hung
     /// bot from a healthy but idle one.
     Heartbeat,
+    /// Emitted by `namesniper-bot` right before each rename request.
+    RenameAttempt { desired_name: String },
+    /// Emitted by `namesniper-bot` after a rename request completes.
+    RenameResult {
+        success: bool,
+        message: String,
+        /// The account's current in-game name, when known (set on success).
+        current_name: Option<String>,
+    },
 }
 
 /// A single occupied inventory slot in an [`OutEvent::Inventory`] snapshot.
@@ -209,4 +218,33 @@ pub struct InventorySlot {
     pub id: String,
     /// The stack size.
     pub count: u32,
+}
+
+/// The first stdin line for the `namesniper-bot` binary (see `bin/namesniper.rs`).
+/// Deliberately separate from [`Config`]: the name sniper never joins a
+/// server, so none of the server/behavior fields apply.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SniperConfig {
+    /// Microsoft account email used to authenticate (and as the on-disk
+    /// token cache key).
+    pub email: String,
+    /// Directory used to persist the Microsoft auth token cache for this
+    /// specific sniper account, so re-authentication is only needed once.
+    pub cache_dir: String,
+    /// The Minecraft username to repeatedly try to claim.
+    pub desired_name: String,
+    /// Seconds to wait between two rename attempts (1-60, enforced by the
+    /// Node.js backend's validation but clamped here too as a safety net).
+    pub cooldown_seconds: u64,
+}
+
+/// Live-updatable settings for a running `namesniper-bot`, sent as
+/// subsequent stdin lines so the desired name / cooldown can change without
+/// restarting the (potentially long-lived, mid-device-code-auth) process.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SniperCommand {
+    Configure { desired_name: String, cooldown_seconds: u64 },
+    /// Gracefully stop the attempt loop and exit.
+    Stop,
 }

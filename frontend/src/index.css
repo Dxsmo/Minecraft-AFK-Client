@@ -317,6 +317,51 @@ body {
     background-color: var(--bg-elev);
     font-size: 0.8rem;
   }
+
+  /* Themed range slider (e.g. the Name Sniper cooldown control). */
+  .slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    border-radius: 999px;
+    background: var(--bg-elev);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+    outline: none;
+    cursor: pointer;
+  }
+  .slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft), 0 0 12px -2px var(--accent-light);
+    cursor: pointer;
+    transition: transform 0.1s ease;
+  }
+  .slider::-webkit-slider-thumb:hover {
+    transform: scale(1.1);
+  }
+  .slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border: none;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft), 0 0 12px -2px var(--accent-light);
+    cursor: pointer;
+    transition: transform 0.1s ease;
+  }
+  .slider::-moz-range-thumb:hover {
+    transform: scale(1.1);
+  }
+  .slider::-moz-range-track {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--bg-elev);
+  }
 }
 
 /* Tab-panel entrance: light fade + rise, respecting reduced-motion. */

@@ -6,6 +6,8 @@ import { canAccessAccount } from "../accounts/service.js";
 import { clientManager } from "../minecraft/ClientManager.js";
 import { getConsoleLogs } from "../logging/consoleLogService.js";
 import { executeCommand } from "../commands/service.js";
+import { sniperManager } from "../namesniper/SniperManager.js";
+import { getSniperLogs } from "../logging/sniperLogService.js";
 import { logger } from "../logging/logger.js";
 
 function parseCookies(header: string | undefined): Record<string, string> {
@@ -101,6 +103,58 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
       void isAllowed(s.id).then((allowed) => {
         if (allowed) safeSend(socket, { type: "status", status: s });
       });
+    });
+
+    socket.on("close", () => {
+      unsubscribeStatus();
+    });
+  });
+
+  // ---- Name Sniper (admin-only) ----
+
+  app.get("/ws/namesniper/:id", { websocket: true }, async (socket, req) => {
+    const cookies = parseCookies(req.headers.cookie);
+    const sessionId = cookies[config.session.cookieName];
+    const session = sessionId ? await getSession(sessionId) : null;
+    const { id: accountId } = req.params as { id: string };
+
+    if (!session || session.user.role !== "ADMIN") {
+      socket.close(4401, "Unauthorized");
+      return;
+    }
+
+    const history = await getSniperLogs(accountId, 200);
+    safeSend(socket, { type: "history", logs: history });
+    const status = sniperManager.get(accountId)?.getStatus();
+    if (status) safeSend(socket, { type: "status", status });
+
+    const unsubscribeConsole = sniperManager.onConsoleEvent((event) => {
+      if (event.sniperAccountId === accountId) safeSend(socket, { type: "console", event });
+    });
+    const unsubscribeStatus = sniperManager.onStatusEvent((s) => {
+      if (s.id === accountId) safeSend(socket, { type: "status", status: s });
+    });
+
+    socket.on("close", () => {
+      unsubscribeConsole();
+      unsubscribeStatus();
+    });
+  });
+
+  app.get("/ws/namesniper-dashboard", { websocket: true }, async (socket, req) => {
+    const cookies = parseCookies(req.headers.cookie);
+    const sessionId = cookies[config.session.cookieName];
+    const session = sessionId ? await getSession(sessionId) : null;
+
+    if (!session || session.user.role !== "ADMIN") {
+      socket.close(4401, "Unauthorized");
+      return;
+    }
+
+    safeSend(socket, { type: "statuses", statuses: sniperManager.getAllStatuses() });
+
+    const unsubscribeStatus = sniperManager.onStatusEvent((s) => {
+      safeSend(socket, { type: "status", status: s });
     });
 
     socket.on("close", () => {

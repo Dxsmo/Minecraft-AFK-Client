@@ -4,6 +4,7 @@ import { logger } from "./logging/logger.js";
 import { bootstrapAdmin } from "./auth/bootstrapAdmin.js";
 import { pruneExpiredSessions, clearAllSessions } from "./auth/session.js";
 import { clientManager } from "./minecraft/ClientManager.js";
+import { sniperManager } from "./namesniper/SniperManager.js";
 import { disconnectDatabase } from "./database/prisma.js";
 import { purgeStoredPasswords } from "./accounts/service.js";
 
@@ -19,6 +20,7 @@ async function main() {
   // product requirement), rather than resuming previously-valid sessions.
   await clearAllSessions();
   await clientManager.loadAll();
+  await sniperManager.loadAll();
 
   const app = await buildApp();
 
@@ -36,6 +38,7 @@ async function main() {
     logger.info({ signal }, "Shutting down gracefully...");
     clearInterval(pruneInterval);
     clientManager.shutdownAll();
+    sniperManager.shutdownAll();
     await app.close();
     await disconnectDatabase();
     process.exit(0);

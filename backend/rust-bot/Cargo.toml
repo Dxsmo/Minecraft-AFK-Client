@@ -7,6 +7,10 @@ edition = "2021"
 name = "azalea-bot"
 path = "src/main.rs"
 
+[[bin]]
+name = "namesniper-bot"
+path = "src/bin/namesniper.rs"
+
 [dependencies]
 azalea = { git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
 azalea-inventory = { git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }

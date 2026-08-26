@@ -10,6 +10,7 @@ import authPlugin from "./auth/plugin.js";
 import authRoutes from "./auth/routes.js";
 import usersRoutes from "./users/routes.js";
 import accountsRoutes from "./accounts/routes.js";
+import namesniperRoutes from "./namesniper/routes.js";
 import systemRoutes from "./api/systemRoutes.js";
 import auditLogRoutes from "./api/auditLogRoutes.js";
 import registerWebsocketRoutes from "./websocket/routes.js";
@@ -48,6 +49,7 @@ export async function buildApp() {
   await app.register(authRoutes);
   await app.register(usersRoutes);
   await app.register(accountsRoutes);
+  await app.register(namesniperRoutes);
   await app.register(systemRoutes);
   await app.register(auditLogRoutes);
   await app.register(registerWebsocketRoutes);
