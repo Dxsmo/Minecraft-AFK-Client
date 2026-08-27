@@ -254,7 +254,7 @@ export function SniperAccountDetailPage() {
         <div>
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium" style={{ color: "var(--text-muted)" }}>
-              Cooldown zwischen Versuchen
+              Cooldown zwischen Claim-Versuchen
             </span>
             <span className="text-sm font-semibold tabular-nums" style={{ color: "var(--text)" }}>
               {cooldown}s
@@ -272,6 +272,10 @@ export function SniperAccountDetailPage() {
             <span>1s</span>
             <span>60s</span>
           </div>
+          <p className="mt-1 text-xs" style={{ color: "var(--text-subtle)" }}>
+            Die Verfügbarkeit wird laufend geprüft; sobald der Name frei ist, wird sofort versucht ihn zu holen. Der
+            Cooldown ist nur der Mindestabstand zwischen zwei echten Claim-Versuchen (schont das Konto-Limit).
+          </p>
         </div>
 
         <div className="flex items-center justify-between rounded-lg p-3.5" style={{ border: "1px solid var(--border)", backgroundColor: "var(--bg-elev)" }}>
@@ -298,7 +302,7 @@ export function SniperAccountDetailPage() {
           <div className="flex items-center justify-between">
             <label className="label">Proxies (optional)</label>
             <span className="text-[11px]" style={{ color: proxyCount > 0 ? "var(--accent)" : "var(--text-subtle)" }}>
-              {proxyCount > 0 ? `${proxyCount + 1} Quellen in Rotation` : "nur Home"}
+              {proxyCount > 0 ? `${proxyCount + 1} Check-Quellen` : "nur Home"}
             </span>
           </div>
           <textarea
@@ -311,9 +315,9 @@ export function SniperAccountDetailPage() {
             style={{ resize: "vertical" }}
           />
           <p className="mt-1 text-xs" style={{ color: "var(--text-subtle)" }}>
-            Ein Proxy pro Zeile (http/https/socks5). Die Quellen werden reihum abgefragt: Home → Cooldown → Proxy 1 →
-            Cooldown → Proxy 2 → … Es läuft also immer nur eine Anfrage pro Cooldown, und jede IP feuert nur einmal pro
-            Runde – so umgeht man das IP-Rate-Limit. Änderungen starten den laufenden Sniper neu.
+            Ein Proxy pro Zeile (http/https/socks5). Die Verfügbarkeits-Checks werden über Home + alle Proxy-IPs verteilt –
+            mehr IPs = mehr Checks pro Sekunde, ohne das Pro-IP-Limit zu treffen. Der eigentliche Rename läuft immer über
+            Home. Änderungen starten den laufenden Sniper neu.
           </p>
         </div>
       </div>

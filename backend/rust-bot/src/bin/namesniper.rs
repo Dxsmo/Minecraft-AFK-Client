@@ -2,10 +2,19 @@
 //!
 //! One process == one sniper account. It authenticates a Microsoft account
 //! exactly like `azalea-bot` (see [`msauth`]) but never joins a Minecraft
-//! server — instead it repeatedly calls the Mojang name-change API
-//! (`PUT https://api.minecraftservices.com/minecraft/profile/name/{name}`)
-//! trying to claim the configured desired name, waiting a configurable
-//! cooldown between attempts.
+//! server. It works in two phases:
+//!
+//!   1. **Availability polling** — it rapidly polls the *public* name-lookup
+//!      endpoint (`GET /minecraft/profile/lookup/name/{name}`, no auth), which
+//!      is rate-limited *per IP*. Requests are rotated across the direct "Home"
+//!      connection plus every configured proxy, so more proxies == more checks
+//!      per second without tripping the per-IP limit. A `404` means the name
+//!      currently has no owner and is (likely) claimable.
+//!   2. **Instant claim** — the moment a lookup reports the name is free, it
+//!      fires the authenticated rename (`PUT /minecraft/profile/name/{name}`).
+//!      That endpoint is rate-limited *per account*, so it is only ever fired
+//!      when the name is actually free — never spammed — which also avoids the
+//!      temporary account suspension Mojang applies to high volumes of 429s.
 //!
 //! Speaks the same NDJSON-over-stdio style as `azalea-bot`:
 //!   * The **first** stdin line is a [`protocol::SniperConfig`] JSON object.
@@ -41,6 +50,9 @@ const IDLE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Granularity used while sleeping out a cooldown, so a `Stop` command takes
 /// effect quickly instead of waiting out the full cooldown.
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// How often a "still taken" heartbeat is emitted while polling, so the console
+/// shows progress without a line for every single availability check.
+const STATUS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 /// Serialize and print a single NDJSON event on stdout, then flush so Node
 /// receives it immediately (line-buffered pipes otherwise hold it back).
@@ -121,22 +133,28 @@ async fn async_main() {
         }
     };
 
-    // Build the ordered list of request sources: the direct "Home" connection
-    // first, followed by one HTTP client per configured proxy. The single
-    // rotation loop cycles through them, so the cooldown applies *between*
-    // sources (Home -> cooldown -> Proxy 1 -> cooldown -> Proxy 2 -> ...).
+    // Build the ordered list of availability-check sources: the direct "Home"
+    // connection first, followed by one HTTP client per configured proxy. The
+    // poll loop rotates through them, so each individual IP stays well under
+    // its per-IP lookup rate limit while the *combined* check rate scales with
+    // the number of sources.
     let sources = build_workers(&config.proxies);
-    if sources.len() > 1 {
-        emit(&OutEvent::Warning {
-            message: format!(
-                "{} Quellen in Rotation (Home + Proxys) – der Cooldown gilt zwischen den Quellen.",
-                sources.len()
-            ),
-        });
-    }
+    // Global poll interval: fast, but throttled so each individual IP is hit at
+    // most ~once per second. More sources -> shorter global interval -> more
+    // checks per second overall.
+    let poll_interval =
+        Duration::from_millis((1000 / sources.len() as u64).max(120));
+    let checks_per_sec = 1000.0 / poll_interval.as_millis() as f64;
+    emit(&OutEvent::Warning {
+        message: format!(
+            "Verfügbarkeits-Polling über {} Quelle(n) (Home + Proxys) – ~{:.1} Checks/Sekunde. Der Rename wird erst gefeuert, sobald der Name frei ist.",
+            sources.len(),
+            checks_per_sec,
+        ),
+    });
 
     let account = Arc::new(account);
-    run_rotation(sources, account).await;
+    run_rotation(sources, poll_interval, account).await;
 
     if let Some(name) = shared().lock().success_name.clone() {
         emit(&OutEvent::RenameResult {
@@ -150,20 +168,31 @@ async fn async_main() {
     std::process::exit(0);
 }
 
-/// The single rename-attempt loop. Instead of running one concurrent worker
-/// per proxy, it cycles through all sources in order (Home first, then each
-/// proxy) firing exactly one request per cooldown. This means the configured
-/// cooldown is the gap *between* any two attempts, and each individual IP only
-/// fires once per full rotation — spreading load across IPs while keeping a
-/// steady, predictable request rhythm. Returns when the shared `stop` flag is
-/// set (by a user stop command or by a successful rename).
-async fn run_rotation(sources: Vec<(String, reqwest::Client)>, account: Arc<Account>) {
+/// The main sniper loop. Phase 1 rapidly polls the public name-lookup endpoint,
+/// rotating across all sources (Home + proxies) so each IP stays under its
+/// per-IP limit. Phase 2 fires the authenticated rename the instant a lookup
+/// reports the name is free. Returns when the shared `stop` flag is set (by a
+/// user stop command or by a successful rename).
+async fn run_rotation(
+    sources: Vec<(String, reqwest::Client)>,
+    poll_interval: Duration,
+    account: Arc<Account>,
+) {
     let mut last_refresh = Instant::now();
-    // Consecutive 429s across the rotation, used for exponential backoff when
+    // Consecutive 429s on the *rename* endpoint, for exponential backoff when
     // rate-limit protection is enabled.
     let mut consecutive_rate_limits: u32 = 0;
-    // Which source fires next; wraps around the `sources` list.
+    // Which source performs the next availability check; wraps around.
     let mut idx: usize = 0;
+    // When we last actually fired a rename, so account-limited rename attempts
+    // are spaced by the configured cooldown even if the name reads as free.
+    let mut last_rename_attempt: Option<Instant> = None;
+    // When we last emitted a "still taken" heartbeat.
+    let mut last_status_emit: Option<Instant> = None;
+    // A dedicated direct client for the actual claim; the rename is account-
+    // limited, so the IP it goes out on does not matter — keep it off the
+    // rotated proxy clients.
+    let home = reqwest::Client::new();
 
     loop {
         let (stop, desired_name, cooldown_seconds, rate_limit_protection) = {
@@ -179,89 +208,125 @@ async fn run_rotation(sources: Vec<(String, reqwest::Client)>, account: Arc<Acco
             continue;
         }
 
-        // Proactive token refresh, well within the token's ~24h lifetime.
+        // Proactive token refresh, kept ready so the claim can fire instantly.
         if last_refresh.elapsed() > TOKEN_REFRESH_INTERVAL {
             let _ = account.refresh().await;
             last_refresh = Instant::now();
         }
 
-        let Some(token) = account.access_token() else {
-            emit(&OutEvent::FatalError {
-                error: "No access token available after authentication".into(),
-            });
-            std::process::exit(1);
-        };
-
+        // Phase 1: availability check via the next rotated source.
         let (label, http) = {
             let (label, client) = &sources[idx % sources.len()];
             (label.clone(), client.clone())
         };
+        idx = idx.wrapping_add(1);
 
-        emit(&OutEvent::RenameAttempt {
-            desired_name: desired_name.clone(),
-            source: Some(label.clone()),
-        });
+        match attempt_lookup(&http, &desired_name).await {
+            LookupOutcome::Free => {
+                // Phase 2: the name has no owner — claim it now, respecting the
+                // rename cooldown so repeated attempts don't rack up 429s.
+                let ready = last_rename_attempt
+                    .map(|t| t.elapsed() >= Duration::from_secs(cooldown_seconds.clamp(1, 60)))
+                    .unwrap_or(true);
+                if !ready {
+                    sleep_checking_stop(poll_interval).await;
+                    continue;
+                }
 
-        // The wait before the next source fires. Normally the configured
-        // cooldown; a 429 with protection enabled overrides it with a backoff.
-        let mut wait = Duration::from_secs(cooldown_seconds.clamp(1, 60));
-
-        match attempt_rename(&http, &token, &desired_name).await {
-            RenameOutcome::Success { current_name } => {
-                let mut s = shared().lock();
-                s.success_name = Some(current_name);
-                s.stop = true;
-                return;
-            }
-            RenameOutcome::Unauthorized => {
-                let _ = account.refresh().await;
-                last_refresh = Instant::now();
-                emit(&OutEvent::Warning {
-                    message: format!("[{label}] Zugriffstoken abgelaufen, wird erneuert..."),
-                });
-            }
-            RenameOutcome::RateLimited { retry_after } => {
-                if rate_limit_protection {
-                    consecutive_rate_limits += 1;
-                    // Prefer the server's own Retry-After value; otherwise back
-                    // off with a delay that doubles per consecutive 429,
-                    // starting no lower than 10s and capped at 5 minutes.
-                    let backoff = retry_after.unwrap_or_else(|| {
-                        let base = cooldown_seconds.max(10);
-                        base.saturating_mul(1u64 << consecutive_rate_limits.min(5).saturating_sub(1))
-                            .min(300)
+                let Some(token) = account.access_token() else {
+                    emit(&OutEvent::FatalError {
+                        error: "No access token available after authentication".into(),
                     });
+                    std::process::exit(1);
+                };
+
+                emit(&OutEvent::RenameAttempt {
+                    desired_name: desired_name.clone(),
+                    source: Some("Claim".to_string()),
+                });
+                last_rename_attempt = Some(Instant::now());
+                last_status_emit = None;
+
+                match attempt_rename(&home, &token, &desired_name).await {
+                    RenameOutcome::Success { current_name } => {
+                        let mut s = shared().lock();
+                        s.success_name = Some(current_name);
+                        s.stop = true;
+                        return;
+                    }
+                    RenameOutcome::Unauthorized => {
+                        let _ = account.refresh().await;
+                        last_refresh = Instant::now();
+                        emit(&OutEvent::Warning {
+                            message: "Zugriffstoken abgelaufen, wird erneuert...".into(),
+                        });
+                    }
+                    RenameOutcome::RateLimited { retry_after } => {
+                        consecutive_rate_limits += 1;
+                        let backoff = if rate_limit_protection {
+                            retry_after.unwrap_or_else(|| {
+                                let base = cooldown_seconds.max(10);
+                                base.saturating_mul(1u64 << consecutive_rate_limits.min(5).saturating_sub(1))
+                                    .min(300)
+                            })
+                        } else {
+                            // Even without protection, never hammer the rename
+                            // endpoint: a small mandatory pause avoids the
+                            // suspension Mojang applies to 429 floods.
+                            retry_after.unwrap_or_else(|| cooldown_seconds.clamp(1, 60))
+                        };
+                        emit(&OutEvent::Warning {
+                            message: format!(
+                                "Rate-Limit beim Rename (HTTP 429). Warte {backoff}s vor dem nächsten Claim-Versuch (Konto-Limit – zu viele Versuche können den Account temporär sperren)."
+                            ),
+                        });
+                        sleep_checking_stop(Duration::from_secs(backoff)).await;
+                        continue;
+                    }
+                    RenameOutcome::Failed { message } => {
+                        // A rename failure right after a "free" lookup usually
+                        // means someone else grabbed it or it's in the 37-day
+                        // protection window — report and keep polling.
+                        consecutive_rate_limits = 0;
+                        emit(&OutEvent::RenameResult {
+                            success: false,
+                            message,
+                            current_name: None,
+                            source: Some("Claim".to_string()),
+                        });
+                    }
+                }
+            }
+            LookupOutcome::Taken => {
+                // Still owned — emit an occasional heartbeat so the console
+                // shows the sniper is alive without a line per check.
+                let due = last_status_emit
+                    .map(|t| t.elapsed() >= STATUS_HEARTBEAT_INTERVAL)
+                    .unwrap_or(true);
+                if due {
+                    last_status_emit = Some(Instant::now());
                     emit(&OutEvent::Warning {
                         message: format!(
-                            "[{label}] Rate-Limit erkannt (HTTP 429), warte {backoff}s bevor die nächste Quelle es versucht..."
+                            "[{label}] Prüfe „{desired_name}\"… noch vergeben, warte auf Freigabe."
                         ),
-                    });
-                    wait = Duration::from_secs(backoff);
-                } else {
-                    consecutive_rate_limits = 0;
-                    emit(&OutEvent::RenameResult {
-                        success: false,
-                        message: "Rate-Limit erreicht (HTTP 429) – zu viele Anfragen. Aktiviere den Rate-Limit-Schutz oder füge Proxies hinzu.".into(),
-                        current_name: None,
-                        source: Some(label.clone()),
                     });
                 }
             }
-            RenameOutcome::Failed { message } => {
-                consecutive_rate_limits = 0;
-                emit(&OutEvent::RenameResult {
-                    success: false,
-                    message,
-                    current_name: None,
-                    source: Some(label.clone()),
+            LookupOutcome::RateLimited { .. } => {
+                emit(&OutEvent::Warning {
+                    message: format!(
+                        "[{label}] Lookup-Rate-Limit (HTTP 429) auf dieser IP – wird übersprungen. Mehr Proxys hinzufügen, um schneller zu prüfen."
+                    ),
+                });
+            }
+            LookupOutcome::Error { message } => {
+                emit(&OutEvent::Warning {
+                    message: format!("[{label}] {message}"),
                 });
             }
         }
 
-        // Advance to the next source, then wait out the cooldown (or backoff)
-        // before it fires.
-        idx = idx.wrapping_add(1);
-        sleep_checking_stop(wait).await;
+        sleep_checking_stop(poll_interval).await;
     }
 }
 
@@ -305,6 +370,49 @@ enum RenameOutcome {
     /// value in seconds, if the server sent one.
     RateLimited { retry_after: Option<u64> },
     Failed { message: String },
+}
+
+/// Result of a public name-availability lookup.
+enum LookupOutcome {
+    /// The name currently has no owner (HTTP 404) — likely claimable.
+    Free,
+    /// The name is owned by someone (HTTP 2xx with a profile).
+    Taken,
+    /// HTTP 429 on the lookup endpoint (per-IP limit for this source).
+    RateLimited { retry_after: Option<u64> },
+    Error { message: String },
+}
+
+/// Check whether `name` currently has an owner via the public, unauthenticated
+/// name-lookup endpoint. This endpoint is rate-limited *per IP*, so callers
+/// rotate it across multiple proxy clients to raise the combined check rate.
+async fn attempt_lookup(client: &reqwest::Client, name: &str) -> LookupOutcome {
+    let url = format!("https://api.minecraftservices.com/minecraft/profile/lookup/name/{name}");
+    let res = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return LookupOutcome::Error {
+                message: format!("Verfügbarkeits-Check fehlgeschlagen: {e}"),
+            };
+        }
+    };
+
+    let status = res.status();
+    match status.as_u16() {
+        404 => LookupOutcome::Free,
+        429 => {
+            let retry_after = res
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok());
+            LookupOutcome::RateLimited { retry_after }
+        }
+        code if (200..300).contains(&code) => LookupOutcome::Taken,
+        _ => LookupOutcome::Error {
+            message: format!("Verfügbarkeits-Check: unerwartete Antwort (HTTP {status})"),
+        },
+    }
 }
 
 /// Call the Mojang name-change API once and classify the result.
