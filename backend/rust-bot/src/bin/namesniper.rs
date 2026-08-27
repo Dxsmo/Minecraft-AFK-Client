@@ -121,30 +121,22 @@ async fn async_main() {
         }
     };
 
-    // Build one HTTP client (and thus one independent request strand) per
-    // configured proxy. With no proxies, a single direct client is used.
-    let workers = build_workers(&config.proxies);
-    if workers.len() > 1 {
+    // Build the ordered list of request sources: the direct "Home" connection
+    // first, followed by one HTTP client per configured proxy. The single
+    // rotation loop cycles through them, so the cooldown applies *between*
+    // sources (Home -> cooldown -> Proxy 1 -> cooldown -> Proxy 2 -> ...).
+    let sources = build_workers(&config.proxies);
+    if sources.len() > 1 {
         emit(&OutEvent::Warning {
             message: format!(
-                "{} parallele Stränge aktiv (ein Worker pro Proxy) für maximale Abdeckung.",
-                workers.len()
+                "{} Quellen in Rotation (Home + Proxys) – der Cooldown gilt zwischen den Quellen.",
+                sources.len()
             ),
         });
     }
 
     let account = Arc::new(account);
-    let last_refresh = Arc::new(Mutex::new(Instant::now()));
-
-    // Run every worker concurrently on the single-threaded runtime; they
-    // interleave at await points (all work is network I/O). The first to
-    // succeed sets `success_name` + `stop`, so the rest wind down promptly.
-    let futures = workers.into_iter().map(|(label, client)| {
-        let account = Arc::clone(&account);
-        let last_refresh = Arc::clone(&last_refresh);
-        run_worker(label, client, account, last_refresh)
-    });
-    futures::future::join_all(futures).await;
+    run_rotation(sources, account).await;
 
     if let Some(name) = shared().lock().success_name.clone() {
         emit(&OutEvent::RenameResult {
@@ -158,17 +150,20 @@ async fn async_main() {
     std::process::exit(0);
 }
 
-/// One independent rename-attempt loop, bound to a single HTTP client (which
-/// may route through a specific proxy). Returns when the shared `stop` flag is
-/// set (by a user stop command or by another worker succeeding).
-async fn run_worker(
-    label: String,
-    http: reqwest::Client,
-    account: Arc<Account>,
-    last_refresh: Arc<Mutex<Instant>>,
-) {
-    // Per-worker 429 streak so each proxy backs off on its own schedule.
+/// The single rename-attempt loop. Instead of running one concurrent worker
+/// per proxy, it cycles through all sources in order (Home first, then each
+/// proxy) firing exactly one request per cooldown. This means the configured
+/// cooldown is the gap *between* any two attempts, and each individual IP only
+/// fires once per full rotation — spreading load across IPs while keeping a
+/// steady, predictable request rhythm. Returns when the shared `stop` flag is
+/// set (by a user stop command or by a successful rename).
+async fn run_rotation(sources: Vec<(String, reqwest::Client)>, account: Arc<Account>) {
+    let mut last_refresh = Instant::now();
+    // Consecutive 429s across the rotation, used for exponential backoff when
+    // rate-limit protection is enabled.
     let mut consecutive_rate_limits: u32 = 0;
+    // Which source fires next; wraps around the `sources` list.
+    let mut idx: usize = 0;
 
     loop {
         let (stop, desired_name, cooldown_seconds, rate_limit_protection) = {
@@ -184,19 +179,10 @@ async fn run_worker(
             continue;
         }
 
-        // Proactive token refresh, coordinated across workers so only one
-        // refreshes per interval (the others see the bumped timestamp).
-        let needs_refresh = {
-            let mut lr = last_refresh.lock();
-            if lr.elapsed() > TOKEN_REFRESH_INTERVAL {
-                *lr = Instant::now();
-                true
-            } else {
-                false
-            }
-        };
-        if needs_refresh {
+        // Proactive token refresh, well within the token's ~24h lifetime.
+        if last_refresh.elapsed() > TOKEN_REFRESH_INTERVAL {
             let _ = account.refresh().await;
+            last_refresh = Instant::now();
         }
 
         let Some(token) = account.access_token() else {
@@ -206,15 +192,22 @@ async fn run_worker(
             std::process::exit(1);
         };
 
+        let (label, http) = {
+            let (label, client) = &sources[idx % sources.len()];
+            (label.clone(), client.clone())
+        };
+
         emit(&OutEvent::RenameAttempt {
             desired_name: desired_name.clone(),
             source: Some(label.clone()),
         });
 
+        // The wait before the next source fires. Normally the configured
+        // cooldown; a 429 with protection enabled overrides it with a backoff.
+        let mut wait = Duration::from_secs(cooldown_seconds.clamp(1, 60));
+
         match attempt_rename(&http, &token, &desired_name).await {
             RenameOutcome::Success { current_name } => {
-                // Record the win and signal every other worker to stop; the
-                // final success event is emitted centrally in `async_main`.
                 let mut s = shared().lock();
                 s.success_name = Some(current_name);
                 s.stop = true;
@@ -222,7 +215,7 @@ async fn run_worker(
             }
             RenameOutcome::Unauthorized => {
                 let _ = account.refresh().await;
-                *last_refresh.lock() = Instant::now();
+                last_refresh = Instant::now();
                 emit(&OutEvent::Warning {
                     message: format!("[{label}] Zugriffstoken abgelaufen, wird erneuert..."),
                 });
@@ -240,20 +233,19 @@ async fn run_worker(
                     });
                     emit(&OutEvent::Warning {
                         message: format!(
-                            "[{label}] Rate-Limit erkannt (HTTP 429), warte {backoff}s bevor der nächste Versuch unternommen wird..."
+                            "[{label}] Rate-Limit erkannt (HTTP 429), warte {backoff}s bevor die nächste Quelle es versucht..."
                         ),
                     });
-                    sleep_checking_stop(Duration::from_secs(backoff)).await;
-                    continue;
+                    wait = Duration::from_secs(backoff);
+                } else {
+                    consecutive_rate_limits = 0;
+                    emit(&OutEvent::RenameResult {
+                        success: false,
+                        message: "Rate-Limit erreicht (HTTP 429) – zu viele Anfragen. Aktiviere den Rate-Limit-Schutz oder füge Proxies hinzu.".into(),
+                        current_name: None,
+                        source: Some(label.clone()),
+                    });
                 }
-
-                consecutive_rate_limits = 0;
-                emit(&OutEvent::RenameResult {
-                    success: false,
-                    message: "Rate-Limit erreicht (HTTP 429) – zu viele Anfragen. Aktiviere den Rate-Limit-Schutz oder füge Proxies hinzu.".into(),
-                    current_name: None,
-                    source: Some(label.clone()),
-                });
             }
             RenameOutcome::Failed { message } => {
                 consecutive_rate_limits = 0;
@@ -266,19 +258,21 @@ async fn run_worker(
             }
         }
 
-        sleep_checking_stop(Duration::from_secs(cooldown_seconds.clamp(1, 60))).await;
+        // Advance to the next source, then wait out the cooldown (or backoff)
+        // before it fires.
+        idx = idx.wrapping_add(1);
+        sleep_checking_stop(wait).await;
     }
 }
 
-/// Turn the configured proxy list into `(label, client)` pairs — one request
-/// strand each. An empty list yields a single direct client.
+/// Build the ordered list of `(label, client)` request sources for the
+/// rotation: the direct "Home" connection is always first, followed by one
+/// client per valid proxy. Invalid proxies are skipped with a warning.
 fn build_workers(proxies: &[String]) -> Vec<(String, reqwest::Client)> {
-    let cleaned: Vec<&String> = proxies.iter().filter(|p| !p.trim().is_empty()).collect();
-    if cleaned.is_empty() {
-        return vec![("Direkt".to_string(), reqwest::Client::new())];
-    }
+    // The direct/home connection always leads the rotation.
+    let mut workers = vec![("Home".to_string(), reqwest::Client::new())];
 
-    let mut workers = Vec::new();
+    let cleaned: Vec<&String> = proxies.iter().filter(|p| !p.trim().is_empty()).collect();
     for (idx, proxy) in cleaned.iter().enumerate() {
         let raw = proxy.trim();
         let label = format!("Proxy {} ({})", idx + 1, proxy_display(raw));
@@ -290,11 +284,6 @@ fn build_workers(proxies: &[String]) -> Vec<(String, reqwest::Client)> {
         }
     }
 
-    // If every proxy was invalid, fall back to a direct strand so the sniper
-    // still runs rather than silently doing nothing.
-    if workers.is_empty() {
-        workers.push(("Direkt".to_string(), reqwest::Client::new()));
-    }
     workers
 }
 

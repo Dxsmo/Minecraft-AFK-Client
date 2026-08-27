@@ -298,7 +298,7 @@ export function SniperAccountDetailPage() {
           <div className="flex items-center justify-between">
             <label className="label">Proxies (optional)</label>
             <span className="text-[11px]" style={{ color: proxyCount > 0 ? "var(--accent)" : "var(--text-subtle)" }}>
-              {proxyCount > 0 ? `${proxyCount} Strang${proxyCount > 1 ? "e" : ""}` : "1 Strang (direkt)"}
+              {proxyCount > 0 ? `${proxyCount + 1} Quellen in Rotation` : "nur Home"}
             </span>
           </div>
           <textarea
@@ -311,8 +311,9 @@ export function SniperAccountDetailPage() {
             style={{ resize: "vertical" }}
           />
           <p className="mt-1 text-xs" style={{ color: "var(--text-subtle)" }}>
-            Ein Proxy pro Zeile (http/https/socks5). Pro Proxy läuft ein eigener, unabhängiger Versuchs-Strang über eine
-            andere IP – so umgeht man das IP-Rate-Limit und deckt mehr Zeit ab. Änderungen starten den laufenden Sniper neu.
+            Ein Proxy pro Zeile (http/https/socks5). Die Quellen werden reihum abgefragt: Home → Cooldown → Proxy 1 →
+            Cooldown → Proxy 2 → … Es läuft also immer nur eine Anfrage pro Cooldown, und jede IP feuert nur einmal pro
+            Runde – so umgeht man das IP-Rate-Limit. Änderungen starten den laufenden Sniper neu.
           </p>
         </div>
       </div>
