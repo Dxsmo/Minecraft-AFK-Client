@@ -3,7 +3,7 @@ import type { ClientRuntimeConfig, ClientStatusSnapshot, ConsoleEvent } from "./
 import { prisma } from "../database/prisma.js";
 import { persistConsoleLog } from "../logging/consoleLogService.js";
 import { logger } from "../logging/logger.js";
-import { parseAllowlist, parseDailyTimes, parseHomes } from "../accounts/service.js";
+import { parseAllowlist, parseDailyTimes, parseHomes, parseHugoSettings } from "../accounts/service.js";
 import type { MinecraftAccount } from "@prisma/client";
 
 export type ConsoleEventListener = (event: ConsoleEvent) => void;
@@ -41,6 +41,8 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     balanceEnabled: account.balanceEnabled,
     balanceCommand: account.balanceCommand,
     homes: parseHomes(account.homesJson),
+    hugoSettingsCommand: account.hugoSettingsCommand,
+    hugoSettings: parseHugoSettings(account.hugoSettingsJson),
   };
 }
 
@@ -145,6 +147,25 @@ export class ClientManager {
           if (err?.code !== "P2025") logger.error({ err }, "Failed to persist homes");
         });
     });
+    client.on(
+      "hugoSettings",
+      ({
+        minecraftAccountId,
+        settings,
+      }: {
+        minecraftAccountId: string;
+        settings: { label: string; enabled: boolean }[];
+      }) => {
+        prisma.minecraftAccount
+          .update({
+            where: { id: minecraftAccountId },
+            data: { hugoSettingsJson: JSON.stringify(settings) },
+          })
+          .catch((err) => {
+            if (err?.code !== "P2025") logger.error({ err }, "Failed to persist hugo settings");
+          });
+      },
+    );
     this.clients.set(account.id, client);
     return client;
   }
@@ -204,6 +225,22 @@ export class ClientManager {
     const client = this.clients.get(accountId);
     if (!client) return false;
     return client.cleanSpawner();
+  }
+
+  scanHugoSettings(accountId: string): boolean {
+    const client = this.clients.get(accountId);
+    if (!client) return false;
+    return client.scanHugoSettings();
+  }
+
+  setHugoSetting(accountId: string, label: string, enabled: boolean): boolean {
+    const client = this.clients.get(accountId);
+    if (!client) return false;
+    return client.setHugoSetting(label, enabled);
+  }
+
+  getHugoSettings(accountId: string) {
+    return this.clients.get(accountId)?.getHugoSettings();
   }
 
   requestInventory(accountId: string): void {

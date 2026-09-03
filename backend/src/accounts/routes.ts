@@ -7,6 +7,7 @@ import {
   commandSchema,
   moveItemSchema,
   dropItemSchema,
+  setHugoSettingSchema,
 } from "./schemas.js";
 import * as accountsService from "./service.js";
 import { executeCommand } from "../commands/service.js";
@@ -246,6 +247,65 @@ export default async function accountsRoutes(app: FastifyInstance) {
     { preHandler: app.requireCsrf },
     async (req, reply) => {
       await guardedLifecycle(req, reply, (id) => clientManager.cleanSpawner(id), "ACCOUNT_CLEAN_SPAWNER");
+    },
+  );
+
+  // ---- Server settings GUI (e.g. HugoSMP "/settings") ----
+
+  app.get("/api/minecraft/accounts/:id/hugo-settings", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const account = await accountsService.getAccountForSession(req.session!, id);
+    if (!account) {
+      reply.code(404).send({ error: "Account not found" });
+      return;
+    }
+    // Prefer the live in-memory list (freshest); fall back to the persisted one.
+    const live = clientManager.getHugoSettings(id);
+    reply.send({ settings: live ?? account.hugoSettings ?? [] });
+  });
+
+  app.post(
+    "/api/minecraft/accounts/:id/hugo-settings/scan",
+    { preHandler: app.requireCsrf },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const allowed = await accountsService.canAccessAccount(req.session!, id);
+      if (!allowed) {
+        reply.code(404).send({ error: "Account not found" });
+        return;
+      }
+      if (!clientManager.scanHugoSettings(id)) {
+        reply.code(409).send({ error: "Bot is not online" });
+        return;
+      }
+      reply.send({ ok: true });
+    },
+  );
+
+  app.post(
+    "/api/minecraft/accounts/:id/hugo-settings/set",
+    { preHandler: app.requireCsrf },
+    async (req, reply) => {
+      const { id } = req.params as { id: string };
+      const body = parseOrReject(setHugoSettingSchema, req.body, reply);
+      if (!body) return;
+      const allowed = await accountsService.canAccessAccount(req.session!, id);
+      if (!allowed) {
+        reply.code(404).send({ error: "Account not found" });
+        return;
+      }
+      if (!clientManager.setHugoSetting(id, body.label, body.enabled)) {
+        reply.code(409).send({ error: "Bot is not online" });
+        return;
+      }
+      await recordAuditLog({
+        userId: req.session!.user.id,
+        action: "ACCOUNT_HUGO_SETTING",
+        targetType: "MinecraftAccount",
+        targetId: id,
+        details: { label: body.label, enabled: body.enabled },
+      });
+      reply.send({ ok: true });
     },
   );
 

@@ -32,16 +32,36 @@ export function parseHomes(raw: string): string[] {
   }
 }
 
+export function parseHugoSettings(raw: string): { label: string; enabled: boolean }[] {
+  try {
+    const value = JSON.parse(raw);
+    if (!Array.isArray(value)) return [];
+    return value
+      .filter((v): v is { label: string; enabled: unknown } => v && typeof v.label === "string")
+      .map((v) => ({ label: v.label, enabled: Boolean(v.enabled) }));
+  } catch {
+    return [];
+  }
+}
+
 /** Presents a stored account to API clients, decoding JSON-encoded list columns to arrays. */
-function present<T extends { tpAutoAllowlist: string; dailyCommandTimes: string; homesJson: string }>(
+function present<
+  T extends { tpAutoAllowlist: string; dailyCommandTimes: string; homesJson: string; hugoSettingsJson: string },
+>(
   account: T,
-): Omit<T, "tpAutoAllowlist" | "dailyCommandTimes" | "homesJson"> & { tpAutoAllowlist: string[]; dailyCommandTimes: string[]; homes: string[] } {
-  const { tpAutoAllowlist, dailyCommandTimes, homesJson, ...rest } = account;
+): Omit<T, "tpAutoAllowlist" | "dailyCommandTimes" | "homesJson" | "hugoSettingsJson"> & {
+  tpAutoAllowlist: string[];
+  dailyCommandTimes: string[];
+  homes: string[];
+  hugoSettings: { label: string; enabled: boolean }[];
+} {
+  const { tpAutoAllowlist, dailyCommandTimes, homesJson, hugoSettingsJson, ...rest } = account;
   return {
     ...rest,
     tpAutoAllowlist: parseAllowlist(tpAutoAllowlist),
     dailyCommandTimes: parseDailyTimes(dailyCommandTimes),
     homes: parseHomes(homesJson),
+    hugoSettings: parseHugoSettings(hugoSettingsJson),
   };
 }
 
@@ -83,6 +103,8 @@ const publicAccountSelect = {
   lastBalance: true,
   lastBalanceAt: true,
   homesJson: true,
+  hugoSettingsCommand: true,
+  hugoSettingsJson: true,
   status: true,
   dashboardOrder: true,
   createdAt: true,

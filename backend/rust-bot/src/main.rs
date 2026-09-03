@@ -281,6 +281,12 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
                     Command::DropItem { slot } => {
                         shared().lock().behavior.enqueue_drop_item(slot)
                     }
+                    Command::ScanSettings { command } => {
+                        shared().lock().behavior.enqueue_scan_settings(command)
+                    }
+                    Command::SetSetting { command, label, enabled } => {
+                        shared().lock().behavior.enqueue_set_setting(command, label, enabled)
+                    }
                     Command::Disconnect => {
                         emit(&OutEvent::Disconnect {
                             reason: Some("Requested by controller".into()),

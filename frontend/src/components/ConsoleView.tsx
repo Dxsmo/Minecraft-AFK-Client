@@ -29,12 +29,17 @@ export function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLo
   // auto-follow new output when they haven't scrolled up to read history.
   const stickToBottomRef = useRef(true);
 
+  // Key the auto-follow on the newest entry's id, not the array length: the log
+  // buffer is capped (ring buffer), so once it's full `length` stops changing
+  // and a length-based effect would never fire again — freezing the scroll.
+  const lastLogId = logs.length > 0 ? logs[logs.length - 1].id : null;
+
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !stickToBottomRef.current) return;
     // Scroll only this container - never the page/ancestors (unlike scrollIntoView).
     el.scrollTop = el.scrollHeight;
-  }, [logs.length]);
+  }, [lastLogId]);
 
   const handleScroll = () => {
     const el = containerRef.current;

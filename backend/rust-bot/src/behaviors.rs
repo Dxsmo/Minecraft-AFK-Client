@@ -14,13 +14,14 @@ use std::time::{Duration, Instant};
 use azalea::registry::builtin::BlockKind;
 use azalea::block::BlockStates;
 use azalea::{BlockPos, Client, WalkDirection};
+use azalea_inventory::components::{CustomName, Lore};
 use azalea_inventory::operations::{PickupClick, ThrowClick};
 use azalea_inventory::ItemStack;
 use rand::Rng;
 use regex::Regex;
 
 use crate::emit;
-use crate::protocol::{BehaviorConfig, Config, InventorySlot, OutEvent};
+use crate::protocol::{BehaviorConfig, Config, InventorySlot, OutEvent, SettingEntry};
 
 /// How long the bot keeps walking in one direction before stopping again.
 const WALK_DURATION: Duration = Duration::from_secs(2);
@@ -31,6 +32,16 @@ const MOVEMENT_INTERVAL: Duration = Duration::from_secs(8);
 /// (sub-5s) auto-sell interval isn't bottlenecked waiting for a menu that
 /// already opened or will never open.
 const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Once the sell container opens, wait this long before shift-clicking so the
+/// server has synced the container's slot contents. Without this settle delay
+/// the player slots can still read as empty the instant the menu opens, so the
+/// cycle would sell nothing and close — the "opens menu but sells nothing" stall.
+const AUTOSELL_SETTLE_DELAY: Duration = Duration::from_millis(250);
+/// How often to re-assert the crouch (sneak) state while crouch is enabled.
+/// A death/respawn or server switch silently resets sneak server-side while the
+/// client still thinks it's crouching, so a plain diff-check never re-sends it.
+/// Periodically forcing the packet recovers the crouch without spamming it.
+const CROUCH_REASSERT_INTERVAL: Duration = Duration::from_secs(3);
 /// Ignore an identical `/tpaccept …` command if we already sent it within this
 /// window, to avoid reacting multiple times to a burst of duplicate server
 /// messages (request line + clickable hint often arrive together).
@@ -51,6 +62,12 @@ const SPAWNER_MAX_REACH: f64 = 5.0;
 /// How long to wait for a right-clicked spawner to open its container before
 /// giving up on the clean-spawner cycle.
 const SPAWNER_MENU_TIMEOUT: Duration = Duration::from_millis(2000);
+/// How long to wait for the server to open its settings GUI after the settings
+/// command is sent before giving up on a scan/toggle.
+const SETTINGS_MENU_TIMEOUT: Duration = Duration::from_millis(2500);
+/// After clicking a settings toggle, wait this long for the server to update the
+/// button in place before re-scanning and reporting the refreshed state.
+const SETTINGS_CLICK_SETTLE: Duration = Duration::from_millis(500);
 /// After an inventory move/drop, wait this long before emitting a fresh
 /// snapshot so the server's click acknowledgement has been applied and the UI
 /// resyncs with the bot's real inventory state.
@@ -61,6 +78,10 @@ const INVENTORY_RESYNC_DELAY: Duration = Duration::from_millis(300);
 enum AutoSellPhase {
     Idle,
     WaitingForMenu { since: Instant },
+    /// The sell container is open and slots are syncing; shift-click once the
+    /// settle delay elapses. `since` is kept so the overall menu timeout still
+    /// applies as a safety net.
+    Selling { since: Instant, settle_until: Instant },
 }
 
 /// A one-shot, foreground task. While one is queued or running, the continuous
@@ -80,6 +101,13 @@ enum ForegroundTask {
     MoveItem { from: u16, to: u16 },
     /// Drop the whole stack in one of the bot's own inventory slots.
     DropItem { slot: u16 },
+    /// Open the server's settings GUI and scan its toggle buttons. When
+    /// `target` is set, also click the matching button so it reaches the desired
+    /// state. `command` is the chat command that opens the menu (e.g. "/settings").
+    Settings {
+        command: String,
+        target: Option<(String, bool)>,
+    },
 }
 
 /// A foreground task that is mid-execution and spans multiple ticks.
@@ -88,6 +116,14 @@ enum ActiveTask {
     Balance { deadline: Instant },
     /// Waiting for a right-clicked spawner's container to open.
     CleanSpawner { menu_deadline: Instant },
+    /// Interacting with the server's settings GUI: waiting for it to open, then
+    /// (optionally) clicking a button and re-scanning after it settles.
+    Settings {
+        menu_deadline: Instant,
+        target: Option<(String, bool)>,
+        /// When set, a toggle was just clicked; re-scan and finish once elapsed.
+        click_settle: Option<Instant>,
+    },
 }
 
 pub struct BehaviorState {
@@ -118,6 +154,8 @@ pub struct BehaviorState {
     /// corrects a rejected click) instead of relying only on a fixed delay.
     last_inventory_sig: Option<u64>,
     last_heartbeat_at: Instant,
+    /// Last time we force-re-asserted the crouch state (see CROUCH_REASSERT_INTERVAL).
+    last_crouch_reassert_at: Instant,
 }
 
 impl BehaviorState {
@@ -155,6 +193,7 @@ impl BehaviorState {
             inventory_resync_at: None,
             last_inventory_sig: None,
             last_heartbeat_at: now,
+            last_crouch_reassert_at: now,
         }
     }
 
@@ -214,6 +253,23 @@ impl BehaviorState {
         self.task_queue.push_back(ForegroundTask::DropItem { slot });
     }
 
+    /// Enqueue a settings-menu scan (no toggle) as a foreground one-shot task.
+    pub fn enqueue_scan_settings(&mut self, command: String) {
+        let command = normalize_settings_command(command);
+        self.task_queue
+            .push_back(ForegroundTask::Settings { command, target: None });
+    }
+
+    /// Enqueue a settings-menu toggle: open the menu and set the button whose
+    /// label matches `label` to `enabled`. Runs as a foreground one-shot task.
+    pub fn enqueue_set_setting(&mut self, command: String, label: String, enabled: bool) {
+        let command = normalize_settings_command(command);
+        self.task_queue.push_back(ForegroundTask::Settings {
+            command,
+            target: Some((label.trim().to_string(), enabled)),
+        });
+    }
+
     /// Emit a live snapshot of the bot's own inventory. Read-only, so it is not
     /// routed through the task queue.
     pub fn emit_inventory(&self, bot: &Client) {
@@ -239,11 +295,21 @@ impl BehaviorState {
             }
         }
 
-        // Crouch: continuously hold sneak while enabled. Only send a state
-        // change when the desired value differs from the bot's current one, so
-        // we don't spam the server with a packet every tick.
-        if self.config.crouch_enabled != bot.crouching() {
-            let _ = bot.set_crouching(self.config.crouch_enabled);
+        // Crouch: continuously hold sneak while enabled. Normally we only send a
+        // state change when the desired value differs from the bot's current one
+        // (to avoid spamming a packet every tick). But a death/respawn or server
+        // switch resets sneak server-side while `bot.crouching()` still reports
+        // `true`, so the diff-check alone would never recover it. To fix that we
+        // also force-re-assert the crouch every CROUCH_REASSERT_INTERVAL.
+        if self.config.crouch_enabled {
+            if !bot.crouching()
+                || now.duration_since(self.last_crouch_reassert_at) >= CROUCH_REASSERT_INTERVAL
+            {
+                let _ = bot.set_crouching(true);
+                self.last_crouch_reassert_at = now;
+            }
+        } else if bot.crouching() {
+            let _ = bot.set_crouching(false);
         }
 
         // AFK: look somewhere random and jump. Keeps the player active without
@@ -373,6 +439,16 @@ impl BehaviorState {
                     self.active_task = None;
                 }
             }
+            Some(ActiveTask::Settings {
+                menu_deadline,
+                target,
+                click_settle,
+            }) => {
+                let menu_deadline = *menu_deadline;
+                let target = target.clone();
+                let click_settle = *click_settle;
+                self.advance_settings(bot, now, menu_deadline, target, click_settle);
+            }
             None => {}
         }
 
@@ -438,9 +514,107 @@ impl BehaviorState {
                             emit_inventory_snapshot(bot);
                         }
                     }
+                    ForegroundTask::Settings { command, target } => {
+                        // Open the settings GUI; the rest is handled tick-by-tick
+                        // by advance_settings once the container appears.
+                        bot.chat(command.clone());
+                        emit(&OutEvent::BehaviorLog {
+                            message: format!("Settings: opening menu ({command})"),
+                        });
+                        self.active_task = Some(ActiveTask::Settings {
+                            menu_deadline: now + SETTINGS_MENU_TIMEOUT,
+                            target,
+                            click_settle: None,
+                        });
+                    }
                 }
             }
         }
+    }
+
+    /// Drive the settings-menu foreground task: wait for the GUI to open, scan
+    /// its toggle buttons, optionally click the one matching `target` to reach
+    /// the desired state, and emit an [`OutEvent::SettingsMenu`] snapshot. The
+    /// button is located by matching its label text (positions vary per account).
+    fn advance_settings(
+        &mut self,
+        bot: &Client,
+        now: Instant,
+        menu_deadline: Instant,
+        target: Option<(String, bool)>,
+        click_settle: Option<Instant>,
+    ) {
+        let Ok(inv) = bot.get_inventory() else {
+            return;
+        };
+        let menu_open = inv.id() != 0 && inv.slots().map(|s| s.len() > 36).unwrap_or(false);
+
+        // Post-click phase: wait for the server to update the button in place,
+        // then re-scan and report the fresh state.
+        if let Some(settle) = click_settle {
+            if now < settle && menu_open {
+                return;
+            }
+            if menu_open {
+                if let Some(slots) = inv.slots() {
+                    emit_settings(&scan_settings_entries(&slots));
+                }
+                inv.close();
+            }
+            self.active_task = None;
+            return;
+        }
+
+        if !menu_open {
+            if now >= menu_deadline {
+                emit(&OutEvent::Warning {
+                    message: "Settings: menu did not open".into(),
+                });
+                self.active_task = None;
+            }
+            return;
+        }
+
+        let slots = inv.slots().unwrap_or_default();
+        let entries = scan_settings_entries(&slots);
+
+        if let Some((label, desired)) = &target {
+            match entries.iter().find(|(_, l, _)| l.eq_ignore_ascii_case(label)) {
+                Some((slot, found_label, current)) => {
+                    if *current != *desired {
+                        inv.left_click(*slot);
+                        emit(&OutEvent::BehaviorLog {
+                            message: format!(
+                                "Settings: toggled '{found_label}' -> {}",
+                                if *desired { "Aktiviert" } else { "Deaktiviert" }
+                            ),
+                        });
+                        // Re-scan after the click settles, then finish.
+                        self.active_task = Some(ActiveTask::Settings {
+                            menu_deadline,
+                            target: None,
+                            click_settle: Some(now + SETTINGS_CLICK_SETTLE),
+                        });
+                        return;
+                    }
+                    emit(&OutEvent::BehaviorLog {
+                        message: format!(
+                            "Settings: '{found_label}' already {}",
+                            if *desired { "Aktiviert" } else { "Deaktiviert" }
+                        ),
+                    });
+                }
+                None => emit(&OutEvent::Warning {
+                    message: format!("Settings: button '{label}' not found in menu"),
+                }),
+            }
+        }
+
+        // No toggle needed (scan-only, already-correct, or not found): report the
+        // current state and close the menu.
+        emit_settings(&entries);
+        inv.close();
+        self.active_task = None;
     }
 
     /// If the spawner's container is open, drop all its items and close it.
@@ -509,6 +683,19 @@ impl BehaviorState {
                 let interval = Duration::from_secs_f64(secs);
                 if now.duration_since(self.last_autosell_at) >= interval {
                     self.last_autosell_at = now;
+                    // Close any lingering/stale menu before starting so we never
+                    // shift-click into the wrong container (a leftover GUI from a
+                    // prior cycle or another action). Skip this cycle if we had
+                    // to close one; the next tick starts fresh.
+                    if let Ok(inv) = bot.get_inventory() {
+                        if inv.id() != 0 {
+                            inv.close();
+                            emit(&OutEvent::BehaviorLog {
+                                message: "AutoSell: closed a lingering menu before selling".into(),
+                            });
+                            return;
+                        }
+                    }
                     let command = self.config.autosell_command.trim();
                     let command = if command.is_empty() { "/sell" } else { command };
                     bot.chat(command.to_string());
@@ -523,41 +710,78 @@ impl BehaviorState {
             }
             AutoSellPhase::WaitingForMenu { since } => {
                 if let Ok(inv) = bot.get_inventory() {
-                    // A non-zero container id means the server opened a menu
-                    // (the sell GUI) in response to our sell command.
+                    // A real sell container is open once the menu id is non-zero
+                    // AND it has more than the 36 player slots (container slots +
+                    // 36 player slots ≥ 45). Guarding on the slot count avoids
+                    // acting on the plain player inventory before the server has
+                    // actually opened its GUI.
                     if inv.id() != 0 {
-                        if let Some(slots) = inv.slots() {
-                            // The player's own 36 inventory slots are always the
-                            // last slots of an open container's menu.
-                            let player_start = slots.len().saturating_sub(36);
-                            let mut sold = 0;
-                            for slot in player_start..slots.len() {
-                                if slots[slot].is_present() {
-                                    inv.shift_click(slot);
-                                    sold += 1;
-                                }
-                            }
-                            emit(&OutEvent::BehaviorLog {
-                                message: format!("AutoSell: moved {sold} stack(s) into the sell menu"),
-                            });
-                            if sold > 0 {
-                                self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
-                            }
+                        let has_container = inv.slots().map(|s| s.len() > 36).unwrap_or(false);
+                        if has_container {
+                            self.autosell_phase = AutoSellPhase::Selling {
+                                since,
+                                settle_until: now + AUTOSELL_SETTLE_DELAY,
+                            };
+                            return;
                         }
-                        // Always close the menu so we never leave the bot stuck
-                        // in an open GUI (which otherwise blocks further actions
-                        // and looks like a hang until a manual restart).
-                        inv.close();
-                        self.autosell_phase = AutoSellPhase::Idle;
-                        return;
                     }
                 }
 
                 // The server never opened a menu (e.g. it sells directly, or the
                 // command failed) — give up on this cycle and try again later.
                 if now.duration_since(since) >= AUTOSELL_MENU_TIMEOUT {
+                    self.close_open_menu(bot);
                     self.autosell_phase = AutoSellPhase::Idle;
                 }
+            }
+            AutoSellPhase::Selling { since, settle_until } => {
+                // Bail out if the menu vanished (server closed it) mid-settle.
+                let inv = match bot.get_inventory() {
+                    Ok(inv) if inv.id() != 0 => inv,
+                    _ => {
+                        self.autosell_phase = AutoSellPhase::Idle;
+                        return;
+                    }
+                };
+
+                // Wait for the container's slots to sync before selling, but
+                // never hang past the overall menu timeout.
+                if now < settle_until && now.duration_since(since) < AUTOSELL_MENU_TIMEOUT {
+                    return;
+                }
+
+                if let Some(slots) = inv.slots() {
+                    // The player's own 36 inventory slots are always the last
+                    // slots of an open container's menu.
+                    let player_start = slots.len().saturating_sub(36);
+                    let mut sold = 0;
+                    for slot in player_start..slots.len() {
+                        if slots[slot].is_present() {
+                            inv.shift_click(slot);
+                            sold += 1;
+                        }
+                    }
+                    emit(&OutEvent::BehaviorLog {
+                        message: format!("AutoSell: moved {sold} stack(s) into the sell menu"),
+                    });
+                    if sold > 0 {
+                        self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
+                    }
+                }
+                // Always close the menu so we never leave the bot stuck in an
+                // open GUI (which otherwise blocks further actions and looks
+                // like a hang until a manual restart).
+                inv.close();
+                self.autosell_phase = AutoSellPhase::Idle;
+            }
+        }
+    }
+
+    /// Close any container the bot currently has open (best-effort no-op if none).
+    fn close_open_menu(&self, bot: &Client) {
+        if let Ok(inv) = bot.get_inventory() {
+            if inv.id() != 0 {
+                inv.close();
             }
         }
     }
@@ -697,8 +921,103 @@ fn slot_to_snapshot(stack: &ItemStack) -> Option<InventorySlot> {
     }
 }
 
+/// Normalize the settings-open command: default to "/settings" when blank and
+/// ensure it starts with a slash so `bot.chat` runs it as a command.
+fn normalize_settings_command(command: String) -> String {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return "/settings".to_string();
+    }
+    if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
+/// Extract an item's display name and lore as plain strings (formatting stripped).
+fn item_text(stack: &ItemStack) -> (String, Vec<String>) {
+    let name = stack
+        .get_component::<CustomName>()
+        .map(|c| c.name.to_string())
+        .unwrap_or_default();
+    let lore = stack
+        .get_component::<Lore>()
+        .map(|l| l.lines.iter().map(|line| line.to_string()).collect())
+        .unwrap_or_default();
+    (name, lore)
+}
+
+/// Parse a settings-menu button into `(label, enabled)`, or `None` if the item
+/// isn't a stateful toggle (decorations, glass panes, a "Schließen"/close button
+/// carry no Aktiviert/Deaktiviert state and are skipped). The state is read from
+/// the item's name/lore; "deaktiviert" is checked before "aktiviert" because the
+/// former contains the latter as a substring.
+fn parse_setting_item(stack: &ItemStack) -> Option<(String, bool)> {
+    if !stack.is_present() {
+        return None;
+    }
+    let (name, lore) = item_text(stack);
+    if name.trim().is_empty() {
+        return None;
+    }
+    let hay = format!("{} {}", name, lore.join(" ")).to_lowercase();
+    let enabled = if hay.contains("deaktiviert") || hay.contains("disabled") {
+        false
+    } else if hay.contains("aktiviert") || hay.contains("enabled") {
+        true
+    } else {
+        return None;
+    };
+    let label = strip_state_suffix(&name);
+    if label.is_empty() {
+        return None;
+    }
+    Some((label, enabled))
+}
+
+/// Strip a trailing ": Aktiviert"/": Deaktiviert" (or similar) state suffix from
+/// a button name, leaving just the setting label.
+fn strip_state_suffix(name: &str) -> String {
+    if let Some((lhs, _rhs)) = name.rsplit_once(':') {
+        let lhs = lhs.trim();
+        if !lhs.is_empty() {
+            return lhs.to_string();
+        }
+    }
+    name.trim().to_string()
+}
+
+/// Scan a settings GUI's container slots (excluding the player's own 36 slots)
+/// for toggle buttons, returning `(slot_index, label, enabled)` for each,
+/// de-duplicated by label.
+fn scan_settings_entries(slots: &[ItemStack]) -> Vec<(usize, String, bool)> {
+    let container_len = slots.len().saturating_sub(36);
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (i, slot) in slots.iter().enumerate().take(container_len) {
+        if let Some((label, enabled)) = parse_setting_item(slot) {
+            if seen.insert(label.to_lowercase()) {
+                out.push((i, label, enabled));
+            }
+        }
+    }
+    out
+}
+
+/// Emit an [`OutEvent::SettingsMenu`] from scanned settings entries.
+fn emit_settings(entries: &[(usize, String, bool)]) {
+    let settings = entries
+        .iter()
+        .map(|(_, label, enabled)| SettingEntry {
+            label: label.clone(),
+            enabled: *enabled,
+        })
+        .collect();
+    emit(&OutEvent::SettingsMenu { settings });
+}
+
 /// Read the bot's own inventory and emit an [`OutEvent::Inventory`] snapshot.
-///
 /// The player inventory menu lays its 46 slots out as: craft result (0), craft
 /// grid (1-4), armor (5-8), inventory (9-44: 27 main + 9 hotbar) and off-hand
 /// (45). We surface the storage, hotbar, armor and off-hand slots. When a

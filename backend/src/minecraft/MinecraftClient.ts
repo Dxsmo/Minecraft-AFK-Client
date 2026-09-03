@@ -9,6 +9,7 @@ import type {
   ClientStatusSnapshot,
   ConsoleEvent,
   ConsoleEventType,
+  HugoSetting,
   InventoryItem,
   InventorySnapshot,
   MsaSignInPrompt,
@@ -52,6 +53,9 @@ function stripMinecraftFormatting(text: string): string {
 }
 /// How often to poll the player's balance while balance polling is enabled.
 const BALANCE_POLL_INTERVAL_MS = 5 * 60_000;
+/// How often to re-query saved /homes while online, so the shortcut buttons
+/// stay in sync even if a home is added/removed outside the web console.
+const HOMES_POLL_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Wraps the Azalea Rust bot subprocess (one per Minecraft account) and exposes
@@ -92,11 +96,19 @@ export class MinecraftClient extends EventEmitter {
   private inventory: InventorySnapshot | undefined;
   /** Last discovered /homes list for this account. */
   private homes: string[] = [];
+  /** Last scanned server settings toggles for this account. */
+  private hugoSettings: HugoSetting[] = [];
   /** While > now, incoming chat is scanned for /homes output lines. */
   private homesQueryUntil = 0;
   /** While > now, lines like "- homeName" are treated as /homes list entries. */
   private homesCollectUntil = 0;
   private homesCollect: string[] = [];
+  /** Debounce timer that applies a collected /homes list once, after the
+   *  bullet lines stop arriving, instead of flickering the shortcuts on every
+   *  individual line. */
+  private homesCollectTimer: NodeJS.Timeout | null = null;
+  /** Epoch ms of the last /homes query, for the 5-minute refresh cadence. */
+  private lastHomesQueryAt = 0;
 
   /** Drives the daily-command + balance-poll schedulers (see runScheduledTasks). */
   private schedulerTimer: NodeJS.Timeout | null = null;
@@ -109,6 +121,7 @@ export class MinecraftClient extends EventEmitter {
     super();
     this.log = accountLogger(config.id, config.name);
     this.homes = [...(config.homes ?? [])];
+    this.hugoSettings = [...(config.hugoSettings ?? [])];
     this.schedulerTimer = setInterval(() => this.runScheduledTasks(), SCHEDULER_TICK_MS);
   }
 
@@ -163,6 +176,7 @@ export class MinecraftClient extends EventEmitter {
       balance: this.balance,
       balanceUpdatedAt: this.balanceUpdatedAt?.toISOString(),
       homes: this.homes,
+      hugoSettings: this.hugoSettings,
     };
   }
 
@@ -197,6 +211,12 @@ export class MinecraftClient extends EventEmitter {
       return false;
     }
     this.sendToBot({ type: "chat", text: command });
+    // If the user just created/updated a home (e.g. "/sethome base"), re-query
+    // the homes list shortly after so the shortcut buttons pick it up. The
+    // small delay gives the server time to register the new home first.
+    if (/^\/sethome(\s|$)/i.test(command.trim())) {
+      setTimeout(() => this.refreshHomes(), 1500);
+    }
     return true;
   }
 
@@ -223,6 +243,41 @@ export class MinecraftClient extends EventEmitter {
   requestInventory(): void {
     if (this.status !== "ONLINE" || !this.subprocess) return;
     this.sendToBot({ type: "request_inventory" });
+  }
+
+  /** Open the server settings GUI and scan its toggle buttons. The result
+   *  arrives asynchronously as a "settings_menu" event. */
+  scanHugoSettings(): boolean {
+    if (this.status !== "ONLINE" || !this.subprocess) {
+      this.emitConsole("ERROR", "Bot is not online, cannot scan settings");
+      return false;
+    }
+    this.sendToBot({ type: "scan_settings", command: this.config.hugoSettingsCommand });
+    this.emitConsole("SYSTEM", "Settings scan dispatched");
+    return true;
+  }
+
+  /** Open the server settings GUI and toggle the button matching `label` to the
+   *  desired `enabled` state. Refreshed settings arrive as a "settings_menu"
+   *  event once the toggle settles. */
+  setHugoSetting(label: string, enabled: boolean): boolean {
+    if (this.status !== "ONLINE" || !this.subprocess) {
+      this.emitConsole("ERROR", "Bot is not online, cannot change settings");
+      return false;
+    }
+    this.sendToBot({
+      type: "set_setting",
+      command: this.config.hugoSettingsCommand,
+      label,
+      enabled,
+    });
+    this.emitConsole("SYSTEM", `Settings toggle dispatched: ${label} -> ${enabled ? "on" : "off"}`);
+    return true;
+  }
+
+  /** Last scanned server settings toggles for this account. */
+  getHugoSettings(): HugoSetting[] {
+    return this.hugoSettings;
   }
 
   /** The most recently received inventory snapshot, if any. */
@@ -276,6 +331,21 @@ export class MinecraftClient extends EventEmitter {
         this.sendToBot({ type: "query_balance", command });
       }
     }
+
+    // Homes poll: always re-query the saved /homes every 5 minutes so the
+    // shortcut buttons stay accurate even without a reconnect.
+    if (Date.now() - this.lastHomesQueryAt >= HOMES_POLL_INTERVAL_MS) {
+      this.refreshHomes();
+    }
+  }
+
+  /** Send a `/homes` query and open the parse window; refreshes the shortcut
+   *  buttons via the resulting chat output. No-op unless online. */
+  private refreshHomes(): void {
+    if (this.status !== "ONLINE" || !this.subprocess) return;
+    this.lastHomesQueryAt = Date.now();
+    this.homesQueryUntil = Date.now() + 60_000;
+    this.sendToBot({ type: "chat", text: "/homes" });
   }
 
   private attemptConnect(): void {
@@ -442,8 +512,7 @@ export class MinecraftClient extends EventEmitter {
         this.setStatus("ONLINE");
         this.emitConsole("SYSTEM", "Spawned into the world");
         // Auto-refresh saved homes after each successful join.
-        this.homesQueryUntil = Date.now() + 60_000;
-        this.sendToBot({ type: "chat", text: "/homes" });
+        this.refreshHomes();
         break;
 
       case "chat": {
@@ -512,6 +581,19 @@ export class MinecraftClient extends EventEmitter {
         this.emitConsole("WARNING", String((event as { message: string }).message));
         break;
 
+      case "settings_menu": {
+        const e = event as { settings?: HugoSetting[] };
+        const next = Array.isArray(e.settings)
+          ? e.settings
+              .filter((s) => s && typeof s.label === "string")
+              .map((s) => ({ label: s.label, enabled: Boolean(s.enabled) }))
+          : [];
+        this.hugoSettings = next;
+        this.emit("hugoSettings", { minecraftAccountId: this.config.id, settings: next });
+        this.emitStatus();
+        break;
+      }
+
       case "disconnect": {
         const reason = (event as { reason?: string | null }).reason ?? "unknown reason";
         this.emitConsole("SYSTEM", `Disconnected: ${reason}`);
@@ -573,6 +655,10 @@ export class MinecraftClient extends EventEmitter {
     this.msaSignIn = undefined;
     this.authenticated = false;
     this.homesQueryUntil = 0;
+    if (this.homesCollectTimer) {
+      clearTimeout(this.homesCollectTimer);
+      this.homesCollectTimer = null;
+    }
     if (!child) return;
 
     this.log.debug(reason);
@@ -664,15 +750,18 @@ export class MinecraftClient extends EventEmitter {
     if (/deine\s+homes\s*:/i.test(message) || /^homes\s*:/i.test(message)) {
       this.homesCollectUntil = now + 4_000;
       this.homesCollect = [];
+      this.scheduleHomesFinalize();
       return;
     }
 
-    // While collecting, accept bullet-list lines like "- spawner".
+    // While collecting, accept bullet-list lines like "- spawner". We buffer the
+    // names and apply them once (debounced) so the shortcut buttons update a
+    // single time with the complete list, instead of flickering per line.
     if (now <= this.homesCollectUntil) {
       const bullet = message.match(/^\s*[-•]\s*([A-Za-z0-9_\-]{1,32})\s*$/);
       if (bullet?.[1]) {
         this.homesCollect.push(bullet[1]);
-        this.applyHomes(this.homesCollect);
+        this.scheduleHomesFinalize();
         return;
       }
     }
@@ -689,6 +778,16 @@ export class MinecraftClient extends EventEmitter {
     const parsed = this.parseHomesLine(message);
     if (parsed === null) return;
     this.applyHomes(parsed);
+  }
+
+  /** (Re)arm the debounce that applies the buffered /homes bullet list once the
+   *  lines stop arriving, so the shortcut buttons update a single time. */
+  private scheduleHomesFinalize(): void {
+    if (this.homesCollectTimer) clearTimeout(this.homesCollectTimer);
+    this.homesCollectTimer = setTimeout(() => {
+      this.homesCollectTimer = null;
+      if (this.homesCollect.length > 0) this.applyHomes(this.homesCollect);
+    }, 1200);
   }
 
   private applyHomes(candidates: string[]): void {

@@ -57,6 +57,12 @@ export interface LiveStatus {
   balance?: number;
   balanceUpdatedAt?: string;
   homes?: string[];
+  hugoSettings?: HugoSetting[];
+}
+
+export interface HugoSetting {
+  label: string;
+  enabled: boolean;
 }
 
 export interface MinecraftAccount {
@@ -92,6 +98,8 @@ export interface MinecraftAccount {
   lastBalance: number | null;
   lastBalanceAt: string | null;
   homes: string[];
+  hugoSettingsCommand: string;
+  hugoSettings: HugoSetting[];
   dashboardOrder: number;
   status: ClientStatus;
   createdAt: string;

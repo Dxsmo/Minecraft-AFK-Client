@@ -103,6 +103,13 @@ export const updateAccountSchema = z.object({
     .transform((times) => (times ? JSON.stringify(Array.from(new Set(times)).sort()) : undefined)),
   balanceEnabled: z.boolean().optional(),
   balanceCommand: z.string().max(64).optional(),
+  hugoSettingsCommand: z.string().max(64).optional(),
+});
+
+/** Body for toggling a single server-settings button. */
+export const setHugoSettingSchema = z.object({
+  label: z.string().min(1).max(64),
+  enabled: z.boolean(),
 });
 
 export const assignUsersSchema = z.object({

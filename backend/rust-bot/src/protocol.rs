@@ -135,6 +135,18 @@ pub enum Command {
     /// Drop the whole stack in one of the bot's own inventory slots (raw player
     /// menu slot index). Runs as a foreground one-shot task.
     DropItem { slot: u16 },
+    /// Open the server's settings GUI (via `command`, e.g. "/settings"), scan
+    /// its toggle buttons and emit an [`OutEvent::SettingsMenu`]. Foreground task.
+    ScanSettings { command: String },
+    /// Open the settings GUI and click the button whose label matches `label`
+    /// so its state becomes `enabled`, then emit the refreshed list. Because
+    /// button positions vary per account, the button is located by its label
+    /// text rather than a fixed slot. Foreground task.
+    SetSetting {
+        command: String,
+        label: String,
+        enabled: bool,
+    },
     /// Gracefully disconnect and exit.
     Disconnect,
 }
@@ -200,6 +212,11 @@ pub enum OutEvent {
     /// Periodic liveness signal so the Node supervisor can distinguish a hung
     /// bot from a healthy but idle one.
     Heartbeat,
+    /// A snapshot of the server's settings GUI buttons, scanned from the in-game
+    /// menu opened by the settings command. Each entry is a toggle button with
+    /// its current on/off state; positions are intentionally omitted since they
+    /// vary per account and the button is matched by label when toggling.
+    SettingsMenu { settings: Vec<SettingEntry> },
     /// Emitted by `namesniper-bot` right before each rename request.
     RenameAttempt {
         desired_name: String,
@@ -227,6 +244,16 @@ pub struct InventorySlot {
     pub id: String,
     /// The stack size.
     pub count: u32,
+}
+
+/// A single toggle button scanned from the server's settings GUI (see
+/// [`OutEvent::SettingsMenu`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct SettingEntry {
+    /// The button's label, e.g. "Öffentlicher Chat" (state suffix stripped).
+    pub label: String,
+    /// Whether the setting is currently enabled (Aktiviert) or not (Deaktiviert).
+    pub enabled: bool,
 }
 
 /// The first stdin line for the `namesniper-bot` binary (see `bin/namesniper.rs`).
