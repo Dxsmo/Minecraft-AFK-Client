@@ -61,13 +61,13 @@ export function AccountSettingsPanel({
   // bot scans them from the in-game /settings menu), separate from the static
   // account config saved by "Save settings".
   const online = (account.live?.status ?? account.status) === "ONLINE";
-  const [hugoCommand, setHugoCommand] = useState(account.hugoSettingsCommand ?? "/settings");
   const [hugoSettings, setHugoSettings] = useState<HugoSetting[]>(account.hugoSettings ?? []);
-  const [hugoScanning, setHugoScanning] = useState(false);
   const [hugoBusy, setHugoBusy] = useState<Set<string>>(new Set());
   const [hugoError, setHugoError] = useState<string | null>(null);
 
   // Load the freshest known settings list when the category is first opened.
+  // The bot scans the menu automatically on every server join, so this simply
+  // reflects the latest known state.
   useEffect(() => {
     if (activeCat === "hugosmp") void refreshHugoSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -81,21 +81,6 @@ export function AccountSettingsPanel({
       setHugoSettings(res.settings ?? []);
     } catch {
       /* keep the last-known list on transient errors */
-    }
-  }
-
-  async function scanHugo() {
-    setHugoScanning(true);
-    setHugoError(null);
-    try {
-      await api.post(`/minecraft/accounts/${account.id}/hugo-settings/scan`, {});
-      // Give the bot time to open the menu, scan it and report back.
-      await new Promise((r) => setTimeout(r, 2200));
-      await refreshHugoSettings();
-    } catch (e) {
-      setHugoError(e instanceof ApiError ? e.message : "Scan fehlgeschlagen");
-    } finally {
-      setHugoScanning(false);
     }
   }
 
@@ -154,7 +139,6 @@ export function AccountSettingsPanel({
         autoSellEnabled,
         autoSellIntervalSeconds,
         autoSellCommand,
-        hugoSettingsCommand: hugoCommand.trim() || "/settings",
       });
       if (canManageAccess) {
         await api.put(`/minecraft/accounts/${account.id}/assignments`, { userIds: Array.from(assigned) });
@@ -230,7 +214,7 @@ export function AccountSettingsPanel({
     { id: "balance", label: "Balance", icon: "coin", on: balanceEnabled },
     { id: "autotpa", label: "Auto-TPA", icon: "portal", on: tpAutoEnabled },
     { id: "autosell", label: "Auto-sell", icon: "tag", on: autoSellEnabled },
-    { id: "hugosmp", label: "HugoSMP - Settings", icon: "sliders", on: hugoSettings.length > 0 },
+    { id: "hugosmp", label: "HugoSMP Settings", icon: "sliders", on: hugoSettings.length > 0 },
     ...(canManageAccess ? [{ id: "users", label: "Access", icon: "users" as CatIcon, meta: `${assigned.size} assigned` }] : []),
   ];
   const active = categories.find((c) => c.id === activeCat) ?? categories[0];
@@ -605,42 +589,16 @@ export function AccountSettingsPanel({
                 <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
                   Steuert das serverseitige Einstellungsmenü (z. B. HugoSMP „/settings").
                   Der Bot öffnet das Menü im Spiel und drückt automatisch den passenden
-                  Knopf – die Position wird anhand des Namens gefunden.
+                  Knopf – die Position wird anhand des Namens gefunden. Das Menü wird bei
+                  jedem Server-Join automatisch gescannt und nach jeder Änderung aktualisiert.
                 </p>
-                <div>
-                  <label className="label">Menü-Befehl</label>
-                  <input
-                    value={hugoCommand}
-                    onChange={(e) => setHugoCommand(e.target.value)}
-                    placeholder="/settings"
-                    className="input"
-                  />
-                  <p className="mt-1 text-[11px]" style={{ color: "var(--text-subtle)" }}>
-                    Nach Änderung „Save settings" drücken.
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void scanHugo()}
-                    disabled={!online || hugoScanning}
-                    className="btn btn-secondary"
-                  >
-                    {hugoScanning ? "Scanne…" : "Menü scannen"}
-                  </button>
-                  {!online && (
-                    <span className="text-[11px]" style={{ color: "var(--text-subtle)" }}>
-                      Bot muss online sein.
-                    </span>
-                  )}
-                </div>
 
                 {hugoError && <p className="alert-error">{hugoError}</p>}
 
                 {hugoSettings.length === 0 ? (
                   <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-                    Noch keine Einstellungen gescannt. Starte den Bot und drücke „Menü scannen".
+                    Noch keine Einstellungen bekannt. Sobald der Bot dem Server beitritt,
+                    wird das Menü automatisch gescannt und hier angezeigt.
                   </p>
                 ) : (
                   <div className="space-y-1.5">

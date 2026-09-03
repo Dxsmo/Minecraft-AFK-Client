@@ -257,6 +257,13 @@ export class MinecraftClient extends EventEmitter {
     return true;
   }
 
+  /** Silent auto-scan triggered on every join. Unlike scanHugoSettings it does
+   *  not log an error when the bot is offline (the join may not have settled). */
+  private autoScanHugoSettings(): void {
+    if (this.status !== "ONLINE" || !this.subprocess) return;
+    this.sendToBot({ type: "scan_settings", command: this.config.hugoSettingsCommand });
+  }
+
   /** Open the server settings GUI and toggle the button matching `label` to the
    *  desired `enabled` state. Refreshed settings arrive as a "settings_menu"
    *  event once the toggle settles. */
@@ -513,6 +520,9 @@ export class MinecraftClient extends EventEmitter {
         this.emitConsole("SYSTEM", "Spawned into the world");
         // Auto-refresh saved homes after each successful join.
         this.refreshHomes();
+        // Auto-scan the server settings menu on every join so the website's
+        // "HugoSMP Settings" toggles always reflect the live in-game state.
+        setTimeout(() => this.autoScanHugoSettings(), 4000);
         break;
 
       case "chat": {

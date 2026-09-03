@@ -115,15 +115,10 @@ export function Layout() {
         </nav>
 
         <div className="mt-auto px-1.5 pt-4">
-          <p
-            className="text-xs font-bold tracking-wide"
-            style={{
-              color: "var(--accent)",
-              textShadow: "0 0 8px var(--accent), 0 0 16px var(--accent-soft)",
-            }}
-          >
-            V4.2.0
-          </p>
+          <span className="version-badge">
+            <span className="version-dot" />
+            <span className="version-text">V4.2.0</span>
+          </span>
         </div>
       </aside>
 
