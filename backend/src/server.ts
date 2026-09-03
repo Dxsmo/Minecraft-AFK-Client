@@ -7,6 +7,7 @@ import { clientManager } from "./minecraft/ClientManager.js";
 import { sniperManager } from "./namesniper/SniperManager.js";
 import { disconnectDatabase } from "./database/prisma.js";
 import { purgeStoredPasswords } from "./accounts/service.js";
+import { loadBannedIps } from "./security/ipBans.js";
 
 const SESSION_PRUNE_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
@@ -21,6 +22,7 @@ async function main() {
   await clearAllSessions();
   await clientManager.loadAll();
   await sniperManager.loadAll();
+  await loadBannedIps();
 
   const app = await buildApp();
 

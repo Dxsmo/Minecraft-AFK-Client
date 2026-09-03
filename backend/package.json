@@ -11,6 +11,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:migrate:dev": "prisma migrate dev",
+    "audit": "npm audit --omit=dev",
     "test": "DATABASE_URL=\"file:../data/test.db\" SESSION_SECRET=test-secret-value-1234567890 NODE_ENV=test INITIAL_ADMIN_PASSWORD= LOG_LEVEL=silent vitest run",
     "test:watch": "DATABASE_URL=\"file:../data/test.db\" SESSION_SECRET=test-secret-value-1234567890 NODE_ENV=test INITIAL_ADMIN_PASSWORD= LOG_LEVEL=silent vitest"
   },
@@ -24,7 +25,7 @@
     "argon2": "^0.41.1",
     "bedrock-protocol": "^3.58.2",
     "dotenv": "^16.4.7",
-    "fastify": "^5.2.1",
+    "fastify": "^5.12.1",
     "fastify-plugin": "^5.0.1",
     "minecraft-assets": "^1.18.0",
     "nanoid": "^5.0.9",

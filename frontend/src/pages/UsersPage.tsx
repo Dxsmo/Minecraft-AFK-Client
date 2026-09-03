@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "../lib/api";
-import type { ManagedUser } from "../lib/types";
+import type { BannedIp, ManagedUser } from "../lib/types";
 
 export function UsersPage() {
   const [users, setUsers] = useState<ManagedUser[] | null>(null);
@@ -146,6 +146,8 @@ export function UsersPage() {
           </div>
         )}
       </div>
+
+      <IpBanCard />
     </div>
   );
 }
@@ -162,5 +164,126 @@ function Td({ children }: { children: React.ReactNode }) {
     <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
       {children}
     </td>
+  );
+}
+
+function IpBanCard() {
+  const [bans, setBans] = useState<BannedIp[] | null>(null);
+  const [ip, setIp] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function load() {
+    try {
+      setBans(await api.get<BannedIp[]>("/security/ip-bans"));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to load IP bans");
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function addBan(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post("/security/ip-bans", { ip: ip.trim(), reason: reason.trim() || undefined });
+      setIp("");
+      setReason("");
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to ban IP");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeBan(addr: string) {
+    try {
+      await api.delete(`/security/ip-bans/${encodeURIComponent(addr)}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to unban IP");
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h2 className="text-lg font-semibold" style={{ color: "var(--text)" }}>
+          IP bans
+        </h2>
+        <p className="mt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
+          Block addresses from reaching the service. Repeated failed logins are
+          auto-banned.
+        </p>
+      </div>
+
+      {error && <p className="alert-error">{error}</p>}
+
+      <form onSubmit={addBan} className="card flex flex-wrap items-end gap-3 p-4" autoComplete="off">
+        <div>
+          <label className="label">IP address</label>
+          <input
+            required
+            value={ip}
+            onChange={(e) => setIp(e.target.value)}
+            placeholder="203.0.113.7"
+            className="input w-48"
+            autoComplete="off"
+          />
+        </div>
+        <div>
+          <label className="label">Reason (optional)</label>
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            className="input w-56"
+            autoComplete="off"
+          />
+        </div>
+        <button type="submit" disabled={busy} className="btn btn-primary">
+          {busy ? "Banning…" : "Ban IP"}
+        </button>
+      </form>
+
+      <div className="card overflow-hidden">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--border)" }}>
+              <Th>IP address</Th>
+              <Th>Reason</Th>
+              <Th>Source</Th>
+              <Th>Banned</Th>
+              <Th>Actions</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {(bans ?? []).map((b) => (
+              <tr key={b.ip} style={{ borderTop: "1px solid var(--border)" }}>
+                <Td><span style={{ color: "var(--text)" }} className="font-medium">{b.ip}</span></Td>
+                <Td>{b.reason || "—"}</Td>
+                <Td>{b.auto ? "Auto" : b.createdBy?.username ?? "Manual"}</Td>
+                <Td>{new Date(b.createdAt).toLocaleString()}</Td>
+                <Td>
+                  <button onClick={() => void removeBan(b.ip)} className="btn btn-secondary btn-sm">
+                    Unban
+                  </button>
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {bans?.length === 0 && (
+          <div className="p-8 text-center text-sm" style={{ color: "var(--text-subtle)" }}>
+            No banned IPs.
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

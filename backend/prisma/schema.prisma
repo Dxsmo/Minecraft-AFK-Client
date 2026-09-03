@@ -57,6 +57,7 @@ model User {
   auditLogs       AuditLog[]
   createdAccounts MinecraftAccount[]     @relation("CreatedAccounts")
   createdSniperAccounts SniperAccount[]  @relation("CreatedSniperAccounts")
+  createdIpBans   BannedIp[]             @relation("CreatedIpBans")
 }
 
 model Session {
@@ -275,4 +276,19 @@ model SniperLog {
   sniperAccount SniperAccount @relation(fields: [sniperAccountId], references: [id], onDelete: Cascade)
 
   @@index([sniperAccountId, createdAt])
+}
+
+// IP addresses blocked from accessing the service. Enforced by a global
+// preHandler (see app.ts). Rows may be created manually by an admin or
+// automatically after repeated failed logins from the same address.
+model BannedIp {
+  ip        String   @id
+  reason    String?
+  auto      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  createdById String?
+  createdBy   User?   @relation("CreatedIpBans", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
 }

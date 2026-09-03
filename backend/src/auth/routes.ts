@@ -7,6 +7,7 @@ import { config } from "../config/config.js";
 import { parseOrReject } from "../utils/validate.js";
 import { recordAuditLog } from "../logging/auditLog.js";
 import { logger } from "../logging/logger.js";
+import { registerFailedLogin, clearFailedLogins } from "../security/ipBans.js";
 
 const loginSchema = z.object({
   username: z.string().min(1).max(64),
@@ -38,6 +39,7 @@ export default async function authRoutes(app: FastifyInstance) {
       // Constant-shape response to avoid leaking whether the username exists.
       if (!user || user.status === "DISABLED") {
         logger.warn({ username: body.username }, "Login failed: unknown or disabled user");
+        await registerFailedLogin(req.ip);
         reply.code(401).send({ error: "Invalid username or password" });
         return;
       }
@@ -45,9 +47,12 @@ export default async function authRoutes(app: FastifyInstance) {
       const valid = await verifyPassword(user.passwordHash, body.password);
       if (!valid) {
         logger.warn({ username: body.username }, "Login failed: bad password");
+        await registerFailedLogin(req.ip);
         reply.code(401).send({ error: "Invalid username or password" });
         return;
       }
+
+      clearFailedLogins(req.ip);
 
       const { sessionId, csrfToken } = await createSession(user.id, {
         userAgent: req.headers["user-agent"],

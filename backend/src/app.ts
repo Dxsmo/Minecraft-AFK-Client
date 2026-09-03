@@ -13,6 +13,8 @@ import accountsRoutes from "./accounts/routes.js";
 import namesniperRoutes from "./namesniper/routes.js";
 import systemRoutes from "./api/systemRoutes.js";
 import auditLogRoutes from "./api/auditLogRoutes.js";
+import securityRoutes from "./security/routes.js";
+import { isIpBanned } from "./security/ipBans.js";
 import registerWebsocketRoutes from "./websocket/routes.js";
 import { getItemTexture } from "./assets/itemTextures.js";
 
@@ -24,9 +26,24 @@ export async function buildApp() {
 
   // ---- Security headers ----
   await app.register(helmet, {
+    // HSTS: force HTTPS for a year (incl. subdomains) in production. Harmless
+    // in dev because SESSION_COOKIE_SECURE/HTTP there means browsers ignore it.
+    hsts: config.isProduction
+      ? { maxAge: 31536000, includeSubDomains: true, preload: true }
+      : false,
     contentSecurityPolicy: config.isProduction
       ? undefined // frontend is a separate static build; configure CSP at the reverse proxy if needed
       : false,
+  });
+
+  // ---- IP ban guard ----
+  // Reject any request from a banned IP as early as possible (before auth,
+  // rate-limit accounting or route handlers do any work). Uses the in-memory
+  // ban cache loaded at startup (see server.ts) for a synchronous lookup.
+  app.addHook("onRequest", async (req, reply) => {
+    if (isIpBanned(req.ip)) {
+      reply.code(403).send({ error: "Your IP address has been blocked" });
+    }
   });
 
   // ---- CORS (only relevant when frontend is served from a different origin, e.g. local dev) ----
@@ -52,6 +69,7 @@ export async function buildApp() {
   await app.register(namesniperRoutes);
   await app.register(systemRoutes);
   await app.register(auditLogRoutes);
+  await app.register(securityRoutes);
   await app.register(registerWebsocketRoutes);
 
   app.get("/api/health", async () => ({ status: "ok" }));

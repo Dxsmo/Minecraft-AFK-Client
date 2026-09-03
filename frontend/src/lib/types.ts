@@ -33,6 +33,14 @@ export interface ManagedUser {
   lastLoginAt: string | null;
 }
 
+export interface BannedIp {
+  ip: string;
+  reason: string | null;
+  auto: boolean;
+  createdAt: string;
+  createdBy: { id: string; username: string } | null;
+}
+
 export interface MsaSignInPrompt {
   verificationUri: string;
   userCode: string;

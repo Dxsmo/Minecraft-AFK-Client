@@ -1,6 +1,7 @@
 import { prisma } from "../database/prisma.js";
 import type { CreateSniperAccountInput, UpdateSniperAccountInput } from "./schemas.js";
 import type { SessionContext } from "../auth/session.js";
+import { encryptSecret, decryptSecret } from "../utils/crypto.js";
 
 /**
  * Fields safe to expose to the (admin-only) frontend. `email` is included —
@@ -27,20 +28,30 @@ const publicSniperSelect = {
   createdBy: { select: { id: true, username: true } },
 } as const;
 
+/**
+ * Decodes the at-rest-encrypted `proxies` column back to plaintext for the
+ * admin frontend / runtime. Legacy plaintext rows are returned unchanged.
+ */
+function presentSniper<T extends { proxies: string }>(account: T): T {
+  return { ...account, proxies: decryptSecret(account.proxies) };
+}
+
 export async function listSniperAccounts() {
-  return prisma.sniperAccount.findMany({
+  const rows = await prisma.sniperAccount.findMany({
     select: publicSniperSelect,
     orderBy: [{ dashboardOrder: "asc" }, { createdAt: "asc" }],
   });
+  return rows.map(presentSniper);
 }
 
 export async function getSniperAccount(id: string) {
-  return prisma.sniperAccount.findUnique({ where: { id }, select: publicSniperSelect });
+  const row = await prisma.sniperAccount.findUnique({ where: { id }, select: publicSniperSelect });
+  return row ? presentSniper(row) : null;
 }
 
 export async function createSniperAccount(input: CreateSniperAccountInput, creator: SessionContext) {
   const maxOrder = await prisma.sniperAccount.aggregate({ _max: { dashboardOrder: true } });
-  return prisma.sniperAccount.create({
+  const row = await prisma.sniperAccount.create({
     data: {
       label: input.label,
       email: input.email,
@@ -49,19 +60,25 @@ export async function createSniperAccount(input: CreateSniperAccountInput, creat
     },
     select: publicSniperSelect,
   });
+  return presentSniper(row);
 }
 
 export async function updateSniperAccount(id: string, input: UpdateSniperAccountInput) {
-  return prisma.sniperAccount.update({ where: { id }, data: input, select: publicSniperSelect });
+  // Encrypt proxy credentials at rest (they may embed user:pass@host).
+  const data = input.proxies !== undefined ? { ...input, proxies: encryptSecret(input.proxies) } : input;
+  const row = await prisma.sniperAccount.update({ where: { id }, data, select: publicSniperSelect });
+  return presentSniper(row);
 }
 
 export async function deleteSniperAccount(id: string) {
   await prisma.sniperAccount.delete({ where: { id } });
 }
 
-/** Internal helper for SniperManager/routes: includes every column. */
+/** Internal helper for SniperManager/routes: includes every column, with
+ *  `proxies` decrypted so callers work with plaintext. */
 export async function getFullSniperAccount(id: string) {
-  return prisma.sniperAccount.findUnique({ where: { id } });
+  const account = await prisma.sniperAccount.findUnique({ where: { id } });
+  return account ? presentSniper(account) : null;
 }
 
 /** Persist a full dashboard order for every sniper account (admin-only feature, no per-user filtering needed). */

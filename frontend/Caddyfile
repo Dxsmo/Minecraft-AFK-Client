@@ -33,7 +33,12 @@ handle {
 
 # Basic hardening headers (defense in depth in addition to backend headers).
 header {
+	# HSTS: enforce HTTPS for a year including subdomains. Cloudflare/Caddy
+	# terminate TLS in front of this, so clients only ever see HTTPS.
+	Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 	X-Frame-Options "SAMEORIGIN"
 	X-Content-Type-Options "nosniff"
 	Referrer-Policy "no-referrer"
+	# Don't advertise the server software.
+	-Server
 }

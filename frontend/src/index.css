@@ -431,21 +431,6 @@ body {
 }
 
 /* App version badge (sidebar footer): a glowing gradient pill. */
-@keyframes version-glow {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 1px var(--accent-soft),
-      0 0 10px -2px var(--accent),
-      inset 0 0 10px -6px var(--accent-light);
-  }
-  50% {
-    box-shadow:
-      0 0 0 1px var(--accent-soft),
-      0 0 20px 1px var(--accent),
-      inset 0 0 14px -4px var(--accent-light);
-  }
-}
 .version-badge {
   display: inline-flex;
   align-items: center;
@@ -458,7 +443,10 @@ body {
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(56, 189, 248, 0.06));
   border: 1px solid var(--accent-soft);
   background-clip: padding-box;
-  animation: version-glow 3s ease-in-out infinite;
+  box-shadow:
+    0 0 0 1px var(--accent-soft),
+    0 0 20px 1px var(--accent),
+    inset 0 0 14px -4px var(--accent-light);
 }
 .version-badge .version-text {
   background: linear-gradient(90deg, var(--accent-light), var(--accent));
@@ -474,11 +462,6 @@ body {
   border-radius: 9999px;
   background: var(--accent-light);
   box-shadow: 0 0 8px 1px var(--accent);
-}
-@media (prefers-reduced-motion: reduce) {
-  .version-badge {
-    animation: none;
-  }
 }
 
 /* Sign-in dialog: fade-in + a small theme-matched spinner. */

@@ -3,6 +3,7 @@ import type { SniperConsoleEvent, SniperRuntimeConfig, SniperStatusSnapshot } fr
 import { prisma } from "../database/prisma.js";
 import { persistSniperLog } from "../logging/sniperLogService.js";
 import { logger } from "../logging/logger.js";
+import { decryptSecret } from "../utils/crypto.js";
 import type { SniperAccount } from "@prisma/client";
 
 export type SniperConsoleEventListener = (event: SniperConsoleEvent) => void;
@@ -19,9 +20,11 @@ function toRuntimeConfig(account: SniperAccount): SniperRuntimeConfig {
   };
 }
 
-/** Split the stored newline/comma-separated proxy blob into clean entries. */
+/** Split the stored newline/comma-separated proxy blob into clean entries.
+ *  The column is encrypted at rest, so decrypt first (legacy plaintext rows
+ *  pass through unchanged). */
 function parseProxies(raw: string): string[] {
-  return raw
+  return decryptSecret(raw)
     .split(/[\r\n,]+/)
     .map((p) => p.trim())
     .filter((p) => p.length > 0);
