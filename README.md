@@ -191,9 +191,13 @@ additional users access afterwards in the account's **Settings** panel):
   interval, a random time span, and/or at fixed times of day — configured per
   account in **Settings**. Only the home name is editable; the `/home ` prefix
   is fixed and enforced server-side.
-- Auto-sell: opens the server's sell menu **once** and keeps it open, shifting
-  the inventory in and pressing the menu's confirm button in a loop. The menu is
-  reopened automatically if it closes or stops selling.
+- Auto-sell: each cycle opens the server's sell menu, shifts the whole
+  inventory in, presses the menu's confirm button and closes the menu again, so
+  the bot's GUI stays free between cycles. The sell command is skipped entirely
+  while the inventory is empty, and cycles that sell nothing trigger an
+  exponential backoff (up to 5 minutes) instead of repeating the command — this
+  is what prevents a server that stops opening the sell menu from turning the
+  bot into a chat spammer.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once
@@ -273,7 +277,7 @@ driven from Azalea's game tick:
 - **AFK** – periodic random look-around + jump to avoid inactivity kicks
 - **Movement** – occasional short random walk
 - **Auto home** – periodic `/home <name>` teleport
-- **Auto-sell** – persistent sell-menu loop (fill → confirm → repeat)
+- **Auto-sell** – sell-menu cycle (open → fill → confirm → close) with backoff
 - **Clean Spawner** – drop/sell the targeted spawner's contents per item type
 
 They read a shared config that `{"type":"configure"}` updates live, so
