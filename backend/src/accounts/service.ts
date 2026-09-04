@@ -1,6 +1,7 @@
 import { prisma } from "../database/prisma.js";
 import type { CreateAccountInput, UpdateAccountInput } from "./schemas.js";
 import type { SessionContext } from "../auth/session.js";
+import { parseSpawnerActions, type SpawnerAction } from "../minecraft/spawners.js";
 
 /** Parses the JSON-encoded tpAuto allowlist column into a string array. */
 export function parseAllowlist(raw: string): string[] {
@@ -46,22 +47,44 @@ export function parseHugoSettings(raw: string): { label: string; enabled: boolea
 
 /** Presents a stored account to API clients, decoding JSON-encoded list columns to arrays. */
 function present<
-  T extends { tpAutoAllowlist: string; dailyCommandTimes: string; homesJson: string; hugoSettingsJson: string },
+  T extends {
+    tpAutoAllowlist: string;
+    dailyCommandTimes: string;
+    homesJson: string;
+    hugoSettingsJson: string;
+    spawnerActions: string;
+    spawnerClearTimes: string;
+  },
 >(
   account: T,
-): Omit<T, "tpAutoAllowlist" | "dailyCommandTimes" | "homesJson" | "hugoSettingsJson"> & {
+): Omit<
+  T,
+  "tpAutoAllowlist" | "dailyCommandTimes" | "homesJson" | "hugoSettingsJson" | "spawnerActions" | "spawnerClearTimes"
+> & {
   tpAutoAllowlist: string[];
   dailyCommandTimes: string[];
   homes: string[];
   hugoSettings: { label: string; enabled: boolean }[];
+  spawnerActions: Record<string, SpawnerAction>;
+  spawnerClearTimes: string[];
 } {
-  const { tpAutoAllowlist, dailyCommandTimes, homesJson, hugoSettingsJson, ...rest } = account;
+  const {
+    tpAutoAllowlist,
+    dailyCommandTimes,
+    homesJson,
+    hugoSettingsJson,
+    spawnerActions,
+    spawnerClearTimes,
+    ...rest
+  } = account;
   return {
     ...rest,
     tpAutoAllowlist: parseAllowlist(tpAutoAllowlist),
     dailyCommandTimes: parseDailyTimes(dailyCommandTimes),
     homes: parseHomes(homesJson),
     hugoSettings: parseHugoSettings(hugoSettingsJson),
+    spawnerActions: parseSpawnerActions(spawnerActions),
+    spawnerClearTimes: parseDailyTimes(spawnerClearTimes),
   };
 }
 
@@ -105,6 +128,10 @@ const publicAccountSelect = {
   homesJson: true,
   hugoSettingsCommand: true,
   hugoSettingsJson: true,
+  spawnerType: true,
+  spawnerActions: true,
+  spawnerClearEnabled: true,
+  spawnerClearTimes: true,
   status: true,
   dashboardOrder: true,
   createdAt: true,

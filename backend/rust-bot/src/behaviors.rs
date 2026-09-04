@@ -11,8 +11,8 @@ use std::collections::VecDeque;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use azalea::container::ContainerHandleRef;
 use azalea::registry::builtin::BlockKind;
-use azalea::block::BlockStates;
 use azalea::{BlockPos, Client, WalkDirection};
 use azalea_inventory::components::{CustomName, Lore};
 use azalea_inventory::operations::{PickupClick, ThrowClick};
@@ -37,6 +37,15 @@ const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_millis(1500);
 /// the player slots can still read as empty the instant the menu opens, so the
 /// cycle would sell nothing and close — the "opens menu but sells nothing" stall.
 const AUTOSELL_SETTLE_DELAY: Duration = Duration::from_millis(250);
+/// Pause between shifting items into the sell menu and pressing its confirm
+/// button, so the server has processed the shift-clicks before the sale fires.
+const AUTOSELL_CONFIRM_DELAY: Duration = Duration::from_millis(250);
+/// How many confirm clicks may leave the container's contents untouched before
+/// the sell menu is torn down and reopened (recovers the "menu opens but
+/// nothing gets sold" stall without needing a bot restart).
+const AUTOSELL_MAX_STALLS: u32 = 3;
+/// Keywords identifying the sell menu's confirm button by item name/lore.
+const SELL_CONFIRM_KEYWORDS: [&str; 6] = ["verkauf", "sell", "bestätig", "bestatig", "confirm", "accept"];
 /// How often to re-assert the crouch (sneak) state while crouch is enabled.
 /// A death/respawn or server switch silently resets sneak server-side while the
 /// client still thinks it's crouching, so a plain diff-check never re-sends it.
@@ -55,13 +64,29 @@ const BALANCE_TIMEOUT: Duration = Duration::from_secs(5);
 /// this window are attributed to auto-sell earnings. Unrelated income (e.g.
 /// `/pay`) outside this window is never counted.
 const SELL_EARNING_WINDOW: Duration = Duration::from_secs(5);
-/// How close (in blocks) a spawner must be for Clean Spawner to interact with
-/// it. The bot never walks, so anything beyond normal interaction reach is
-/// ignored rather than approached.
-const SPAWNER_MAX_REACH: f64 = 5.0;
 /// How long to wait for a right-clicked spawner to open its container before
 /// giving up on the clean-spawner cycle.
 const SPAWNER_MENU_TIMEOUT: Duration = Duration::from_millis(2000);
+/// Pause between two clicks while clearing a spawner, so the server has applied
+/// the previous batch before the container is re-read.
+const SPAWNER_STEP_DELAY: Duration = Duration::from_millis(400);
+/// How many spawner steps may pass without reducing the item count before the
+/// current stage is abandoned.
+const SPAWNER_MAX_STALLS: u32 = 4;
+/// Hard upper bound on a whole clean-spawner run. Without this a stage whose
+/// item count merely oscillates (e.g. a mis-detected sell button that picks a
+/// stack up and puts it back) would reset its stall counter forever, leaving
+/// `active_task` occupied — which also starves the foreground queue and
+/// auto-sell. The run is always torn down once this elapses.
+const SPAWNER_RUN_TIMEOUT: Duration = Duration::from_secs(90);
+/// Hard upper bound on the number of steps a single clean-spawner run may take,
+/// as a second backstop that does not depend on wall-clock time.
+const SPAWNER_MAX_STEPS: u32 = 200;
+/// How many stacks of a handled item type are left in the spawner. "Fewer than
+/// two stacks" from the requirements means exactly one stack may remain.
+const SPAWNER_KEEP_STACKS: usize = 1;
+/// Keywords identifying the spawner GUI's sell button by item name/lore.
+const SPAWNER_SELL_KEYWORDS: [&str; 6] = ["verkauf", "sell", "vend", "money", "geld", "$"];
 /// How long to wait for the server to open its settings GUI after the settings
 /// command is sent before giving up on a scan/toggle.
 const SETTINGS_MENU_TIMEOUT: Duration = Duration::from_millis(2500);
@@ -73,15 +98,35 @@ const SETTINGS_CLICK_SETTLE: Duration = Duration::from_millis(500);
 /// resyncs with the bot's real inventory state.
 const INVENTORY_RESYNC_DELAY: Duration = Duration::from_millis(300);
 
-/// Tracks the two-step auto-sell cycle: send the sell command, then move all
-/// inventory items into the container the server opens in response.
+/// Tracks the auto-sell cycle: send the sell command once, then keep the sell
+/// menu open and repeatedly shift items in and press the menu's confirm button.
 enum AutoSellPhase {
     Idle,
     WaitingForMenu { since: Instant },
-    /// The sell container is open and slots are syncing; shift-click once the
-    /// settle delay elapses. `since` is kept so the overall menu timeout still
-    /// applies as a safety net.
-    Selling { since: Instant, settle_until: Instant },
+    /// The sell container is open and stays open for the whole run. Items are
+    /// shifted in, the confirm button is pressed, and the cycle repeats without
+    /// ever closing the GUI.
+    Active {
+        /// Container slot index of the menu's confirm ("sell") button.
+        confirm_slot: u16,
+        /// Slots that were already occupied when the menu opened, i.e. the
+        /// server's own decoration/filler/button items. They are never our
+        /// unsold goods, so they must be excluded from the stall check —
+        /// otherwise a decorated menu looks permanently stalled.
+        decoration: Vec<u16>,
+        stage: SellStage,
+        /// Consecutive confirm clicks that left our items in the container.
+        /// After [`AUTOSELL_MAX_STALLS`] the menu is reopened from scratch.
+        stalls: u32,
+    },
+}
+
+/// The two alternating steps of an active auto-sell run.
+enum SellStage {
+    /// Shift the player's items into the open sell menu at this time.
+    Fill { at: Instant },
+    /// Press the menu's confirm button at this time.
+    Confirm { at: Instant },
 }
 
 /// A one-shot, foreground task. While one is queued or running, the continuous
@@ -114,8 +159,10 @@ enum ForegroundTask {
 enum ActiveTask {
     /// Waiting for the server to answer a balance query.
     Balance { deadline: Instant },
-    /// Waiting for a right-clicked spawner's container to open.
-    CleanSpawner { menu_deadline: Instant },
+    /// Driving the spawner clear-out: waiting for the container, then dropping
+    /// the configured item types, then selling the rest via the spawner's own
+    /// sell button.
+    CleanSpawner(SpawnerProgress),
     /// Interacting with the server's settings GUI: waiting for it to open, then
     /// (optionally) clicking a button and re-scanning after it settles.
     Settings {
@@ -124,6 +171,42 @@ enum ActiveTask {
         /// When set, a toggle was just clicked; re-scan and finish once elapsed.
         click_settle: Option<Instant>,
     },
+}
+
+/// The ordered steps of a spawner clear-out. Dropping is always completed
+/// before selling starts, exactly as requested.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpawnerStage {
+    /// Waiting for the right-clicked spawner's container to appear.
+    WaitMenu,
+    /// Throwing the "drop" item types out of the spawner.
+    Dropping,
+    /// Pressing the spawner's sell button for the "sell" item types.
+    Selling,
+}
+
+/// Bookkeeping for an in-flight spawner clear-out.
+#[derive(Clone, Copy)]
+struct SpawnerProgress {
+    /// Deadline for the container to appear at all; irrelevant once it has.
+    menu_deadline: Instant,
+    /// Absolute deadline for the entire run, enforced even after the container
+    /// opened so a run can never occupy `active_task` indefinitely.
+    run_deadline: Instant,
+    /// Total steps taken so far, capped by [`SPAWNER_MAX_STEPS`].
+    steps: u32,
+    stage: SpawnerStage,
+    /// Earliest time the next click may be sent (paces clicks so the server can
+    /// apply the previous ones before we re-read the container).
+    next_at: Instant,
+    /// Matching stacks counted at the previous step, used to detect a stage that
+    /// stops making progress (e.g. the server refuses the clicks).
+    last_count: usize,
+    /// Consecutive steps without progress; aborts the stage at
+    /// [`SPAWNER_MAX_STALLS`].
+    stalls: u32,
+    dropped: usize,
+    sold: usize,
 }
 
 pub struct BehaviorState {
@@ -178,6 +261,9 @@ impl BehaviorState {
                 autosell_enabled: config.autosell_enabled,
                 autosell_interval_seconds: config.autosell_interval_seconds,
                 autosell_command: config.autosell_command.clone(),
+                spawner_type: config.spawner_type.clone(),
+                spawner_drop_items: config.spawner_drop_items.clone(),
+                spawner_sell_items: config.spawner_sell_items.clone(),
             },
             last_afk_at: now,
             last_movement_at: now,
@@ -428,16 +514,9 @@ impl BehaviorState {
                     self.active_task = None;
                 }
             }
-            Some(ActiveTask::CleanSpawner { menu_deadline }) => {
-                let menu_deadline = *menu_deadline;
-                if self.try_clean_spawner_container(bot) {
-                    self.active_task = None;
-                } else if now >= menu_deadline {
-                    emit(&OutEvent::BehaviorLog {
-                        message: "CleanSpawner: no container opened (timed out)".into(),
-                    });
-                    self.active_task = None;
-                }
+            Some(ActiveTask::CleanSpawner(progress)) => {
+                let progress = *progress;
+                self.advance_clean_spawner(bot, now, progress);
             }
             Some(ActiveTask::Settings {
                 menu_deadline,
@@ -479,9 +558,17 @@ impl BehaviorState {
                                     pos.x, pos.y, pos.z
                                 ),
                             });
-                            self.active_task = Some(ActiveTask::CleanSpawner {
+                            self.active_task = Some(ActiveTask::CleanSpawner(SpawnerProgress {
                                 menu_deadline: now + SPAWNER_MENU_TIMEOUT,
-                            });
+                                run_deadline: now + SPAWNER_RUN_TIMEOUT,
+                                steps: 0,
+                                stage: SpawnerStage::WaitMenu,
+                                next_at: now,
+                                last_count: usize::MAX,
+                                stalls: 0,
+                                dropped: 0,
+                                sold: 0,
+                            }));
                         }
                         None => emit(&OutEvent::BehaviorLog {
                             message: "Finden von Spawner fehlgeschlagen".into(),
@@ -617,162 +704,449 @@ impl BehaviorState {
         self.active_task = None;
     }
 
-    /// If the spawner's container is open, drop all its items and close it.
-    /// Returns true once the container has been processed (or was never the
-    /// player's own inventory), false while still waiting for it to open.
+    /// Drives one tick of a spawner clear-out.
     ///
-    /// Only the container's own slots are dropped (the player's 36 slots are the
-    /// last slots of the menu and are left untouched). The task finishes once
-    /// the 3rd slot of the top row (container slot index 2) is empty, matching
-    /// the requested stop condition.
-    fn try_clean_spawner_container(&mut self, bot: &Client) -> bool {
-        let Ok(inv) = bot.get_inventory() else {
-            return false;
-        };
+    /// Once the spawner's container is open the configured item types are
+    /// handled in a fixed order: every "drop" type is thrown out first, then
+    /// every "sell" type is sold through the spawner's own sell button. Both
+    /// stop as soon as fewer than two stacks of that type are left, so the
+    /// spawner keeps its stock. Accounts without a configured spawner type fall
+    /// back to the previous behavior of emptying the container completely.
+    fn advance_clean_spawner(&mut self, bot: &Client, now: Instant, mut p: SpawnerProgress) {
+        let Ok(inv) = bot.get_inventory() else { return };
         // id 0 == the player's own inventory: the spawner GUI hasn't opened yet.
         if inv.id() == 0 {
-            return false;
+            if now >= p.menu_deadline {
+                emit(&OutEvent::BehaviorLog {
+                    message: "CleanSpawner: no container opened (timed out)".into(),
+                });
+                self.active_task = None;
+            }
+            return;
         }
 
-        let mut dropped = 0usize;
-        if let Some(slots) = inv.slots() {
-            let container_len = slots.len().saturating_sub(36);
-            // Stop condition: as soon as the 3rd slot in the top row is empty.
-            if container_len > 2 && !slots[2].is_present() {
+        // Hard stop for the whole run. This must be checked with the container
+        // open too: it is the only guarantee that the task releases
+        // `active_task` (and with it the foreground queue and auto-sell) even if
+        // a stage's item count oscillates instead of steadily decreasing.
+        if now >= p.run_deadline || p.steps >= SPAWNER_MAX_STEPS {
+            inv.close();
+            emit(&OutEvent::BehaviorLog {
+                message: format!(
+                    "CleanSpawner: Zeitlimit erreicht ({} gedroppt, {} Verkauf-Klicks) — Menü geschlossen",
+                    p.dropped, p.sold
+                ),
+            });
+            self.active_task = None;
+            return;
+        }
+
+        let Some(slots) = inv.slots() else { return };
+        let container_len = slots.len().saturating_sub(36);
+        if container_len == 0 {
+            return;
+        }
+
+        let drop_items = self.config.spawner_drop_items.clone();
+        let sell_items = self.config.spawner_sell_items.clone();
+
+        // Unconfigured account: keep the legacy "throw everything out" behavior
+        // so Clean Spawner still does something useful before a spawner type has
+        // been picked in the settings. Gated on the *type*, not on the lists
+        // being empty — an account that deliberately sets every item to "keep"
+        // also has empty lists and must NOT have its spawner emptied.
+        if self.config.spawner_type.trim().is_empty() {
+            self.clean_spawner_legacy(&inv, &slots, container_len, now, p);
+            return;
+        }
+
+        // The container is open, so pick the first real stage.
+        if p.stage == SpawnerStage::WaitMenu {
+            p.stage = if drop_items.is_empty() {
+                SpawnerStage::Selling
+            } else {
+                SpawnerStage::Dropping
+            };
+            p.last_count = usize::MAX;
+            p.stalls = 0;
+        }
+
+        if now < p.next_at {
+            self.active_task = Some(ActiveTask::CleanSpawner(p));
+            return;
+        }
+
+        let targets = if p.stage == SpawnerStage::Dropping { &drop_items } else { &sell_items };
+        let matching = matching_slots(&slots, container_len, targets);
+
+        // Progress tracking: a step that leaves the count unchanged counts as a
+        // stall, so a server that silently refuses our clicks can't loop forever.
+        if matching.len() < p.last_count {
+            p.stalls = 0;
+        }
+        p.last_count = matching.len();
+
+        // "Fewer than two stacks left" is the stop condition for both stages.
+        let finished = matching.len() <= SPAWNER_KEEP_STACKS;
+        let stalled = p.stalls >= SPAWNER_MAX_STALLS;
+
+        if finished || stalled {
+            if stalled {
+                emit(&OutEvent::BehaviorLog {
+                    message: "CleanSpawner: no further progress in this step, moving on".into(),
+                });
+            }
+            if p.stage == SpawnerStage::Dropping {
+                // Dropping is done (or gave up) — always continue with selling.
+                self.active_task = Some(ActiveTask::CleanSpawner(SpawnerProgress {
+                    stage: SpawnerStage::Selling,
+                    next_at: now + SPAWNER_STEP_DELAY,
+                    last_count: usize::MAX,
+                    stalls: 0,
+                    ..p
+                }));
+            } else {
                 inv.close();
                 emit(&OutEvent::BehaviorLog {
-                    message: "Spawner aufgeräumt und geschlossen".into(),
+                    message: format!(
+                        "Spawner aufgeräumt: {} Stack(s) gedroppt, {} Verkauf-Klick(s) — Menü geschlossen",
+                        p.dropped, p.sold
+                    ),
                 });
-                return true;
+                self.active_task = None;
             }
-            for slot in 0..container_len {
-                if slots[slot].is_present() {
-                    inv.click(ThrowClick::All { slot: slot as u16 });
-                    dropped += 1;
+            return;
+        }
+
+        match p.stage {
+            SpawnerStage::Dropping => {
+                let mut thrown = 0usize;
+                for &slot in matching.iter().take(matching.len() - SPAWNER_KEEP_STACKS) {
+                    inv.click(ThrowClick::All { slot });
+                    thrown += 1;
                 }
+                emit(&OutEvent::BehaviorLog {
+                    message: format!("CleanSpawner: dropping {thrown} stack(s) out of the spawner"),
+                });
+                p.dropped += thrown;
             }
+            SpawnerStage::Selling => {
+                // Everything the spawner can hold, so a stock stack is never
+                // mistaken for the sell button.
+                let stock: Vec<String> = drop_items.iter().chain(sell_items.iter()).cloned().collect();
+                let Some(sell_slot) = find_spawner_sell_slot(&slots, container_len, &stock) else {
+                    inv.close();
+                    emit(&OutEvent::BehaviorLog {
+                        message: "CleanSpawner: Verkaufen-Knopf nicht gefunden — Menü geschlossen".into(),
+                    });
+                    self.active_task = None;
+                    return;
+                };
+                inv.click(PickupClick::Left { slot: Some(sell_slot) });
+                // Sale confirmations right after the click count as earnings.
+                self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
+                p.sold += 1;
+            }
+            SpawnerStage::WaitMenu => unreachable!("normalized above"),
         }
-        if dropped > 0 {
-            emit(&OutEvent::BehaviorLog {
-                message: format!("CleanSpawner: dropped {dropped} stack(s)"),
-            });
-        }
-        false
+
+        p.stalls += 1;
+        p.steps += 1;
+        p.next_at = now + SPAWNER_STEP_DELAY;
+        self.active_task = Some(ActiveTask::CleanSpawner(p));
     }
 
-    /// Drives the periodic auto-sell cycle. When enabled, every
-    /// `autosell_interval_seconds` it runs the configured sell command (which
-    /// makes the server open a sell container), then — once that container is
-    /// open — shift-clicks every item from the player's inventory into it,
-    /// mirroring what the original AutoSell client mod does.
+    /// Fallback clear-out for accounts without a configured spawner type: throw
+    /// out every stack the container holds, finishing once the third slot of the
+    /// top row is empty (the original Clean Spawner behavior).
+    fn clean_spawner_legacy(
+        &mut self,
+        inv: &ContainerHandleRef,
+        slots: &[ItemStack],
+        container_len: usize,
+        now: Instant,
+        mut p: SpawnerProgress,
+    ) {
+        if container_len > 2 && !slots[2].is_present() {
+            inv.close();
+            emit(&OutEvent::BehaviorLog {
+                message: "Spawner aufgeräumt und geschlossen".into(),
+            });
+            self.active_task = None;
+            return;
+        }
+        if now < p.next_at {
+            self.active_task = Some(ActiveTask::CleanSpawner(p));
+            return;
+        }
+
+        let remaining = (0..container_len).filter(|&s| slots[s].is_present()).count();
+        // Give up when the server keeps refusing the throws, so a spawner whose
+        // contents can't be dropped never traps the bot in an open GUI.
+        if remaining < p.last_count {
+            p.stalls = 0;
+        } else if p.stalls >= SPAWNER_MAX_STALLS {
+            inv.close();
+            emit(&OutEvent::BehaviorLog {
+                message: "CleanSpawner: keine Fortschritte mehr, Menü geschlossen".into(),
+            });
+            self.active_task = None;
+            return;
+        }
+        p.last_count = remaining;
+
+        let mut thrown = 0usize;
+        for slot in 0..container_len {
+            if slots[slot].is_present() {
+                inv.click(ThrowClick::All { slot: slot as u16 });
+                thrown += 1;
+            }
+        }
+        if thrown > 0 {
+            emit(&OutEvent::BehaviorLog {
+                message: format!("CleanSpawner: dropped {thrown} stack(s)"),
+            });
+        }
+        p.stage = SpawnerStage::Dropping;
+        p.dropped += thrown;
+        p.stalls += 1;
+        p.steps += 1;
+        p.next_at = now + SPAWNER_STEP_DELAY;
+        self.active_task = Some(ActiveTask::CleanSpawner(p));
+    }
+
+    /// Drives the auto-sell loop. The sell command is sent **once**; the server's
+    /// sell menu is then kept open for the whole run and driven in a loop:
+    /// shift every inventory item into it, press its confirm button (which sells
+    /// the menu's contents outright), wait `autosell_interval_seconds`, repeat.
+    /// If the menu disappears, or repeated confirm clicks stop selling anything,
+    /// the menu is reopened from scratch.
     fn tick_autosell(&mut self, bot: &Client, now: Instant) {
         if !self.config.autosell_enabled {
+            if !matches!(self.autosell_phase, AutoSellPhase::Idle) {
+                self.close_open_menu(bot);
+            }
             self.autosell_phase = AutoSellPhase::Idle;
             return;
         }
 
+        let interval = Duration::from_secs_f64(self.config.autosell_interval_seconds.max(0.05));
+
         match self.autosell_phase {
             AutoSellPhase::Idle => {
-                // Don't start a new cycle while a foreground one-shot task is
+                // Don't start a new run while a foreground one-shot task is
                 // queued or running — this is the "pause" half of the interrupt
-                // system. An in-progress cycle below is always allowed to finish.
+                // system. An in-progress run below is always allowed to finish.
                 if self.foreground_busy() {
                     return;
                 }
-                let secs = self.config.autosell_interval_seconds.max(0.05);
-                let interval = Duration::from_secs_f64(secs);
-                if now.duration_since(self.last_autosell_at) >= interval {
-                    self.last_autosell_at = now;
-                    // Close any lingering/stale menu before starting so we never
-                    // shift-click into the wrong container (a leftover GUI from a
-                    // prior cycle or another action). Skip this cycle if we had
-                    // to close one; the next tick starts fresh.
-                    if let Ok(inv) = bot.get_inventory() {
-                        if inv.id() != 0 {
-                            inv.close();
-                            emit(&OutEvent::BehaviorLog {
-                                message: "AutoSell: closed a lingering menu before selling".into(),
-                            });
-                            return;
-                        }
-                    }
-                    let command = self.config.autosell_command.trim();
-                    let command = if command.is_empty() { "/sell" } else { command };
-                    bot.chat(command.to_string());
-                    // Open the earnings-attribution window: sell confirmations
-                    // arriving shortly after this command count as earnings.
-                    self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
-                    self.autosell_phase = AutoSellPhase::WaitingForMenu { since: now };
-                    emit(&OutEvent::BehaviorLog {
-                        message: format!("AutoSell: opening sell menu ({command})"),
-                    });
+                if now.duration_since(self.last_autosell_at) < interval {
+                    return;
                 }
-            }
-            AutoSellPhase::WaitingForMenu { since } => {
+                self.last_autosell_at = now;
+                // Close any lingering/stale menu before starting so we never
+                // shift-click into the wrong container. Skip this cycle if we
+                // had to close one; the next tick starts fresh.
                 if let Ok(inv) = bot.get_inventory() {
-                    // A real sell container is open once the menu id is non-zero
-                    // AND it has more than the 36 player slots (container slots +
-                    // 36 player slots ≥ 45). Guarding on the slot count avoids
-                    // acting on the plain player inventory before the server has
-                    // actually opened its GUI.
                     if inv.id() != 0 {
-                        let has_container = inv.slots().map(|s| s.len() > 36).unwrap_or(false);
-                        if has_container {
-                            self.autosell_phase = AutoSellPhase::Selling {
-                                since,
-                                settle_until: now + AUTOSELL_SETTLE_DELAY,
-                            };
-                            return;
+                        inv.close();
+                        emit(&OutEvent::BehaviorLog {
+                            message: "AutoSell: closed a lingering menu before selling".into(),
+                        });
+                        return;
+                    }
+                }
+                let command = self.config.autosell_command.trim();
+                let command = if command.is_empty() { "/sell" } else { command };
+                bot.chat(command.to_string());
+                self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
+                self.autosell_phase = AutoSellPhase::WaitingForMenu { since: now };
+                emit(&OutEvent::BehaviorLog {
+                    message: format!("AutoSell: opening sell menu ({command})"),
+                });
+            }
+
+            AutoSellPhase::WaitingForMenu { since } => {
+                // A real sell container is open once the menu id is non-zero AND
+                // it has more than the 36 player slots. Guarding on the slot
+                // count avoids acting on the plain player inventory before the
+                // server has actually opened its GUI.
+                if let Ok(inv) = bot.get_inventory() {
+                    if inv.id() != 0 {
+                        if let Some(slots) = inv.slots() {
+                            if slots.len() > 36 {
+                                // Locate the confirm button *before* anything is
+                                // shifted in, while the menu still only holds the
+                                // server's own decoration items.
+                                let confirm_slot = find_sell_confirm_slot(&slots);
+                                let container_len = slots.len() - 36;
+                                let decoration: Vec<u16> = (0..container_len)
+                                    .filter(|&s| slots[s].is_present())
+                                    .map(|s| s as u16)
+                                    .collect();
+                                emit(&OutEvent::BehaviorLog {
+                                    message: format!(
+                                        "AutoSell: menu open, confirm button at slot {confirm_slot}"
+                                    ),
+                                });
+                                self.autosell_phase = AutoSellPhase::Active {
+                                    confirm_slot,
+                                    decoration,
+                                    stage: SellStage::Fill {
+                                        at: now + AUTOSELL_SETTLE_DELAY,
+                                    },
+                                    stalls: 0,
+                                };
+                                return;
+                            }
                         }
                     }
                 }
 
                 // The server never opened a menu (e.g. it sells directly, or the
-                // command failed) — give up on this cycle and try again later.
+                // command failed) — give up on this run and try again later.
                 if now.duration_since(since) >= AUTOSELL_MENU_TIMEOUT {
                     self.close_open_menu(bot);
+                    self.last_autosell_at = now;
                     self.autosell_phase = AutoSellPhase::Idle;
                 }
             }
-            AutoSellPhase::Selling { since, settle_until } => {
-                // Bail out if the menu vanished (server closed it) mid-settle.
+
+            AutoSellPhase::Active {
+                confirm_slot,
+                ref decoration,
+                ref stage,
+                stalls,
+            } => {
+                let decoration = decoration.clone();
+                // The menu vanished (server closed it, death, server switch, …):
+                // fall back to Idle so the next tick reopens it.
                 let inv = match bot.get_inventory() {
                     Ok(inv) if inv.id() != 0 => inv,
                     _ => {
+                        emit(&OutEvent::BehaviorLog {
+                            message: "AutoSell: sell menu closed, reopening".into(),
+                        });
+                        self.last_autosell_at = now.checked_sub(interval).unwrap_or(now);
                         self.autosell_phase = AutoSellPhase::Idle;
                         return;
                     }
                 };
 
-                // Wait for the container's slots to sync before selling, but
-                // never hang past the overall menu timeout.
-                if now < settle_until && now.duration_since(since) < AUTOSELL_MENU_TIMEOUT {
+                // Yield the GUI to a queued foreground task (clean spawner,
+                // settings, scheduled command, …). Because the sell menu now
+                // stays open indefinitely, this is what keeps those tasks from
+                // being starved: close the menu, go idle for one tick, and let
+                // `tick_foreground` take over. Auto-sell resumes right after.
+                if self.foreground_busy() {
+                    inv.close();
+                    self.last_autosell_at = now.checked_sub(interval).unwrap_or(now);
+                    self.autosell_phase = AutoSellPhase::Idle;
+                    return;
+                }
+                let Some(slots) = inv.slots() else { return };
+                if slots.len() <= 36 {
+                    return;
+                }
+                let container_len = slots.len() - 36;
+
+                // The server may replace the sell menu with a differently sized
+                // one (e.g. a paged view). The remembered confirm slot would then
+                // point outside the container, so start over rather than clicking
+                // a random slot.
+                if confirm_slot as usize >= container_len {
+                    emit(&OutEvent::BehaviorLog {
+                        message: "AutoSell: sell menu layout changed, reopening".into(),
+                    });
+                    inv.close();
+                    self.last_autosell_at = now.checked_sub(interval).unwrap_or(now);
+                    self.autosell_phase = AutoSellPhase::Idle;
                     return;
                 }
 
-                if let Some(slots) = inv.slots() {
-                    // The player's own 36 inventory slots are always the last
-                    // slots of an open container's menu.
-                    let player_start = slots.len().saturating_sub(36);
-                    let mut sold = 0;
-                    for slot in player_start..slots.len() {
-                        if slots[slot].is_present() {
-                            inv.shift_click(slot);
-                            sold += 1;
+                match *stage {
+                    SellStage::Fill { at } => {
+                        if now < at {
+                            return;
                         }
+                        // Anything still sitting in the container after the last
+                        // confirm click means the sale did not go through.
+                        // Only *our* goods count: anything the menu already held
+                        // when it opened is the server's decoration, not an
+                        // unsold stack.
+                        let leftovers = (0..container_len)
+                            .filter(|&s| {
+                                let slot = s as u16;
+                                slot != confirm_slot
+                                    && !decoration.contains(&slot)
+                                    && slots[s].is_present()
+                            })
+                            .count();
+                        let stalls = if leftovers > 0 { stalls + 1 } else { 0 };
+                        if stalls >= AUTOSELL_MAX_STALLS {
+                            emit(&OutEvent::BehaviorLog {
+                                message: "AutoSell: menu stopped selling, reopening it".into(),
+                            });
+                            inv.close();
+                            self.last_autosell_at = now.checked_sub(interval).unwrap_or(now);
+                            self.autosell_phase = AutoSellPhase::Idle;
+                            return;
+                        }
+
+                        // The player's own 36 slots are always the last slots of
+                        // an open container's menu.
+                        let player_start = slots.len() - 36;
+                        let mut moved = 0;
+                        for slot in player_start..slots.len() {
+                            if slots[slot].is_present() {
+                                inv.shift_click(slot);
+                                moved += 1;
+                            }
+                        }
+
+                        if moved == 0 && leftovers == 0 {
+                            // Nothing to sell right now — idle in the open menu
+                            // and re-check after the configured interval.
+                            self.autosell_phase = AutoSellPhase::Active {
+                                confirm_slot,
+                                decoration: decoration.clone(),
+                                stage: SellStage::Fill { at: now + interval },
+                                stalls,
+                            };
+                            return;
+                        }
+
+                        emit(&OutEvent::BehaviorLog {
+                            message: format!("AutoSell: moved {moved} stack(s) into the sell menu"),
+                        });
+                        self.autosell_phase = AutoSellPhase::Active {
+                            confirm_slot,
+                            decoration: decoration.clone(),
+                            stage: SellStage::Confirm {
+                                at: now + AUTOSELL_CONFIRM_DELAY,
+                            },
+                            stalls,
+                        };
                     }
-                    emit(&OutEvent::BehaviorLog {
-                        message: format!("AutoSell: moved {sold} stack(s) into the sell menu"),
-                    });
-                    if sold > 0 {
+
+                    SellStage::Confirm { at } => {
+                        if now < at {
+                            return;
+                        }
+                        inv.click(PickupClick::Left {
+                            slot: Some(confirm_slot),
+                        });
+                        // Sell confirmations arriving shortly after the click
+                        // count towards this account's earnings.
                         self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
+                        self.autosell_phase = AutoSellPhase::Active {
+                            confirm_slot,
+                            decoration: decoration.clone(),
+                            stage: SellStage::Fill { at: now + interval },
+                            stalls,
+                        };
                     }
                 }
-                // Always close the menu so we never leave the bot stuck in an
-                // open GUI (which otherwise blocks further actions and looks
-                // like a hang until a manual restart).
-                inv.close();
-                self.autosell_phase = AutoSellPhase::Idle;
             }
         }
     }
@@ -948,6 +1322,81 @@ fn item_text(stack: &ItemStack) -> (String, Vec<String>) {
     (name, lore)
 }
 
+/// Strips the namespace from a Minecraft item id so `"minecraft:beef"` and
+/// `"beef"` compare equal regardless of which form the config uses.
+fn bare_item_id(id: &str) -> &str {
+    id.rsplit_once(':').map(|(_, name)| name).unwrap_or(id)
+}
+
+/// Container slot indices holding one of `targets` (namespace-insensitive).
+///
+/// Only real stock matches: a spawner GUI's decorative buttons are never one of
+/// the configured drop/sell item types, so this doubles as the filter that keeps
+/// the bot from ever throwing away or clicking a control button.
+fn matching_slots(slots: &[ItemStack], container_len: usize, targets: &[String]) -> Vec<u16> {
+    let wanted: Vec<&str> = targets.iter().map(|t| bare_item_id(t)).collect();
+    (0..container_len)
+        .filter(|&slot| {
+            slots[slot].is_present() && wanted.contains(&bare_item_id(slots[slot].kind().to_str()))
+        })
+        .map(|slot| slot as u16)
+        .collect()
+}
+
+/// Locates the spawner GUI's sell button, or `None` when it can't be identified.
+///
+/// Layouts differ per server and resource pack, so the button is found by its
+/// display name/lore. Slots holding the spawner's own stock are excluded first:
+/// shop servers routinely put a price like "Wert: $12" in an item's lore, which
+/// would otherwise match the `$` keyword and make the bot left-click a real
+/// stack onto its cursor (silently losing it when the GUI closes).
+///
+/// Returns `None` rather than guessing a slot — clicking an unknown slot in a
+/// container full of items is destructive, so the caller stops instead.
+fn find_spawner_sell_slot(
+    slots: &[ItemStack],
+    container_len: usize,
+    stock_items: &[String],
+) -> Option<u16> {
+    let stock: Vec<&str> = stock_items.iter().map(|t| bare_item_id(t)).collect();
+    for slot in 0..container_len {
+        if !slots[slot].is_present() {
+            continue;
+        }
+        if stock.contains(&bare_item_id(slots[slot].kind().to_str())) {
+            continue;
+        }
+        let (name, lore) = item_text(&slots[slot]);
+        let hay = format!("{} {}", name, lore.join(" ")).to_lowercase();
+        if SPAWNER_SELL_KEYWORDS.iter().any(|kw| hay.contains(kw)) {
+            return Some(slot as u16);
+        }
+    }
+    None
+}
+
+/// Locates the sell menu's confirm ("sell everything") button among the
+/// container's own slots.
+///
+/// Button positions differ between servers and resource packs, so the item's
+/// display name and lore are searched for a sell/confirm keyword first. Only if
+/// no labelled button is found does it fall back to the menu's last container
+/// slot, which is where the green checkmark sits in the common layout.
+fn find_sell_confirm_slot(slots: &[ItemStack]) -> u16 {
+    let container_len = slots.len().saturating_sub(36);
+    for slot in 0..container_len {
+        if !slots[slot].is_present() {
+            continue;
+        }
+        let (name, lore) = item_text(&slots[slot]);
+        let hay = format!("{} {}", name, lore.join(" ")).to_lowercase();
+        if SELL_CONFIRM_KEYWORDS.iter().any(|kw| hay.contains(kw)) {
+            return slot as u16;
+        }
+    }
+    container_len.saturating_sub(1) as u16
+}
+
 /// Parse a settings-menu button into `(label, enabled)`, or `None` if the item
 /// isn't a stateful toggle (decorations, glass panes, a "Schließen"/close button
 /// carry no Aktiviert/Deaktiviert state and are skipped). The state is read from
@@ -1073,25 +1522,19 @@ fn emit_inventory_snapshot(bot: &Client) {
     });
 }
 
-/// Finds the nearest mob/trial spawner to the bot that is within interaction
-/// reach, or `None` if there is none nearby. The bot never moves toward it — a
-/// spawner outside [`SPAWNER_MAX_REACH`] is simply ignored.
+/// Returns the position of the spawner the bot is **currently looking at**, or
+/// `None` if the crosshair is not on a mob/trial spawner. Deliberately does not
+/// search the surroundings: the bot must be aimed at the spawner it should
+/// clear, so a misaimed bot never opens the wrong block.
 fn find_spawner_in_reach(bot: &Client) -> Option<BlockPos> {
-    let position = bot.position().ok()?;
+    let hit = bot.hit_result().ok()?;
+    let block_hit = hit.as_block_hit_result_if_not_miss()?;
+    let pos = block_hit.block_pos;
+
     let world = bot.world().ok()?;
     let world = world.read();
-    let states = BlockStates::from([BlockKind::Spawner, BlockKind::TrialSpawner]);
-    let found = world.find_block(position, &states)?;
-
-    let dx = (found.x as f64 + 0.5) - position.x;
-    let dy = (found.y as f64 + 0.5) - position.y;
-    let dz = (found.z as f64 + 0.5) - position.z;
-    let distance = (dx * dx + dy * dy + dz * dz).sqrt();
-    if distance <= SPAWNER_MAX_REACH {
-        Some(found)
-    } else {
-        None
-    }
+    let state = world.get_block_state(pos)?;
+    matches!(BlockKind::from(state), BlockKind::Spawner | BlockKind::TrialSpawner).then_some(pos)
 }
 
 /// Extracts a monetary amount from `text`, preferring a `$`-prefixed number and

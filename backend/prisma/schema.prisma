@@ -150,6 +150,18 @@ model MinecraftAccount {
   // render the toggles even before a fresh scan completes.
   hugoSettingsCommand String  @default("/settings")
   hugoSettingsJson    String  @default("[]")
+  // Spawner handling. `spawnerType` selects which mob spawner this account is
+  // parked at ("" = unconfigured), which in turn determines the item types the
+  // spawner produces. `spawnerActions` maps each of those item ids to what
+  // should happen to it when the spawner is cleared:
+  //   { "minecraft:beef": "drop" | "sell" | "keep" }
+  // Dropping is always performed before selling, and both stop once fewer than
+  // two stacks of the item remain. When `spawnerClearEnabled` is set, the clear
+  // routine also runs automatically at each "HH:MM" in `spawnerClearTimes`.
+  spawnerType         String  @default("")
+  spawnerActions      String  @default("{}")
+  spawnerClearEnabled Boolean @default(false)
+  spawnerClearTimes   String  @default("[]")
   status             ClientStatus @default(OFFLINE)
   // Persistent dashboard ordering key (smaller = earlier in list).
   dashboardOrder     Int      @default(0)

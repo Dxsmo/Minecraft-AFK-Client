@@ -2,18 +2,22 @@ import { useState, useEffect, type ReactNode } from "react";
 import { api, ApiError } from "../lib/api";
 import type { HugoSetting, ManagedUser, MinecraftAccount } from "../lib/types";
 import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
+import { SPAWNER_TYPES, getSpawnerType, spawnerItemTexture, type SpawnerAction } from "../lib/spawners";
 
 export function AccountSettingsPanel({
   account,
   users,
   canManageAccess,
   currentUserId,
+  isAdmin,
   onUpdated,
 }: {
   account: MinecraftAccount;
   users: ManagedUser[];
   canManageAccess: boolean;
   currentUserId?: string;
+  /** Admins see the full feature set; normal users get the reduced one. */
+  isAdmin: boolean;
   onUpdated: () => void;
 }) {
   const [afkEnabled, setAfkEnabled] = useState(account.afkEnabled);
@@ -25,7 +29,9 @@ export function AccountSettingsPanel({
   const [afkIntervalSeconds, setAfkIntervalSeconds] = useState(account.afkIntervalSeconds);
   const [autoReconnect, setAutoReconnect] = useState(account.autoReconnect);
   const [autoCommandEnabled, setAutoCommandEnabled] = useState(account.autoCommandEnabled);
-  const [autoCommandText, setAutoCommandText] = useState(account.autoCommandText);
+  // Auto home only ever runs "/home <name>", so the UI edits the bare name and
+  // the fixed prefix is re-attached on save.
+  const [autoHomeName, setAutoHomeName] = useState(homeNameFromCommand(account.autoCommandText));
   const [autoCommandIntervalMinutes, setAutoCommandIntervalMinutes] = useState(account.autoCommandIntervalMinutes);
   const [autoCommandSpanEnabled, setAutoCommandSpanEnabled] = useState(account.autoCommandSpanEnabled);
   const [autoCommandSpanMinValue, setAutoCommandSpanMinValue] = useState(
@@ -51,6 +57,13 @@ export function AccountSettingsPanel({
   const [autoSellEnabled, setAutoSellEnabled] = useState(account.autoSellEnabled);
   const [autoSellIntervalSeconds, setAutoSellIntervalSeconds] = useState(account.autoSellIntervalSeconds);
   const [autoSellCommand, setAutoSellCommand] = useState(account.autoSellCommand);
+  const [spawnerType, setSpawnerType] = useState(account.spawnerType ?? "");
+  const [spawnerActions, setSpawnerActions] = useState<Record<string, SpawnerAction>>(
+    account.spawnerActions ?? {},
+  );
+  const [spawnerClearEnabled, setSpawnerClearEnabled] = useState(account.spawnerClearEnabled ?? false);
+  const [spawnerClearTimes, setSpawnerClearTimes] = useState<string[]>(account.spawnerClearTimes ?? []);
+  const [spawnerTimeDraft, setSpawnerTimeDraft] = useState("04:00");
   const [assigned, setAssigned] = useState<Set<string>>(new Set(account.assignments.map((a) => a.userId)));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -115,30 +128,40 @@ export function AccountSettingsPanel({
     setError(null);
     setMessage(null);
     try {
+      // Admin-only keys are omitted entirely for normal users — the server
+      // strips them too, this just avoids sending values they can't set.
       await api.patch(`/minecraft/accounts/${account.id}`, {
         displayName,
-        afkEnabled,
-        movementEnabled,
         crouchEnabled,
-        afkIntervalSeconds,
         autoReconnect,
         serverHost,
         serverPort,
         autoCommandEnabled,
-        autoCommandText,
+        autoCommandText: commandFromHomeName(autoHomeName),
         autoCommandIntervalMinutes,
         autoCommandSpanEnabled,
         autoCommandSpanMinSeconds: toSpanSeconds(autoCommandSpanMinValue, autoCommandSpanMinUnit),
         autoCommandSpanMaxSeconds: toSpanSeconds(autoCommandSpanMaxValue, autoCommandSpanMaxUnit),
         dailyCommandEnabled,
         dailyCommandTimes,
-        balanceEnabled,
-        balanceCommand,
-        tpAutoEnabled,
-        tpAutoAllowlist,
         autoSellEnabled,
         autoSellIntervalSeconds,
         autoSellCommand,
+        spawnerType,
+        spawnerActions,
+        spawnerClearEnabled,
+        spawnerClearTimes,
+        ...(isAdmin
+          ? {
+              afkEnabled,
+              movementEnabled,
+              afkIntervalSeconds,
+              balanceEnabled,
+              balanceCommand,
+              tpAutoEnabled,
+              tpAutoAllowlist,
+            }
+          : {}),
       });
       if (canManageAccess) {
         await api.put(`/minecraft/accounts/${account.id}/assignments`, { userIds: Array.from(assigned) });
@@ -199,6 +222,20 @@ export function AccountSettingsPanel({
     setDailyCommandTimes(dailyCommandTimes.filter((t) => t !== time));
   }
 
+  function addSpawnerTime() {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(spawnerTimeDraft)) {
+      setError("Invalid time (use HH:MM)");
+      return;
+    }
+    if (!spawnerClearTimes.includes(spawnerTimeDraft)) {
+      setSpawnerClearTimes([...spawnerClearTimes, spawnerTimeDraft].sort());
+    }
+  }
+
+  function setSpawnerAction(itemId: string, action: SpawnerAction) {
+    setSpawnerActions((prev) => ({ ...prev, [itemId]: action }));
+  }
+
   function toggleUser(userId: string) {    setAssigned((prev) => {
       const next = new Set(prev);
       next.has(userId) ? next.delete(userId) : next.add(userId);
@@ -206,18 +243,33 @@ export function AccountSettingsPanel({
     });
   }
 
+  // Normal users get a reduced feature set: no AFK/movement tuning, balance,
+  // auto-TPA or server settings GUI (mirrored server-side in the accounts API).
   const categories: { id: string; label: string; icon: CatIcon; meta?: string; on?: boolean }[] = [
     { id: "general", label: "General", icon: "user", meta: displayName.trim() || account.name },
     { id: "connection", label: "Connection", icon: "server", meta: `${serverHost}:${serverPort}` },
-    { id: "behavior", label: "Behavior", icon: "activity", on: afkEnabled || movementEnabled || crouchEnabled },
-    { id: "autocommand", label: "Auto-command", icon: "terminal", on: autoCommandEnabled || dailyCommandEnabled || autoCommandSpanEnabled },
-    { id: "balance", label: "Balance", icon: "coin", on: balanceEnabled },
-    { id: "autotpa", label: "Auto-TPA", icon: "portal", on: tpAutoEnabled },
+    {
+      id: "behavior",
+      label: "Behavior",
+      icon: "activity",
+      on: isAdmin ? afkEnabled || movementEnabled || crouchEnabled : crouchEnabled,
+    },
+    { id: "autohome", label: "Auto home", icon: "terminal", on: autoCommandEnabled || dailyCommandEnabled || autoCommandSpanEnabled },
+    ...(isAdmin ? [{ id: "balance", label: "Balance", icon: "coin" as CatIcon, on: balanceEnabled }] : []),
+    ...(isAdmin ? [{ id: "autotpa", label: "Auto-TPA", icon: "portal" as CatIcon, on: tpAutoEnabled }] : []),
     { id: "autosell", label: "Auto-sell", icon: "tag", on: autoSellEnabled },
-    { id: "hugosmp", label: "HugoSMP Settings", icon: "sliders", on: hugoSettings.length > 0 },
+    {
+      id: "spawner",
+      label: "Spawner",
+      icon: "cube",
+      on: spawnerType !== "",
+      meta: getSpawnerType(spawnerType)?.label,
+    },
+    ...(isAdmin ? [{ id: "hugosmp", label: "HugoSMP Settings", icon: "sliders" as CatIcon, on: hugoSettings.length > 0 }] : []),
     ...(canManageAccess ? [{ id: "users", label: "Access", icon: "users" as CatIcon, meta: `${assigned.size} assigned` }] : []),
   ];
   const active = categories.find((c) => c.id === activeCat) ?? categories[0];
+  const selectedSpawner = getSpawnerType(spawnerType);
 
   return (
     <div className="card overflow-hidden p-0 text-sm">
@@ -357,28 +409,38 @@ export function AccountSettingsPanel({
 
             {activeCat === "behavior" && (
               <>
-                <Toggle label="AFK behavior" checked={afkEnabled} onChange={setAfkEnabled} />
-                <Toggle label="Movement behavior" checked={movementEnabled} onChange={setMovementEnabled} />
+                {isAdmin && <Toggle label="AFK behavior" checked={afkEnabled} onChange={setAfkEnabled} />}
+                {isAdmin && (
+                  <Toggle label="Movement behavior" checked={movementEnabled} onChange={setMovementEnabled} />
+                )}
                 <Toggle label="Crouch" description="Continuously sneak while connected." checked={crouchEnabled} onChange={setCrouchEnabled} />
                 <Toggle label="Auto-reconnect" checked={autoReconnect} onChange={setAutoReconnect} />
-                <Field label="AFK interval">
-                  <NumberInput value={afkIntervalSeconds} onChange={setAfkIntervalSeconds} min={5} max={3600} suffix="s" />
-                </Field>
+                {isAdmin && (
+                  <Field label="AFK interval">
+                    <NumberInput value={afkIntervalSeconds} onChange={setAfkIntervalSeconds} min={5} max={3600} suffix="s" />
+                  </Field>
+                )}
               </>
             )}
 
-            {activeCat === "autocommand" && (
+            {activeCat === "autohome" && (
               <>
                 <div>
-                  <label className="label">Command / message</label>
-                  <input
-                    value={autoCommandText}
-                    onChange={(e) => setAutoCommandText(e.target.value)}
-                    placeholder="/hub or a chat message"
-                    className="input"
-                  />
+                  <label className="label">Home</label>
+                  {/* The "/home " prefix is fixed: auto home may only ever
+                      teleport the bot to one of its own homes. */}
+                  <div className="cmd-prefix-field">
+                    <span className="cmd-prefix">/home</span>
+                    <input
+                      value={autoHomeName}
+                      onChange={(e) => setAutoHomeName(e.target.value)}
+                      placeholder="base"
+                      className="cmd-prefix-input"
+                      spellCheck={false}
+                    />
+                  </div>
                   <p className="mt-1 text-xs" style={{ color: "var(--text-subtle)" }}>
-                    Used by both schedules below. Enable interval, daily, or both.
+                    Used by all schedules below. Enable interval, Zeitspanne, daily, or any combination.
                   </p>
                 </div>
 
@@ -565,7 +627,7 @@ export function AccountSettingsPanel({
               <>
                 <Toggle
                   label="Enabled"
-                  description="Runs the sell command, then moves all inventory items into the sell menu."
+                  description="Öffnet das Verkaufsmenü einmalig und lässt es offen: Items werden hineingeschoben, der Bestätigen-Knopf gedrückt, und das wiederholt sich. Bei einem Fehler wird das Menü automatisch neu geöffnet."
                   checked={autoSellEnabled}
                   onChange={setAutoSellEnabled}
                 />
@@ -581,6 +643,120 @@ export function AccountSettingsPanel({
                 <Field label="Interval">
                   <NumberInput value={autoSellIntervalSeconds} onChange={setAutoSellIntervalSeconds} min={0.5} max={3600} step={0.5} suffix="s" />
                 </Field>
+              </>
+            )}
+
+            {activeCat === "spawner" && (
+              <>
+                <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+                  Wähle den Spawner-Typ, vor dem dieser Account steht. Danach kannst du für
+                  jede Item-Art festlegen, ob sie aus dem Spawner <b>gedroppt</b> oder über
+                  den grünen Knopf <b>verkauft</b> wird. Gedroppt wird immer zuerst, und beides
+                  stoppt, sobald weniger als 2 Stacks der Art übrig sind.
+                </p>
+
+                <div>
+                  <label className="label">Spawner-Typ</label>
+                  <div className="spawner-grid">
+                    {SPAWNER_TYPES.map((type) => {
+                      const selected = spawnerType === type.id;
+                      return (
+                        <button
+                          key={type.id}
+                          type="button"
+                          onClick={() => setSpawnerType(selected ? "" : type.id)}
+                          className={`spawner-chip${selected ? " spawner-chip-active" : ""}`}
+                          aria-pressed={selected}
+                        >
+                          <span className="spawner-chip-emoji">{type.emoji}</span>
+                          <span className="spawner-chip-label">{type.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Per-item drop/sell picker, revealed once a type is chosen. */}
+                {selectedSpawner && (
+                  <div className="spawner-items">
+                    <label className="label">Items im {selectedSpawner.label}-Spawner</label>
+                    <div className="space-y-2">
+                      {selectedSpawner.items.map((item) => {
+                        const action = spawnerActions[item.id] ?? "keep";
+                        return (
+                          <div key={item.id} className="spawner-item-row">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <img
+                                src={spawnerItemTexture(item.id)}
+                                alt=""
+                                aria-hidden
+                                className="spawner-item-icon"
+                                onError={(e) => (e.currentTarget.style.visibility = "hidden")}
+                              />
+                              <span className="truncate text-xs font-medium" style={{ color: "var(--text)" }}>
+                                {item.label}
+                              </span>
+                            </div>
+                            <div className="spawner-actions">
+                              {(["keep", "drop", "sell"] as SpawnerAction[]).map((value) => (
+                                <button
+                                  key={value}
+                                  type="button"
+                                  onClick={() => setSpawnerAction(item.id, value)}
+                                  className={`spawner-action${action === value ? ` spawner-action-${value}` : ""}`}
+                                  aria-pressed={action === value}
+                                >
+                                  {value === "keep" ? "Lassen" : value === "drop" ? "Droppen" : "Verkaufen"}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="border-t pt-3" style={{ borderColor: "var(--border)" }}>
+                  <Toggle
+                    label="Nach Zeit leeren"
+                    description="Startet den Leer-Vorgang automatisch zu festen Uhrzeiten (Server-Ortszeit)."
+                    checked={spawnerClearEnabled}
+                    onChange={setSpawnerClearEnabled}
+                  />
+                  {spawnerClearEnabled && (
+                    <div className="mt-2">
+                      {spawnerClearTimes.length > 0 && (
+                        <div className="mb-2 flex flex-wrap gap-1.5">
+                          {spawnerClearTimes.map((time) => (
+                            <span key={time} className="time-pill">
+                              {time}
+                              <button
+                                type="button"
+                                onClick={() => setSpawnerClearTimes(spawnerClearTimes.filter((t) => t !== time))}
+                                className="leading-none opacity-70 hover:opacity-100"
+                                aria-label={`Remove ${time}`}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <input
+                          type="time"
+                          value={spawnerTimeDraft}
+                          onChange={(e) => setSpawnerTimeDraft(e.target.value)}
+                          className="input w-32"
+                        />
+                        <button type="button" onClick={addSpawnerTime} className="btn btn-secondary btn-sm shrink-0">
+                          + Uhrzeit
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </>
             )}
 
@@ -708,7 +884,17 @@ function toSpanSeconds(value: number, unit: "minutes" | "hours"): number {
   return unit === "hours" ? clamped * 3600 : clamped * 60;
 }
 
-type CatIcon = "user" | "server" | "activity" | "terminal" | "coin" | "portal" | "tag" | "users" | "sliders";
+type CatIcon =
+  | "user"
+  | "server"
+  | "activity"
+  | "terminal"
+  | "coin"
+  | "portal"
+  | "tag"
+  | "users"
+  | "sliders"
+  | "cube";
 
 /** Small line icon used in the settings category navigation. */
 function CatGlyph({ name }: { name: CatIcon }) {
@@ -782,6 +968,14 @@ function CatGlyph({ name }: { name: CatIcon }) {
           <line x1="4" y1="16" x2="20" y2="16" />
           <circle cx="9" cy="8" r="2" />
           <circle cx="15" cy="16" r="2" />
+        </svg>
+      );
+    case "cube":
+      return (
+        <svg {...common}>
+          <path d="M12 2.8 20.5 7v10L12 21.2 3.5 17V7z" />
+          <path d="M3.5 7 12 11.5 20.5 7" />
+          <line x1="12" y1="11.5" x2="12" y2="21.2" />
         </svg>
       );
     case "users":
@@ -879,4 +1073,18 @@ function Toggle({
       )}
     </div>
   );
+}
+
+/**
+ * Auto home stores the full "/home <name>" command, but the UI only edits the
+ * name. These two helpers convert between the stored command and that name.
+ */
+function homeNameFromCommand(command: string | undefined): string {
+  const match = /^\/home\s+(.+)$/i.exec((command ?? "").trim());
+  return match ? match[1].trim() : "";
+}
+
+function commandFromHomeName(name: string): string {
+  const trimmed = name.trim();
+  return trimmed ? `/home ${trimmed}` : "";
 }

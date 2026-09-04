@@ -167,7 +167,7 @@ export function AccountDetailPage() {
             onClick={() => void handleCleanSpawner()}
             className="btn btn-ghost btn-sm"
             disabled={liveStatus !== "ONLINE"}
-            title="Right-click a nearby spawner and drop its items"
+            title="Leert den anvisierten Spawner nach den Spawner-Einstellungen"
           >
             Clean spawner
           </button>
@@ -181,7 +181,7 @@ export function AccountDetailPage() {
 
       {/* Live telemetry strip — always visible across tabs. */}
       <div className="flex flex-wrap items-center gap-2">
-        {balance !== null && balance !== undefined && (
+        {isAdmin && balance !== null && balance !== undefined && (
           <StatPill label="Balance" value={`$${balance.toLocaleString("en-US")}`} accent />
         )}
         {status?.health !== undefined && <StatPill label="Health" value={`${status.health}/20`} />}
@@ -240,10 +240,13 @@ export function AccountDetailPage() {
           <TabIcon name="console" />
           Console
         </button>
-        <button className="tab-btn" data-active={tab === "inventory"} onClick={() => setTab("inventory")}>
-          <TabIcon name="inventory" />
-          Inventory
-        </button>
+        {/* Live inventory is an admin-only feature (also enforced by the API). */}
+        {isAdmin && (
+          <button className="tab-btn" data-active={tab === "inventory"} onClick={() => setTab("inventory")}>
+            <TabIcon name="inventory" />
+            Inventory
+          </button>
+        )}
         <button className="tab-btn" data-active={tab === "settings"} onClick={() => setTab("settings")}>
           <TabIcon name="settings" />
           Einstellungen
@@ -267,7 +270,7 @@ export function AccountDetailPage() {
               Send
             </button>
           </form>
-          {homes.length > 0 && (
+          {isAdmin && homes.length > 0 && (
             <div
               className="rounded-xl p-2.5"
               style={{ border: "1px solid var(--border)", backgroundColor: "var(--surface)" }}
@@ -294,7 +297,7 @@ export function AccountDetailPage() {
         </div>
       )}
 
-      {tab === "inventory" && (
+      {tab === "inventory" && isAdmin && (
         <div key="inventory" className="tab-panel">
           <div className="card flex justify-center p-6">
             <InventoryPanel accountId={account.id} online={liveStatus === "ONLINE"} />
@@ -309,6 +312,7 @@ export function AccountDetailPage() {
             users={users}
             canManageAccess={canManageAccess}
             currentUserId={user?.id}
+            isAdmin={isAdmin}
             onUpdated={load}
           />
         </div>

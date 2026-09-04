@@ -4,12 +4,14 @@ import { prisma } from "../database/prisma.js";
 import { persistConsoleLog } from "../logging/consoleLogService.js";
 import { logger } from "../logging/logger.js";
 import { parseAllowlist, parseDailyTimes, parseHomes, parseHugoSettings } from "../accounts/service.js";
+import { parseSpawnerActions, resolveSpawnerActions } from "./spawners.js";
 import type { MinecraftAccount } from "@prisma/client";
 
 export type ConsoleEventListener = (event: ConsoleEvent) => void;
 export type StatusEventListener = (status: ClientStatusSnapshot) => void;
 
 function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
+  const spawner = resolveSpawnerActions(account.spawnerType, parseSpawnerActions(account.spawnerActions));
   return {
     id: account.id,
     name: account.name,
@@ -43,6 +45,11 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     homes: parseHomes(account.homesJson),
     hugoSettingsCommand: account.hugoSettingsCommand,
     hugoSettings: parseHugoSettings(account.hugoSettingsJson),
+    spawnerType: account.spawnerType,
+    spawnerDropItems: spawner.dropItems,
+    spawnerSellItems: spawner.sellItems,
+    spawnerClearEnabled: account.spawnerClearEnabled,
+    spawnerClearTimes: parseDailyTimes(account.spawnerClearTimes),
   };
 }
 

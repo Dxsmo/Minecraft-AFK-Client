@@ -55,6 +55,21 @@ pub struct Config {
     /// The command that opens the server's sell menu (e.g. "/sell").
     #[serde(default = "default_autosell_command")]
     pub autosell_command: String,
+    /// The configured spawner type id (e.g. "cow"), or empty when the account
+    /// has not picked one. Empty selects the legacy "empty the whole container"
+    /// behavior; anything else means the drop/sell lists are authoritative, even
+    /// when both are empty (= every item set to "keep").
+    #[serde(default)]
+    pub spawner_type: String,
+    /// Item ids (e.g. "minecraft:beef") that Clean Spawner throws out of the
+    /// spawner. Dropping always runs before selling and stops once fewer than
+    /// two stacks of the item remain.
+    #[serde(default)]
+    pub spawner_drop_items: Vec<String>,
+    /// Item ids that Clean Spawner sells via the spawner's own sell button,
+    /// likewise down to fewer than two remaining stacks.
+    #[serde(default)]
+    pub spawner_sell_items: Vec<String>,
 }
 
 fn default_autosell_interval() -> f64 {
@@ -103,6 +118,12 @@ pub struct BehaviorConfig {
     pub autosell_interval_seconds: f64,
     #[serde(default = "default_autosell_command")]
     pub autosell_command: String,
+    #[serde(default)]
+    pub spawner_type: String,
+    #[serde(default)]
+    pub spawner_drop_items: Vec<String>,
+    #[serde(default)]
+    pub spawner_sell_items: Vec<String>,
 }
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

@@ -186,10 +186,21 @@ additional users access afterwards in the account's **Settings** panel):
   sign-in link + code; open it, approve once, and the token is cached on
   disk (`data/bot-cache/<account>/`) so subsequent starts are silent. No
   password is ever entered or stored.
-- AFK / Movement behavior toggles + AFK interval
-- Auto-command: an optional chat message/command sent automatically at a
-  configurable interval (minutes), independent of the AFK/movement
-  behaviors — configured per account in **Settings**
+- AFK / Movement behavior toggles + AFK interval (admin-only)
+- Auto home: an optional `/home <name>` teleport run automatically on a fixed
+  interval, a random time span, and/or at fixed times of day — configured per
+  account in **Settings**. Only the home name is editable; the `/home ` prefix
+  is fixed and enforced server-side.
+- Auto-sell: opens the server's sell menu **once** and keeps it open, shifting
+  the inventory in and pressing the menu's confirm button in a loop. The menu is
+  reopened automatically if it closes or stops selling.
+- Spawner: pick the spawner type the account is parked at, then choose per
+  produced item whether it is **dropped** out of the spawner or **sold** via the
+  spawner's own sell button. Dropping always runs first, and both stop once
+  fewer than two stacks of that item remain. Can also run automatically at
+  configured times of day ("Nach Zeit leeren").
+- Clean Spawner only ever acts on the block the bot is **currently looking at**;
+  it never searches the surroundings.
 - `autoReconnect` – fixed 30s retry delay (±2s jitter) after a dropped
   connection, retried indefinitely as long as the client isn't manually
   stopped; can be disabled per account at any time
@@ -261,11 +272,24 @@ driven from Azalea's game tick:
 
 - **AFK** – periodic random look-around + jump to avoid inactivity kicks
 - **Movement** – occasional short random walk
-- **Auto-command** – periodic chat message/command
+- **Auto home** – periodic `/home <name>` teleport
+- **Auto-sell** – persistent sell-menu loop (fill → confirm → repeat)
+- **Clean Spawner** – drop/sell the targeted spawner's contents per item type
 
 They read a shared config that `{"type":"configure"}` updates live, so
-toggling AFK/movement/auto-command or changing intervals in the UI takes
-effect without reconnecting.
+toggling behaviors or changing intervals in the UI takes effect without
+reconnecting.
+
+Menu buttons (sell confirm, spawner sell) are located by item **name/lore
+keyword** with a positional fallback, because GUI layouts differ per server and
+resource pack.
+
+### Feature visibility
+
+Normal users get a reduced feature set: no AFK/movement tuning, balance polling,
+auto-TPA, live inventory, home shortcuts or HugoSMP settings. This is enforced
+in the API (admin-only routes plus stripped admin-only fields on `PATCH`), not
+just hidden in the UI. Admins keep the full feature set for every account.
 
 ---
 

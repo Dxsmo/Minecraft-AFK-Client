@@ -78,6 +78,16 @@ export interface ClientRuntimeConfig {
   hugoSettingsCommand: string;
   /** Last scanned server settings toggles ([{ label, enabled }]). */
   hugoSettings: HugoSetting[];
+  /** Configured spawner type id ("" = unconfigured, uses the legacy clear-all). */
+  spawnerType: string;
+  /** Item ids to throw out of the spawner when it is cleared. */
+  spawnerDropItems: string[];
+  /** Item ids to sell via the spawner's own sell button when it is cleared. */
+  spawnerSellItems: string[];
+  /** Run the spawner-clear routine automatically at fixed times of day. */
+  spawnerClearEnabled: boolean;
+  /** Times of day ("HH:MM", server local time) to clear the spawner. */
+  spawnerClearTimes: string[];
 }
 
 /** A single toggle button scanned from the server's settings GUI. */

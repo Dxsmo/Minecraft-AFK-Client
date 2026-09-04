@@ -1,3 +1,5 @@
+import type { SpawnerAction } from "./spawners";
+
 export type Role = "ADMIN" | "USER";
 export type UserStatus = "ACTIVE" | "DISABLED";
 export type AuthType = "OFFLINE" | "MICROSOFT";
@@ -108,6 +110,10 @@ export interface MinecraftAccount {
   homes: string[];
   hugoSettingsCommand: string;
   hugoSettings: HugoSetting[];
+  spawnerType: string;
+  spawnerActions: Record<string, SpawnerAction>;
+  spawnerClearEnabled: boolean;
+  spawnerClearTimes: string[];
   dashboardOrder: number;
   status: ClientStatus;
   createdAt: string;

@@ -8,6 +8,8 @@ import {
   moveItemSchema,
   dropItemSchema,
   setHugoSettingSchema,
+  stripAdminOnlyFields,
+  stripAdminOnlyCreateFields,
 } from "./schemas.js";
 import * as accountsService from "./service.js";
 import { executeCommand } from "../commands/service.js";
@@ -19,6 +21,18 @@ import { prisma } from "../database/prisma.js";
 
 export default async function accountsRoutes(app: FastifyInstance) {
   app.addHook("preHandler", app.requireAuth);
+
+  /**
+   * Guard for the admin-only account features (live inventory, server settings
+   * GUI, spawner/behavior tuning). Normal users work with a reduced feature set,
+   * and that reduction is enforced here rather than only in the UI. Answers 404
+   * so the endpoint's existence isn't leaked to non-admins.
+   */
+  function requireAdminFeature(req: FastifyRequest, reply: FastifyReply): boolean {
+    if (req.session!.user.role === "ADMIN") return true;
+    reply.code(404).send({ error: "Account not found" });
+    return false;
+  }
 
   app.get("/api/minecraft/accounts", async (req, reply) => {
     const accounts = await accountsService.listAccountsForSession(req.session!);
@@ -58,6 +72,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/minecraft/accounts/:id/inventory", async (req, reply) => {
+    if (!requireAdminFeature(req, reply)) return;
     const { id } = req.params as { id: string };
     const account = await accountsService.getAccountForSession(req.session!, id);
     if (!account) {
@@ -80,7 +95,13 @@ export default async function accountsRoutes(app: FastifyInstance) {
     const body = parseOrReject(createAccountSchema, req.body, reply);
     if (!body) return;
 
-    const account = await accountsService.createAccount(body, req.session!).catch((err) => {
+    // Same gate as the PATCH below: a non-admin must not be able to set
+    // admin-only settings by supplying them at creation time (they'd otherwise
+    // stick forever, since the update path strips them).
+    const input =
+      req.session!.user.role === "ADMIN" ? body : stripAdminOnlyCreateFields(body);
+
+    const account = await accountsService.createAccount(input, req.session!).catch((err) => {
       if (err.code === "P2002") {
         reply.code(409).send({ error: "Account name already exists" });
         return null;
@@ -113,7 +134,11 @@ export default async function accountsRoutes(app: FastifyInstance) {
       return;
     }
 
-    const account = await accountsService.updateAccount(id, body).catch(() => null);
+    // Non-admins may only change the basic account fields; anything admin-only
+    // is dropped server-side so a hand-crafted request can't bypass the UI.
+    const data = req.session!.user.role === "ADMIN" ? body : stripAdminOnlyFields(body);
+
+    const account = await accountsService.updateAccount(id, data).catch(() => null);
     if (!account) {
       reply.code(404).send({ error: "Account not found" });
       return;
@@ -253,6 +278,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
   // ---- Server settings GUI (e.g. HugoSMP "/settings") ----
 
   app.get("/api/minecraft/accounts/:id/hugo-settings", async (req, reply) => {
+    if (!requireAdminFeature(req, reply)) return;
     const { id } = req.params as { id: string };
     const account = await accountsService.getAccountForSession(req.session!, id);
     if (!account) {
@@ -268,6 +294,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
     "/api/minecraft/accounts/:id/hugo-settings/scan",
     { preHandler: app.requireCsrf },
     async (req, reply) => {
+      if (!requireAdminFeature(req, reply)) return;
       const { id } = req.params as { id: string };
       const allowed = await accountsService.canAccessAccount(req.session!, id);
       if (!allowed) {
@@ -286,6 +313,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
     "/api/minecraft/accounts/:id/hugo-settings/set",
     { preHandler: app.requireCsrf },
     async (req, reply) => {
+      if (!requireAdminFeature(req, reply)) return;
       const { id } = req.params as { id: string };
       const body = parseOrReject(setHugoSettingSchema, req.body, reply);
       if (!body) return;
@@ -313,6 +341,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
     "/api/minecraft/accounts/:id/inventory/move",
     { preHandler: app.requireCsrf },
     async (req, reply) => {
+      if (!requireAdminFeature(req, reply)) return;
       const { id } = req.params as { id: string };
       const body = parseOrReject(moveItemSchema, req.body, reply);
       if (!body) return;
@@ -333,6 +362,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
     "/api/minecraft/accounts/:id/inventory/drop",
     { preHandler: app.requireCsrf },
     async (req, reply) => {
+      if (!requireAdminFeature(req, reply)) return;
       const { id } = req.params as { id: string };
       const body = parseOrReject(dropItemSchema, req.body, reply);
       if (!body) return;

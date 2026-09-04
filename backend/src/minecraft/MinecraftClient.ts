@@ -155,6 +155,9 @@ export class MinecraftClient extends EventEmitter {
         autosell_enabled: config.autoSellEnabled,
         autosell_interval_seconds: config.autoSellIntervalSeconds,
         autosell_command: config.autoSellCommand,
+        spawner_type: config.spawnerType,
+        spawner_drop_items: config.spawnerDropItems,
+        spawner_sell_items: config.spawnerSellItems,
       });
     }
   }
@@ -329,6 +332,20 @@ export class MinecraftClient extends EventEmitter {
       }
     }
 
+    // Spawner clear: run the configured clear routine once at each configured
+    // time of day, deduped per day (same pattern as the daily command above).
+    if (this.config.spawnerClearEnabled && this.config.spawnerClearTimes.length > 0) {
+      const now = new Date();
+      const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      const today = now.toISOString().slice(0, 10);
+      const key = `spawner:${hhmm}`;
+      if (this.config.spawnerClearTimes.includes(hhmm) && this.firedDaily.get(key) !== today) {
+        this.firedDaily.set(key, today);
+        this.sendToBot({ type: "clean_spawner" });
+        this.emitConsole("SYSTEM", `Scheduled spawner clear for ${hhmm} dispatched`);
+      }
+    }
+
     // Balance poll: query at most every BALANCE_POLL_INTERVAL_MS.
     if (this.config.balanceEnabled) {
       const elapsed = Date.now() - this.lastBalanceQueryAt;
@@ -466,6 +483,9 @@ export class MinecraftClient extends EventEmitter {
       autosell_enabled: this.config.autoSellEnabled,
       autosell_interval_seconds: this.config.autoSellIntervalSeconds,
       autosell_command: this.config.autoSellCommand,
+      spawner_type: this.config.spawnerType,
+      spawner_drop_items: this.config.spawnerDropItems,
+      spawner_sell_items: this.config.spawnerSellItems,
     });
 
     this.hangTimer = setTimeout(() => {

@@ -1,4 +1,25 @@
 import { z } from "zod";
+import { SPAWNER_TYPE_IDS } from "../minecraft/spawners.js";
+
+/**
+ * "Auto home" only ever runs a `/home <name>` command: the `/home ` prefix is
+ * fixed and the user only supplies the home name. Validated here so a crafted
+ * request can never turn the scheduler into an arbitrary command runner.
+ */
+const autoHomeText = z
+  .string()
+  .trim()
+  .max(64)
+  .refine((v) => v === "" || /^\/home [A-Za-z0-9_.-]{1,32}$/.test(v), {
+    message: 'Auto home must be "/home <name>"',
+  });
+
+/** Per-item spawner handling: what to do with each item type the spawner makes. */
+const spawnerActions = z
+  .record(z.string().max(64), z.enum(["keep", "drop", "sell"]))
+  .refine((v) => Object.keys(v).length <= 16, { message: "Too many spawner items" });
+
+const dailyTimes = z.array(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM")).max(48);
 
 /**
  * Fields accepted when CREATING an account. `credentialsSecret` (the Microsoft
@@ -37,7 +58,7 @@ export const createAccountSchema = z
     autoReconnect: z.boolean().default(true),
     notes: z.string().max(50).default(""),
     autoCommandEnabled: z.boolean().default(false),
-    autoCommandText: z.string().max(256).default(""),
+    autoCommandText: autoHomeText.default(""),
     autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).default(5),
     autoCommandSpanEnabled: z.boolean().default(false),
     autoCommandSpanMinSeconds: z.coerce.number().int().min(60).max(86_400).default(600),
@@ -59,6 +80,12 @@ export const createAccountSchema = z
       .transform((times) => JSON.stringify(Array.from(new Set(times)).sort())),
     balanceEnabled: z.boolean().default(false),
     balanceCommand: z.string().max(64).default("/balance"),
+    spawnerType: z.enum(["", ...SPAWNER_TYPE_IDS] as [string, ...string[]]).default(""),
+    spawnerActions: spawnerActions.default({}).transform((v) => JSON.stringify(v)),
+    spawnerClearEnabled: z.boolean().default(false),
+    spawnerClearTimes: dailyTimes
+      .default([])
+      .transform((times) => JSON.stringify(Array.from(new Set(times)).sort())),
   });
 
 /**
@@ -81,7 +108,7 @@ export const updateAccountSchema = z.object({
   autoReconnect: z.boolean().optional(),
   notes: z.string().max(50).optional(),
   autoCommandEnabled: z.boolean().optional(),
-  autoCommandText: z.string().max(256).optional(),
+  autoCommandText: autoHomeText.optional(),
   autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).optional(),
   autoCommandSpanEnabled: z.boolean().optional(),
   autoCommandSpanMinSeconds: z.coerce.number().int().min(60).max(86_400).optional(),
@@ -104,7 +131,59 @@ export const updateAccountSchema = z.object({
   balanceEnabled: z.boolean().optional(),
   balanceCommand: z.string().max(64).optional(),
   hugoSettingsCommand: z.string().max(64).optional(),
+  spawnerType: z.enum(["", ...SPAWNER_TYPE_IDS] as [string, ...string[]]).optional(),
+  spawnerActions: spawnerActions.optional().transform((v) => (v ? JSON.stringify(v) : undefined)),
+  spawnerClearEnabled: z.boolean().optional(),
+  spawnerClearTimes: dailyTimes
+    .optional()
+    .transform((times) => (times ? JSON.stringify(Array.from(new Set(times)).sort()) : undefined)),
 });
+
+/**
+ * Settings only an ADMIN may change. Normal users get a reduced feature set —
+ * no AFK/movement behavior, balance polling, auto-TPA or server settings GUI —
+ * so these keys are stripped from a non-admin update before it reaches the DB.
+ * Hiding them in the UI alone would not be a real authorization boundary.
+ *
+ * Crouch, auto home, auto-sell and the spawner settings stay available to every
+ * user, since those drive features they can still trigger themselves.
+ */
+export const ADMIN_ONLY_ACCOUNT_FIELDS = [
+  "afkEnabled",
+  "afkIntervalSeconds",
+  "movementEnabled",
+  "tpAutoEnabled",
+  "tpAutoAllowlist",
+  "balanceEnabled",
+  "balanceCommand",
+  "hugoSettingsCommand",
+] as const;
+
+/** Removes admin-only keys from an update payload made by a non-admin user. */
+export function stripAdminOnlyFields(input: UpdateAccountInput): UpdateAccountInput {
+  const out: Record<string, unknown> = { ...input };
+  for (const key of ADMIN_ONLY_ACCOUNT_FIELDS) delete out[key];
+  return out as UpdateAccountInput;
+}
+
+/**
+ * Resets admin-only keys to their schema defaults on a create payload made by a
+ * non-admin. Creating an account is open to every user, so without this a normal
+ * user could set admin-only settings once at creation and keep them forever —
+ * the update path only strips them, it never resets them.
+ */
+export function stripAdminOnlyCreateFields(input: CreateAccountInput): CreateAccountInput {
+  const defaults = createAccountSchema.parse({
+    name: input.name,
+    serverHost: input.serverHost,
+    credentialsSecret: input.credentialsSecret,
+  });
+  const out: Record<string, unknown> = { ...input };
+  for (const key of ADMIN_ONLY_ACCOUNT_FIELDS) {
+    out[key] = (defaults as Record<string, unknown>)[key];
+  }
+  return out as CreateAccountInput;
+}
 
 /** Body for toggling a single server-settings button. */
 export const setHugoSettingSchema = z.object({

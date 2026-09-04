@@ -519,3 +519,179 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background-color: #3a3a42;
 }
+
+/* ---------------------------------------------------------------------------
+   Auto home: a fixed "/home" prefix glued to the editable name input, so it is
+   visually obvious that only the home name is user-controlled.
+   --------------------------------------------------------------------------- */
+.cmd-prefix-field {
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background-color: var(--bg-elev);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.cmd-prefix-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.cmd-prefix {
+  display: flex;
+  align-items: center;
+  padding: 0 0.6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--accent);
+  background-color: var(--accent-soft);
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+.cmd-prefix-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Spawner settings: type picker chips + per-item drop/sell selector.
+   --------------------------------------------------------------------------- */
+.spawner-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+  gap: 0.5rem;
+}
+.spawner-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background-color: var(--bg-elev);
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.spawner-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+}
+.spawner-chip-active {
+  border-color: var(--accent);
+  background-color: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.spawner-chip-emoji {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+.spawner-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The item list slides in once a spawner type is picked. */
+@keyframes spawner-items-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.spawner-items {
+  animation: spawner-items-in 0.2s ease both;
+}
+.spawner-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  background-color: var(--bg-elev);
+}
+.spawner-item-icon {
+  width: 22px;
+  height: 22px;
+  image-rendering: pixelated;
+}
+.spawner-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.25rem;
+  padding: 0.15rem;
+  border-radius: 0.5rem;
+  background-color: var(--bg);
+}
+.spawner-action {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-subtle);
+  border-radius: 0.375rem;
+  transition:
+    color 0.15s ease,
+    background-color 0.15s ease;
+}
+.spawner-action:hover {
+  color: var(--text);
+}
+.spawner-action-keep {
+  color: var(--text);
+  background-color: var(--border);
+}
+.spawner-action-drop {
+  color: #fff;
+  background-color: #d97706;
+}
+.spawner-action-sell {
+  color: #fff;
+  background-color: #059669;
+}
+
+/* Shared pill used for scheduled "HH:MM" entries. */
+.time-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  background-color: var(--accent-soft);
+  border-radius: 9999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spawner-items {
+    animation: none;
+  }
+  .spawner-chip:hover {
+    transform: none;
+  }
+}
