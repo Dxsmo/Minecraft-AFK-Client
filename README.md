@@ -201,6 +201,8 @@ additional users access afterwards in the account's **Settings** panel):
   The sell command is skipped entirely while the inventory is empty, and a run
   of genuinely failed cycles backs off (up to one minute) instead of repeating
   the command — this is what keeps a broken sell menu from flooding chat.
+  A cycle takes roughly 0.3–0.7s end to end, so intervals down to one second
+  run back to back without ever overlapping or being cut short.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once
