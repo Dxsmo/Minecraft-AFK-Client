@@ -191,18 +191,17 @@ additional users access afterwards in the account's **Settings** panel):
   interval, a random time span, and/or at fixed times of day — configured per
   account in **Settings**. Only the home name is editable; the `/home ` prefix
   is fixed and enforced server-side.
-- Auto-sell: each cycle opens the server's sell menu, shifts the whole
-  inventory in and closes the menu again, so the bot's GUI stays free between
-  cycles. The menu's confirm button is only pressed when the goods are actually
-  still lying in the menu — servers that sell each stack the moment it is
-  shift-clicked in (e.g. HugoSMP's "Sellmulti") need no click at all.
-  Whether a cycle worked is judged by the bot's own inventory getting emptier,
-  not by the menu, so a server closing its own GUI is not mistaken for an error.
+- Auto-sell: one cycle per interval — send the sell command, wait for the
+  server's menu, shift-click every inventory stack into it, close the menu.
+  One command, one pass, one close: the server sells each stack the moment it
+  is shifted in, so there is deliberately no confirm click and no multi-pass
+  bookkeeping. A cycle costs the server's response time plus a short settle
+  delay, which keeps intervals of a second (or less) comfortable.
   The sell command is skipped entirely while the inventory is empty, and a run
-  of genuinely failed cycles backs off (up to one minute) instead of repeating
-  the command — this is what keeps a broken sell menu from flooding chat.
-  A cycle takes roughly 0.3–0.7s end to end, so intervals down to one second
-  run back to back without ever overlapping or being cut short.
+  of genuinely failed cycles backs off (never longer than a minute, and never
+  permanently) instead of repeating the command — this is what keeps a broken
+  sell menu from flooding chat. The backoff curve is covered by unit tests in
+  `backend/rust-bot/src/behaviors.rs`.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once
@@ -296,7 +295,7 @@ resource pack.
 ### Feature visibility
 
 Normal users get a reduced feature set: no AFK/movement tuning, balance polling,
-auto-TPA, live inventory, home shortcuts or HugoSMP settings. This is enforced
+auto-TPA, live inventory or home shortcuts. This is enforced
 in the API (admin-only routes plus stripped admin-only fields on `PATCH`), not
 just hidden in the UI. Admins keep the full feature set for every account.
 

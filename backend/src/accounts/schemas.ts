@@ -130,7 +130,6 @@ export const updateAccountSchema = z.object({
     .transform((times) => (times ? JSON.stringify(Array.from(new Set(times)).sort()) : undefined)),
   balanceEnabled: z.boolean().optional(),
   balanceCommand: z.string().max(64).optional(),
-  hugoSettingsCommand: z.string().max(64).optional(),
   spawnerType: z.enum(["", ...SPAWNER_TYPE_IDS] as [string, ...string[]]).optional(),
   spawnerActions: spawnerActions.optional().transform((v) => (v ? JSON.stringify(v) : undefined)),
   spawnerClearEnabled: z.boolean().optional(),
@@ -141,7 +140,7 @@ export const updateAccountSchema = z.object({
 
 /**
  * Settings only an ADMIN may change. Normal users get a reduced feature set —
- * no AFK/movement behavior, balance polling, auto-TPA or server settings GUI —
+ * no AFK/movement behavior, balance polling or auto-TPA —
  * so these keys are stripped from a non-admin update before it reaches the DB.
  * Hiding them in the UI alone would not be a real authorization boundary.
  *
@@ -156,7 +155,6 @@ export const ADMIN_ONLY_ACCOUNT_FIELDS = [
   "tpAutoAllowlist",
   "balanceEnabled",
   "balanceCommand",
-  "hugoSettingsCommand",
 ] as const;
 
 /** Removes admin-only keys from an update payload made by a non-admin user. */
@@ -184,12 +182,6 @@ export function stripAdminOnlyCreateFields(input: CreateAccountInput): CreateAcc
   }
   return out as CreateAccountInput;
 }
-
-/** Body for toggling a single server-settings button. */
-export const setHugoSettingSchema = z.object({
-  label: z.string().min(1).max(64),
-  enabled: z.boolean(),
-});
 
 export const assignUsersSchema = z.object({
   userIds: z.array(z.string()),

@@ -33,25 +33,12 @@ export function parseHomes(raw: string): string[] {
   }
 }
 
-export function parseHugoSettings(raw: string): { label: string; enabled: boolean }[] {
-  try {
-    const value = JSON.parse(raw);
-    if (!Array.isArray(value)) return [];
-    return value
-      .filter((v): v is { label: string; enabled: unknown } => v && typeof v.label === "string")
-      .map((v) => ({ label: v.label, enabled: Boolean(v.enabled) }));
-  } catch {
-    return [];
-  }
-}
-
 /** Presents a stored account to API clients, decoding JSON-encoded list columns to arrays. */
 function present<
   T extends {
     tpAutoAllowlist: string;
     dailyCommandTimes: string;
     homesJson: string;
-    hugoSettingsJson: string;
     spawnerActions: string;
     spawnerClearTimes: string;
   },
@@ -59,12 +46,11 @@ function present<
   account: T,
 ): Omit<
   T,
-  "tpAutoAllowlist" | "dailyCommandTimes" | "homesJson" | "hugoSettingsJson" | "spawnerActions" | "spawnerClearTimes"
+  "tpAutoAllowlist" | "dailyCommandTimes" | "homesJson" | "spawnerActions" | "spawnerClearTimes"
 > & {
   tpAutoAllowlist: string[];
   dailyCommandTimes: string[];
   homes: string[];
-  hugoSettings: { label: string; enabled: boolean }[];
   spawnerActions: Record<string, SpawnerAction>;
   spawnerClearTimes: string[];
 } {
@@ -72,7 +58,6 @@ function present<
     tpAutoAllowlist,
     dailyCommandTimes,
     homesJson,
-    hugoSettingsJson,
     spawnerActions,
     spawnerClearTimes,
     ...rest
@@ -82,7 +67,6 @@ function present<
     tpAutoAllowlist: parseAllowlist(tpAutoAllowlist),
     dailyCommandTimes: parseDailyTimes(dailyCommandTimes),
     homes: parseHomes(homesJson),
-    hugoSettings: parseHugoSettings(hugoSettingsJson),
     spawnerActions: parseSpawnerActions(spawnerActions),
     spawnerClearTimes: parseDailyTimes(spawnerClearTimes),
   };
@@ -126,8 +110,6 @@ const publicAccountSelect = {
   lastBalance: true,
   lastBalanceAt: true,
   homesJson: true,
-  hugoSettingsCommand: true,
-  hugoSettingsJson: true,
   spawnerType: true,
   spawnerActions: true,
   spawnerClearEnabled: true,

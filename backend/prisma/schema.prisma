@@ -144,12 +144,6 @@ model MinecraftAccount {
   // JSON-encoded array of discovered /homes names for this account, refreshed
   // after every successful server join.
   homesJson           String  @default("[]")
-  // Server-side "/settings"-style toggle menu integration (e.g. HugoSMP). The
-  // command that opens the in-game settings GUI, and a JSON cache of the last
-  // scanned buttons ([{ "label": string, "enabled": bool }]) so the website can
-  // render the toggles even before a fresh scan completes.
-  hugoSettingsCommand String  @default("/settings")
-  hugoSettingsJson    String  @default("[]")
   // Spawner handling. `spawnerType` selects which mob spawner this account is
   // parked at ("" = unconfigured), which in turn determines the item types the
   // spawner produces. `spawnerActions` maps each of those item ids to what

@@ -1,6 +1,6 @@
-import { useState, useEffect, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { api, ApiError } from "../lib/api";
-import type { HugoSetting, ManagedUser, MinecraftAccount } from "../lib/types";
+import type { ManagedUser, MinecraftAccount } from "../lib/types";
 import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
 import { SPAWNER_TYPES, getSpawnerType, spawnerItemTexture, type SpawnerAction } from "../lib/spawners";
 
@@ -69,53 +69,6 @@ export function AccountSettingsPanel({
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeCat, setActiveCat] = useState<string>("general");
-
-  // HugoSMP-style server settings GUI integration. These are live/dynamic (the
-  // bot scans them from the in-game /settings menu), separate from the static
-  // account config saved by "Save settings".
-  const online = (account.live?.status ?? account.status) === "ONLINE";
-  const [hugoSettings, setHugoSettings] = useState<HugoSetting[]>(account.hugoSettings ?? []);
-  const [hugoBusy, setHugoBusy] = useState<Set<string>>(new Set());
-  const [hugoError, setHugoError] = useState<string | null>(null);
-
-  // Load the freshest known settings list when the category is first opened.
-  // The bot scans the menu automatically on every server join, so this simply
-  // reflects the latest known state.
-  useEffect(() => {
-    if (activeCat === "hugosmp") void refreshHugoSettings();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCat]);
-
-  async function refreshHugoSettings() {
-    try {
-      const res = await api.get<{ settings: HugoSetting[] }>(
-        `/minecraft/accounts/${account.id}/hugo-settings`,
-      );
-      setHugoSettings(res.settings ?? []);
-    } catch {
-      /* keep the last-known list on transient errors */
-    }
-  }
-
-  async function toggleHugo(label: string, enabled: boolean) {
-    setHugoBusy((prev) => new Set(prev).add(label));
-    setHugoError(null);
-    setHugoSettings((prev) => prev.map((s) => (s.label === label ? { ...s, enabled } : s)));
-    try {
-      await api.post(`/minecraft/accounts/${account.id}/hugo-settings/set`, { label, enabled });
-      await new Promise((r) => setTimeout(r, 1600));
-      await refreshHugoSettings();
-    } catch (e) {
-      setHugoError(e instanceof ApiError ? e.message : "Umschalten fehlgeschlagen");
-      await refreshHugoSettings();
-    } finally {
-      setHugoBusy((prev) => {
-        const next = new Set(prev);
-        next.delete(label);
-        return next;
-      });
-    }
-  }
 
   // Minecraft version has its own instantly-applied control, separate from the
   // general "Save settings" button.
@@ -244,7 +197,7 @@ export function AccountSettingsPanel({
   }
 
   // Normal users get a reduced feature set: no AFK/movement tuning, balance,
-  // auto-TPA or server settings GUI (mirrored server-side in the accounts API).
+  // or auto-TPA (mirrored server-side in the accounts API).
   const categories: { id: string; label: string; icon: CatIcon; meta?: string; on?: boolean }[] = [
     { id: "general", label: "General", icon: "user", meta: displayName.trim() || account.name },
     { id: "connection", label: "Connection", icon: "server", meta: `${serverHost}:${serverPort}` },
@@ -265,7 +218,6 @@ export function AccountSettingsPanel({
       on: spawnerType !== "",
       meta: getSpawnerType(spawnerType)?.label,
     },
-    ...(isAdmin ? [{ id: "hugosmp", label: "HugoSMP Settings", icon: "sliders" as CatIcon, on: hugoSettings.length > 0 }] : []),
     ...(canManageAccess ? [{ id: "users", label: "Access", icon: "users" as CatIcon, meta: `${assigned.size} assigned` }] : []),
   ];
   const active = categories.find((c) => c.id === activeCat) ?? categories[0];
@@ -760,56 +712,6 @@ export function AccountSettingsPanel({
               </>
             )}
 
-            {activeCat === "hugosmp" && (
-              <>
-                <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-                  Steuert das serverseitige Einstellungsmenü (z. B. HugoSMP „/settings").
-                  Der Bot öffnet das Menü im Spiel und drückt automatisch den passenden
-                  Knopf – die Position wird anhand des Namens gefunden. Das Menü wird bei
-                  jedem Server-Join automatisch gescannt und nach jeder Änderung aktualisiert.
-                </p>
-
-                {hugoError && <p className="alert-error">{hugoError}</p>}
-
-                {hugoSettings.length === 0 ? (
-                  <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-                    Noch keine Einstellungen bekannt. Sobald der Bot dem Server beitritt,
-                    wird das Menü automatisch gescannt und hier angezeigt.
-                  </p>
-                ) : (
-                  <div className="space-y-1.5">
-                    {hugoSettings.map((s) => (
-                      <label
-                        key={s.label}
-                        className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
-                        style={{
-                          borderColor: "var(--border)",
-                          cursor: online && !hugoBusy.has(s.label) ? "pointer" : "default",
-                        }}
-                      >
-                        <span className="min-w-0 flex-1 truncate text-xs" style={{ color: "var(--text)" }}>
-                          {s.label}
-                        </span>
-                        <span
-                          className="text-[10px] font-semibold"
-                          style={{ color: s.enabled ? "var(--accent)" : "var(--text-subtle)" }}
-                        >
-                          {s.enabled ? "Aktiviert" : "Deaktiviert"}
-                        </span>
-                        <input
-                          type="checkbox"
-                          checked={s.enabled}
-                          disabled={!online || hugoBusy.has(s.label)}
-                          onChange={(e) => void toggleHugo(s.label, e.target.checked)}
-                          className="accent-blue-500"
-                        />
-                      </label>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-
             {activeCat === "users" && canManageAccess && (
               <>
                 <p className="mb-2 text-xs" style={{ color: "var(--text-subtle)" }}>
@@ -893,7 +795,6 @@ type CatIcon =
   | "portal"
   | "tag"
   | "users"
-  | "sliders"
   | "cube";
 
 /** Small line icon used in the settings category navigation. */
@@ -959,15 +860,6 @@ function CatGlyph({ name }: { name: CatIcon }) {
         <svg {...common}>
           <path d="M20.5 12.5 12 21l-9-9V4a1 1 0 0 1 1-1h8z" />
           <line x1="7.5" y1="7.5" x2="7.5" y2="7.5" />
-        </svg>
-      );
-    case "sliders":
-      return (
-        <svg {...common}>
-          <line x1="4" y1="8" x2="20" y2="8" />
-          <line x1="4" y1="16" x2="20" y2="16" />
-          <circle cx="9" cy="8" r="2" />
-          <circle cx="15" cy="16" r="2" />
         </svg>
       );
     case "cube":

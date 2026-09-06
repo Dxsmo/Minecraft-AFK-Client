@@ -74,10 +74,6 @@ export interface ClientRuntimeConfig {
   balanceCommand: string;
   /** Persisted /homes names from previous joins. */
   homes: string[];
-  /** Command that opens the server's settings GUI (e.g. "/settings"). */
-  hugoSettingsCommand: string;
-  /** Last scanned server settings toggles ([{ label, enabled }]). */
-  hugoSettings: HugoSetting[];
   /** Configured spawner type id ("" = unconfigured, uses the legacy clear-all). */
   spawnerType: string;
   /** Item ids to throw out of the spawner when it is cleared. */
@@ -88,12 +84,6 @@ export interface ClientRuntimeConfig {
   spawnerClearEnabled: boolean;
   /** Times of day ("HH:MM", server local time) to clear the spawner. */
   spawnerClearTimes: string[];
-}
-
-/** A single toggle button scanned from the server's settings GUI. */
-export interface HugoSetting {
-  label: string;
-  enabled: boolean;
 }
 
 /** Microsoft device-code sign-in details, shown live in the account console/UI. */
@@ -125,8 +115,6 @@ export interface ClientStatusSnapshot {
   balanceUpdatedAt?: string;
   /** Last discovered /homes names for this account. */
   homes?: string[];
-  /** Last scanned server settings toggles ([{ label, enabled }]). */
-  hugoSettings?: HugoSetting[];
 }
 
 /** A single occupied inventory slot in a live inventory snapshot. */

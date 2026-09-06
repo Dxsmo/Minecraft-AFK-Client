@@ -9,7 +9,6 @@ import type {
   ClientStatusSnapshot,
   ConsoleEvent,
   ConsoleEventType,
-  HugoSetting,
   InventoryItem,
   InventorySnapshot,
   MsaSignInPrompt,
@@ -96,8 +95,6 @@ export class MinecraftClient extends EventEmitter {
   private inventory: InventorySnapshot | undefined;
   /** Last discovered /homes list for this account. */
   private homes: string[] = [];
-  /** Last scanned server settings toggles for this account. */
-  private hugoSettings: HugoSetting[] = [];
   /** While > now, incoming chat is scanned for /homes output lines. */
   private homesQueryUntil = 0;
   /** While > now, lines like "- homeName" are treated as /homes list entries. */
@@ -121,7 +118,6 @@ export class MinecraftClient extends EventEmitter {
     super();
     this.log = accountLogger(config.id, config.name);
     this.homes = [...(config.homes ?? [])];
-    this.hugoSettings = [...(config.hugoSettings ?? [])];
     this.schedulerTimer = setInterval(() => this.runScheduledTasks(), SCHEDULER_TICK_MS);
   }
 
@@ -179,7 +175,6 @@ export class MinecraftClient extends EventEmitter {
       balance: this.balance,
       balanceUpdatedAt: this.balanceUpdatedAt?.toISOString(),
       homes: this.homes,
-      hugoSettings: this.hugoSettings,
     };
   }
 
@@ -246,48 +241,6 @@ export class MinecraftClient extends EventEmitter {
   requestInventory(): void {
     if (this.status !== "ONLINE" || !this.subprocess) return;
     this.sendToBot({ type: "request_inventory" });
-  }
-
-  /** Open the server settings GUI and scan its toggle buttons. The result
-   *  arrives asynchronously as a "settings_menu" event. */
-  scanHugoSettings(): boolean {
-    if (this.status !== "ONLINE" || !this.subprocess) {
-      this.emitConsole("ERROR", "Bot is not online, cannot scan settings");
-      return false;
-    }
-    this.sendToBot({ type: "scan_settings", command: this.config.hugoSettingsCommand });
-    this.emitConsole("SYSTEM", "Settings scan dispatched");
-    return true;
-  }
-
-  /** Silent auto-scan triggered on every join. Unlike scanHugoSettings it does
-   *  not log an error when the bot is offline (the join may not have settled). */
-  private autoScanHugoSettings(): void {
-    if (this.status !== "ONLINE" || !this.subprocess) return;
-    this.sendToBot({ type: "scan_settings", command: this.config.hugoSettingsCommand });
-  }
-
-  /** Open the server settings GUI and toggle the button matching `label` to the
-   *  desired `enabled` state. Refreshed settings arrive as a "settings_menu"
-   *  event once the toggle settles. */
-  setHugoSetting(label: string, enabled: boolean): boolean {
-    if (this.status !== "ONLINE" || !this.subprocess) {
-      this.emitConsole("ERROR", "Bot is not online, cannot change settings");
-      return false;
-    }
-    this.sendToBot({
-      type: "set_setting",
-      command: this.config.hugoSettingsCommand,
-      label,
-      enabled,
-    });
-    this.emitConsole("SYSTEM", `Settings toggle dispatched: ${label} -> ${enabled ? "on" : "off"}`);
-    return true;
-  }
-
-  /** Last scanned server settings toggles for this account. */
-  getHugoSettings(): HugoSetting[] {
-    return this.hugoSettings;
   }
 
   /** The most recently received inventory snapshot, if any. */
@@ -540,9 +493,6 @@ export class MinecraftClient extends EventEmitter {
         this.emitConsole("SYSTEM", "Spawned into the world");
         // Auto-refresh saved homes after each successful join.
         this.refreshHomes();
-        // Auto-scan the server settings menu on every join so the website's
-        // "HugoSMP Settings" toggles always reflect the live in-game state.
-        setTimeout(() => this.autoScanHugoSettings(), 4000);
         break;
 
       case "chat": {
@@ -610,19 +560,6 @@ export class MinecraftClient extends EventEmitter {
       case "warning":
         this.emitConsole("WARNING", String((event as { message: string }).message));
         break;
-
-      case "settings_menu": {
-        const e = event as { settings?: HugoSetting[] };
-        const next = Array.isArray(e.settings)
-          ? e.settings
-              .filter((s) => s && typeof s.label === "string")
-              .map((s) => ({ label: s.label, enabled: Boolean(s.enabled) }))
-          : [];
-        this.hugoSettings = next;
-        this.emit("hugoSettings", { minecraftAccountId: this.config.id, settings: next });
-        this.emitStatus();
-        break;
-      }
 
       case "disconnect": {
         const reason = (event as { reason?: string | null }).reason ?? "unknown reason";

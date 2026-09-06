@@ -21,7 +21,7 @@ use rand::Rng;
 use regex::Regex;
 
 use crate::emit;
-use crate::protocol::{BehaviorConfig, Config, InventorySlot, OutEvent, SettingEntry};
+use crate::protocol::{BehaviorConfig, Config, InventorySlot, OutEvent};
 
 /// How long the bot keeps walking in one direction before stopping again.
 const WALK_DURATION: Duration = Duration::from_secs(2);
@@ -40,11 +40,7 @@ const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_millis(4000);
 /// the player slots can still read as empty the instant the menu opens, so the
 /// cycle would sell nothing and close — the "opens menu but sells nothing" stall.
 const AUTOSELL_SETTLE_DELAY: Duration = Duration::from_millis(150);
-/// Pause between the individual steps of a cycle (extra fill pass, confirm
-/// click, closing the menu). Kept short so a whole cycle fits comfortably into
-/// a one-second auto-sell interval: at 3 steps this is well under half a
-/// second, leaving room for the server's own response time.
-const AUTOSELL_STEP_DELAY: Duration = Duration::from_millis(120);
+
 /// Hard stop for a single sell cycle. However the server misbehaves, the menu
 /// is closed and the cycle abandoned after this, so the bot can never get stuck
 /// in an open GUI.
@@ -59,12 +55,7 @@ const AUTOSELL_BACKOFF_BASE: Duration = Duration::from_secs(10);
 /// which keeps a permanently broken sell menu from flooding the server's chat.
 /// Deliberately capped at a minute so auto-sell always comes back on its own.
 const AUTOSELL_BACKOFF_MAX: Duration = Duration::from_secs(60);
-/// How many shift-click passes one cycle makes over the player's inventory.
-/// More than one because a pass can leave items behind while the server is
-/// still processing the previous clicks.
-const AUTOSELL_FILL_PASSES: u32 = 3;
-/// Keywords identifying the sell menu's confirm button by item name/lore.
-const SELL_CONFIRM_KEYWORDS: [&str; 6] = ["verkauf", "sell", "bestätig", "bestatig", "confirm", "accept"];
+
 /// How often to re-assert the crouch (sneak) state while crouch is enabled.
 /// A death/respawn or server switch silently resets sneak server-side while the
 /// client still thinks it's crouching, so a plain diff-check never re-sends it.
@@ -106,12 +97,6 @@ const SPAWNER_MAX_STEPS: u32 = 200;
 const SPAWNER_KEEP_STACKS: usize = 1;
 /// Keywords identifying the spawner GUI's sell button by item name/lore.
 const SPAWNER_SELL_KEYWORDS: [&str; 6] = ["verkauf", "sell", "vend", "money", "geld", "$"];
-/// How long to wait for the server to open its settings GUI after the settings
-/// command is sent before giving up on a scan/toggle.
-const SETTINGS_MENU_TIMEOUT: Duration = Duration::from_millis(2500);
-/// After clicking a settings toggle, wait this long for the server to update the
-/// button in place before re-scanning and reporting the refreshed state.
-const SETTINGS_CLICK_SETTLE: Duration = Duration::from_millis(500);
 /// After an inventory move/drop, wait this long before emitting a fresh
 /// snapshot so the server's click acknowledgement has been applied and the UI
 /// resyncs with the bot's real inventory state.
@@ -123,39 +108,15 @@ const INVENTORY_RESYNC_DELAY: Duration = Duration::from_millis(300);
 /// scheduled commands and the spawner tasks in between.
 enum AutoSellPhase {
     Idle,
-    WaitingForMenu {
-        since: Instant,
-        /// Occupied player slots when the cycle started, used to tell at the end
-        /// whether anything was actually sold.
-        before: usize,
-    },
-    /// The sell container is open and this cycle is being executed.
+    /// The sell command was sent; waiting for the server to open its GUI.
+    WaitingForMenu { since: Instant },
+    /// The sell container is open. Fill it and close it again.
     Selling {
-        /// Container slot index of the menu's confirm ("sell") button.
-        confirm_slot: u16,
-        /// Container slots that were already occupied when the menu opened, i.e.
-        /// the server's own decoration and buttons. Anything appearing outside
-        /// this set is our own unsold goods.
-        baseline: Vec<u16>,
-        stage: SellStage,
-        /// Abort the cycle at this time no matter which stage it's in.
+        /// Shift the items in once this time is reached (container settle delay).
+        at: Instant,
+        /// Abort the cycle at this time no matter what.
         deadline: Instant,
-        /// Occupied player slots when the cycle started.
-        before: usize,
-        /// Stacks shifted into the sell menu so far this cycle.
-        moved: usize,
     },
-}
-
-/// The steps of one auto-sell cycle, in order.
-enum SellStage {
-    /// Shift the player's items into the open sell menu at this time.
-    Fill { at: Instant, passes: u32 },
-    /// Press the menu's confirm button at this time (if there is anything left
-    /// to confirm).
-    Confirm { at: Instant },
-    /// Close the menu at this time and end the cycle.
-    Close { at: Instant },
 }
 
 /// A one-shot, foreground task. While one is queued or running, the continuous
@@ -175,13 +136,6 @@ enum ForegroundTask {
     MoveItem { from: u16, to: u16 },
     /// Drop the whole stack in one of the bot's own inventory slots.
     DropItem { slot: u16 },
-    /// Open the server's settings GUI and scan its toggle buttons. When
-    /// `target` is set, also click the matching button so it reaches the desired
-    /// state. `command` is the chat command that opens the menu (e.g. "/settings").
-    Settings {
-        command: String,
-        target: Option<(String, bool)>,
-    },
 }
 
 /// A foreground task that is mid-execution and spans multiple ticks.
@@ -192,14 +146,6 @@ enum ActiveTask {
     /// the configured item types, then selling the rest via the spawner's own
     /// sell button.
     CleanSpawner(SpawnerProgress),
-    /// Interacting with the server's settings GUI: waiting for it to open, then
-    /// (optionally) clicking a button and re-scanning after it settles.
-    Settings {
-        menu_deadline: Instant,
-        target: Option<(String, bool)>,
-        /// When set, a toggle was just clicked; re-scan and finish once elapsed.
-        click_settle: Option<Instant>,
-    },
 }
 
 /// The ordered steps of a spawner clear-out. Dropping is always completed
@@ -382,22 +328,6 @@ impl BehaviorState {
         self.task_queue.push_back(ForegroundTask::DropItem { slot });
     }
 
-    /// Enqueue a settings-menu scan (no toggle) as a foreground one-shot task.
-    pub fn enqueue_scan_settings(&mut self, command: String) {
-        let command = normalize_settings_command(command);
-        self.task_queue
-            .push_back(ForegroundTask::Settings { command, target: None });
-    }
-
-    /// Enqueue a settings-menu toggle: open the menu and set the button whose
-    /// label matches `label` to `enabled`. Runs as a foreground one-shot task.
-    pub fn enqueue_set_setting(&mut self, command: String, label: String, enabled: bool) {
-        let command = normalize_settings_command(command);
-        self.task_queue.push_back(ForegroundTask::Settings {
-            command,
-            target: Some((label.trim().to_string(), enabled)),
-        });
-    }
 
     /// Emit a live snapshot of the bot's own inventory. Read-only, so it is not
     /// routed through the task queue.
@@ -561,16 +491,6 @@ impl BehaviorState {
                 let progress = *progress;
                 self.advance_clean_spawner(bot, now, progress);
             }
-            Some(ActiveTask::Settings {
-                menu_deadline,
-                target,
-                click_settle,
-            }) => {
-                let menu_deadline = *menu_deadline;
-                let target = target.clone();
-                let click_settle = *click_settle;
-                self.advance_settings(bot, now, menu_deadline, target, click_settle);
-            }
             None => {}
         }
 
@@ -644,108 +564,11 @@ impl BehaviorState {
                             emit_inventory_snapshot(bot);
                         }
                     }
-                    ForegroundTask::Settings { command, target } => {
-                        // Open the settings GUI; the rest is handled tick-by-tick
-                        // by advance_settings once the container appears.
-                        bot.chat(command.clone());
-                        emit(&OutEvent::BehaviorLog {
-                            message: format!("Settings: opening menu ({command})"),
-                        });
-                        self.active_task = Some(ActiveTask::Settings {
-                            menu_deadline: now + SETTINGS_MENU_TIMEOUT,
-                            target,
-                            click_settle: None,
-                        });
-                    }
                 }
             }
         }
     }
 
-    /// Drive the settings-menu foreground task: wait for the GUI to open, scan
-    /// its toggle buttons, optionally click the one matching `target` to reach
-    /// the desired state, and emit an [`OutEvent::SettingsMenu`] snapshot. The
-    /// button is located by matching its label text (positions vary per account).
-    fn advance_settings(
-        &mut self,
-        bot: &Client,
-        now: Instant,
-        menu_deadline: Instant,
-        target: Option<(String, bool)>,
-        click_settle: Option<Instant>,
-    ) {
-        let Ok(inv) = bot.get_inventory() else {
-            return;
-        };
-        let menu_open = inv.id() != 0 && inv.slots().map(|s| s.len() > 36).unwrap_or(false);
-
-        // Post-click phase: wait for the server to update the button in place,
-        // then re-scan and report the fresh state.
-        if let Some(settle) = click_settle {
-            if now < settle && menu_open {
-                return;
-            }
-            if menu_open {
-                if let Some(slots) = inv.slots() {
-                    emit_settings(&scan_settings_entries(&slots));
-                }
-                inv.close();
-            }
-            self.active_task = None;
-            return;
-        }
-
-        if !menu_open {
-            if now >= menu_deadline {
-                emit(&OutEvent::Warning {
-                    message: "Settings: menu did not open".into(),
-                });
-                self.active_task = None;
-            }
-            return;
-        }
-
-        let slots = inv.slots().unwrap_or_default();
-        let entries = scan_settings_entries(&slots);
-
-        if let Some((label, desired)) = &target {
-            match entries.iter().find(|(_, l, _)| l.eq_ignore_ascii_case(label)) {
-                Some((slot, found_label, current)) => {
-                    if *current != *desired {
-                        inv.left_click(*slot);
-                        emit(&OutEvent::BehaviorLog {
-                            message: format!(
-                                "Settings: toggled '{found_label}' -> {}",
-                                if *desired { "Aktiviert" } else { "Deaktiviert" }
-                            ),
-                        });
-                        // Re-scan after the click settles, then finish.
-                        self.active_task = Some(ActiveTask::Settings {
-                            menu_deadline,
-                            target: None,
-                            click_settle: Some(now + SETTINGS_CLICK_SETTLE),
-                        });
-                        return;
-                    }
-                    emit(&OutEvent::BehaviorLog {
-                        message: format!(
-                            "Settings: '{found_label}' already {}",
-                            if *desired { "Aktiviert" } else { "Deaktiviert" }
-                        ),
-                    });
-                }
-                None => emit(&OutEvent::Warning {
-                    message: format!("Settings: button '{label}' not found in menu"),
-                }),
-            }
-        }
-
-        // No toggle needed (scan-only, already-correct, or not found): report the
-        // current state and close the menu.
-        emit_settings(&entries);
-        inv.close();
-        self.active_task = None;
-    }
 
     /// Drives one tick of a spawner clear-out.
     ///
@@ -958,23 +781,17 @@ impl BehaviorState {
         self.active_task = Some(ActiveTask::CleanSpawner(p));
     }
 
-    /// Drives the auto-sell cycle (open/close principle).
+    /// Drives the auto-sell cycle.
     ///
-    /// One cycle per `autosell_interval_seconds`: send the sell command, wait
-    /// for the server's sell menu, shift the inventory in (repeating until
-    /// nothing more fits), press the menu's confirm button *only if the items
-    /// are actually still sitting in the menu*, then close it again.
+    /// Deliberately simple, because that is what actually works on the target
+    /// server: send the sell command, wait for the menu, shift-click every
+    /// inventory stack into it, close the menu. One command, one pass, one
+    /// close - no confirm click and no multi-pass bookkeeping. The server sells
+    /// each stack the moment it is shifted in, so anything beyond that only
+    /// added ways to fail.
     ///
-    /// The confirm click is conditional because servers behave differently:
-    /// some collect the goods and sell them when the green button is pressed,
-    /// others (HugoSMP's "Sellmulti") sell each stack the instant it is
-    /// shift-clicked in and then close the GUI themselves. Clicking a button in
-    /// a menu that already sold everything is at best useless and at worst
-    /// picks an item up onto the cursor.
-    ///
-    /// Success is measured by the only thing that actually matters: whether the
-    /// bot's inventory got emptier. That keeps a server closing its own menu
-    /// from being mistaken for a failure.
+    /// A cycle therefore costs roughly the server's response time plus a short
+    /// settle delay, which keeps intervals of a second (or less) comfortable.
     fn tick_autosell(&mut self, bot: &Client, now: Instant) {
         if !self.config.autosell_enabled {
             if !matches!(self.autosell_phase, AutoSellPhase::Idle) {
@@ -997,7 +814,7 @@ impl BehaviorState {
                 if self.foreground_busy() {
                     return;
                 }
-                // Backoff after repeated failures. Checked before the interval
+                // Backoff after repeated failures, checked before the interval
                 // so a sub-second interval can't override it.
                 if let Some(retry_at) = self.autosell_retry_at {
                     if now < retry_at {
@@ -1022,12 +839,10 @@ impl BehaviorState {
 
                 // Nothing to sell -> don't send the command at all. Sending it
                 // with an empty inventory is pure chat spam.
-                let before = player_occupied(bot);
-                if before == 0 {
-                    // An empty inventory is not a malfunction, so it must clear
-                    // any pending failure backoff. Otherwise a streak recorded
-                    // earlier would survive the idle period and delay selling by
-                    // minutes once items finally show up again.
+                if player_occupied(bot) == 0 {
+                    // An empty inventory is not a malfunction, so it clears any
+                    // pending backoff instead of letting an old failure streak
+                    // survive the idle period.
                     self.autosell_failures = 0;
                     self.autosell_retry_at = None;
                     if !self.autosell_streak_logged {
@@ -1043,10 +858,10 @@ impl BehaviorState {
                 let command = if command.is_empty() { "/sell" } else { command };
                 bot.chat(command.to_string());
                 self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
-                self.autosell_phase = AutoSellPhase::WaitingForMenu { since: now, before };
+                self.autosell_phase = AutoSellPhase::WaitingForMenu { since: now };
             }
 
-            AutoSellPhase::WaitingForMenu { since, before } => {
+            AutoSellPhase::WaitingForMenu { since } => {
                 // A real sell container is open once the menu id is non-zero AND
                 // the menu has slots in front of the player's own section.
                 if let Ok(inv) = bot.get_inventory() {
@@ -1054,26 +869,9 @@ impl BehaviorState {
                         if let Some(slots) = inv.slots() {
                             if let Some(container_len) = container_len(bot) {
                                 if container_len > 0 && slots.len() > container_len {
-                                    // Snapshot the menu's own decoration/button
-                                    // items before anything is shifted in, so we
-                                    // can later tell our unsold goods apart from
-                                    // the server's furniture.
-                                    let baseline: Vec<u16> = (0..container_len)
-                                        .filter(|&s| slots[s].is_present())
-                                        .map(|s| s as u16)
-                                        .collect();
-                                    let confirm_slot =
-                                        find_sell_confirm_slot(&slots, container_len);
                                     self.autosell_phase = AutoSellPhase::Selling {
-                                        confirm_slot,
-                                        baseline,
-                                        stage: SellStage::Fill {
-                                            at: now + AUTOSELL_SETTLE_DELAY,
-                                            passes: 0,
-                                        },
+                                        at: now + AUTOSELL_SETTLE_DELAY,
                                         deadline: now + AUTOSELL_RUN_TIMEOUT,
-                                        before,
-                                        moved: 0,
                                     };
                                     return;
                                 }
@@ -1083,48 +881,21 @@ impl BehaviorState {
                 }
 
                 if now.duration_since(since) >= AUTOSELL_MENU_TIMEOUT {
-                    // No menu appeared. On some servers the sell command sells
-                    // outright without any GUI, so this only counts as a failure
-                    // if the inventory is still as full as before.
                     self.close_open_menu(bot);
                     self.autosell_phase = AutoSellPhase::Idle;
-                    self.finish_autosell_cycle(
-                        bot,
-                        now,
-                        interval,
-                        before,
-                        0,
-                        "Verkaufsmenü ging nicht auf",
-                    );
+                    self.register_autosell_failure(now, interval, "Verkaufsmenü ging nicht auf");
                 }
             }
 
-            AutoSellPhase::Selling {
-                confirm_slot,
-                ref baseline,
-                ref stage,
-                deadline,
-                before,
-                moved,
-            } => {
-                let baseline = baseline.clone();
-                let stage_at = match *stage {
-                    SellStage::Fill { at, .. } | SellStage::Confirm { at } | SellStage::Close { at } => at,
-                };
-
-                // The menu vanished (the server closed it after selling, death,
-                // server switch, ...). Whether that was good or bad is decided
-                // purely by the inventory.
+            AutoSellPhase::Selling { at, deadline } => {
+                // The menu vanished before we could fill it.
                 let inv = match bot.get_inventory() {
                     Ok(inv) if inv.id() != 0 => inv,
                     _ => {
                         self.autosell_phase = AutoSellPhase::Idle;
-                        self.finish_autosell_cycle(
-                            bot,
+                        self.register_autosell_failure(
                             now,
                             interval,
-                            before,
-                            moved,
                             "Verkaufsmenü ging zu früh zu",
                         );
                         return;
@@ -1135,18 +906,14 @@ impl BehaviorState {
                 if now >= deadline {
                     inv.close();
                     self.autosell_phase = AutoSellPhase::Idle;
-                    self.finish_autosell_cycle(
-                        bot,
-                        now,
-                        interval,
-                        before,
-                        moved,
-                        "Verkauf hat zu lange gedauert",
-                    );
+                    self.register_autosell_failure(now, interval, "Verkauf hat zu lange gedauert");
                     return;
                 }
 
-                if now < stage_at {
+                // Give the server a moment to sync the container's contents,
+                // otherwise the player slots can still read as empty and the
+                // cycle would sell nothing.
+                if now < at {
                     return;
                 }
 
@@ -1158,163 +925,39 @@ impl BehaviorState {
                     return;
                 }
 
-                match *stage {
-                    SellStage::Fill { passes, .. } => {
-                        let mut moved_now = 0;
-                        for slot in container_len..slots.len() {
-                            if slots[slot].is_present() {
-                                inv.shift_click(slot);
-                                moved_now += 1;
-                            }
-                        }
-                        let moved = moved + moved_now;
-
-                        // Another pass: a single pass can leave items behind
-                        // when the menu was momentarily full or the server was
-                        // still processing earlier clicks.
-                        if moved_now > 0 && passes + 1 < AUTOSELL_FILL_PASSES {
-                            self.autosell_phase = AutoSellPhase::Selling {
-                                confirm_slot,
-                                baseline,
-                                stage: SellStage::Fill {
-                                    at: now + AUTOSELL_STEP_DELAY,
-                                    passes: passes + 1,
-                                },
-                                deadline,
-                                before,
-                                moved,
-                            };
-                            return;
-                        }
-
-                        // Is any of our goods still lying in the menu? If not,
-                        // the server already sold everything on shift-click and
-                        // the cycle can end right here — skipping the confirm
-                        // and close steps is what keeps a cycle short enough for
-                        // a one-second interval.
-                        let pending = (0..container_len).any(|s| {
-                            let slot = s as u16;
-                            slot != confirm_slot
-                                && !baseline.contains(&slot)
-                                && slots[s].is_present()
-                        });
-                        if !pending {
-                            inv.close();
-                            self.autosell_phase = AutoSellPhase::Idle;
-                            self.finish_autosell_cycle(
-                                bot,
-                                now,
-                                interval,
-                                before,
-                                moved,
-                                "nichts verkauft",
-                            );
-                            return;
-                        }
-
-                        self.autosell_phase = AutoSellPhase::Selling {
-                            confirm_slot,
-                            baseline,
-                            stage: SellStage::Confirm {
-                                at: now + AUTOSELL_STEP_DELAY,
-                            },
-                            deadline,
-                            before,
-                            moved,
-                        };
-                    }
-
-                    SellStage::Confirm { .. } => {
-                        // Reached only when goods are actually still lying in the
-                        // menu, i.e. on servers that sell on button press.
-                        if (confirm_slot as usize) < container_len {
-                            inv.click(PickupClick::Left {
-                                slot: Some(confirm_slot),
-                            });
-                            self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
-                        }
-                        self.autosell_phase = AutoSellPhase::Selling {
-                            confirm_slot,
-                            baseline,
-                            stage: SellStage::Close {
-                                at: now + AUTOSELL_STEP_DELAY,
-                            },
-                            deadline,
-                            before,
-                            moved,
-                        };
-                    }
-
-                    SellStage::Close { .. } => {
-                        inv.close();
-                        self.autosell_phase = AutoSellPhase::Idle;
-                        self.finish_autosell_cycle(
-                            bot,
-                            now,
-                            interval,
-                            before,
-                            moved,
-                            "nichts verkauft",
-                        );
+                let mut moved = 0;
+                for slot in container_len..slots.len() {
+                    if slots[slot].is_present() {
+                        inv.shift_click(slot);
+                        moved += 1;
                     }
                 }
+                inv.close();
+                self.autosell_phase = AutoSellPhase::Idle;
+
+                if moved == 0 {
+                    self.register_autosell_failure(now, interval, "keine Items ins Menü bekommen");
+                    return;
+                }
+                emit(&OutEvent::BehaviorLog {
+                    message: format!("AutoSell: {moved} Stack(s) verkauft"),
+                });
+                self.autosell_streak_logged = false;
+                self.autosell_failures = 0;
+                self.autosell_retry_at = None;
             }
         }
     }
 
-    /// Ends a sell cycle and decides whether it worked.
-    ///
-    /// A cycle counts as successful as soon as at least one stack was shifted
-    /// into an open sell menu. Comparing inventory counts alone is not enough:
-    /// a bot parked at a farm picks items up *while* it sells, so the slot count
-    /// can stay the same across a perfectly successful cycle — which would then
-    /// be misread as a failure and eventually trigger the backoff.
-    ///
-    /// The inventory comparison is still used as a second signal, for servers
-    /// that sell straight from the command without ever opening a GUI.
-    fn finish_autosell_cycle(
-        &mut self,
-        bot: &Client,
-        now: Instant,
-        interval: Duration,
-        before: usize,
-        moved: usize,
-        failure_reason: &str,
-    ) {
-        let after = player_occupied(bot);
-        let sold = if moved > 0 {
-            moved
-        } else {
-            before.saturating_sub(after)
-        };
-        if sold > 0 {
-            emit(&OutEvent::BehaviorLog {
-                message: format!("AutoSell: {sold} Stack(s) verkauft"),
-            });
-            self.autosell_streak_logged = false;
-            self.autosell_failures = 0;
-            self.autosell_retry_at = None;
-            return;
-        }
-        self.register_autosell_failure(now, interval, failure_reason);
-    }
-
     /// Records a sell cycle that achieved nothing and schedules the next
     /// attempt. The delay grows once [`AUTOSELL_FAILURE_GRACE`] cycles in a row
-    /// have failed, so a broken sell menu can never turn into a chat flood —
+    /// have failed, so a broken sell menu can never turn into a chat flood -
     /// while a single hiccup still retries immediately.
     fn register_autosell_failure(&mut self, now: Instant, interval: Duration, reason: &str) {
         self.autosell_failures = self.autosell_failures.saturating_add(1);
-        if self.autosell_failures <= AUTOSELL_FAILURE_GRACE {
+        let Some(backoff) = autosell_backoff(self.autosell_failures, interval) else {
             return;
-        }
-
-        let steps = (self.autosell_failures - AUTOSELL_FAILURE_GRACE - 1).min(8);
-        let backoff = AUTOSELL_BACKOFF_BASE
-            .checked_mul(1u32 << steps)
-            .unwrap_or(AUTOSELL_BACKOFF_MAX)
-            .min(AUTOSELL_BACKOFF_MAX)
-            .max(interval);
+        };
         self.autosell_retry_at = Some(now + backoff);
         if !self.autosell_streak_logged {
             self.autosell_streak_logged = true;
@@ -1472,19 +1115,6 @@ fn slot_to_snapshot(stack: &ItemStack) -> Option<InventorySlot> {
     }
 }
 
-/// Normalize the settings-open command: default to "/settings" when blank and
-/// ensure it starts with a slash so `bot.chat` runs it as a command.
-fn normalize_settings_command(command: String) -> String {
-    let trimmed = command.trim();
-    if trimmed.is_empty() {
-        return "/settings".to_string();
-    }
-    if trimmed.starts_with('/') {
-        trimmed.to_string()
-    } else {
-        format!("/{trimmed}")
-    }
-}
 
 /// Extract an item's display name and lore as plain strings (formatting stripped).
 fn item_text(stack: &ItemStack) -> (String, Vec<String>) {
@@ -1577,95 +1207,7 @@ fn player_occupied(bot: &Client) -> usize {
         .count()
 }
 
-/// Locates the sell menu's confirm ("sell everything") button among the
-/// container's own slots.
-///
-/// Button positions differ between servers and resource packs, so the item's
-/// display name and lore are searched for a sell/confirm keyword first. Only if
-/// no labelled button is found does it fall back to the menu's last container
-/// slot, which is where the green checkmark sits in the common layout.
-fn find_sell_confirm_slot(slots: &[ItemStack], container_len: usize) -> u16 {
-    for slot in 0..container_len.min(slots.len()) {
-        if !slots[slot].is_present() {
-            continue;
-        }
-        let (name, lore) = item_text(&slots[slot]);
-        let hay = format!("{} {}", name, lore.join(" ")).to_lowercase();
-        if SELL_CONFIRM_KEYWORDS.iter().any(|kw| hay.contains(kw)) {
-            return slot as u16;
-        }
-    }
-    container_len.saturating_sub(1) as u16
-}
 
-/// Parse a settings-menu button into `(label, enabled)`, or `None` if the item
-/// isn't a stateful toggle (decorations, glass panes, a "Schließen"/close button
-/// carry no Aktiviert/Deaktiviert state and are skipped). The state is read from
-/// the item's name/lore; "deaktiviert" is checked before "aktiviert" because the
-/// former contains the latter as a substring.
-fn parse_setting_item(stack: &ItemStack) -> Option<(String, bool)> {
-    if !stack.is_present() {
-        return None;
-    }
-    let (name, lore) = item_text(stack);
-    if name.trim().is_empty() {
-        return None;
-    }
-    let hay = format!("{} {}", name, lore.join(" ")).to_lowercase();
-    let enabled = if hay.contains("deaktiviert") || hay.contains("disabled") {
-        false
-    } else if hay.contains("aktiviert") || hay.contains("enabled") {
-        true
-    } else {
-        return None;
-    };
-    let label = strip_state_suffix(&name);
-    if label.is_empty() {
-        return None;
-    }
-    Some((label, enabled))
-}
-
-/// Strip a trailing ": Aktiviert"/": Deaktiviert" (or similar) state suffix from
-/// a button name, leaving just the setting label.
-fn strip_state_suffix(name: &str) -> String {
-    if let Some((lhs, _rhs)) = name.rsplit_once(':') {
-        let lhs = lhs.trim();
-        if !lhs.is_empty() {
-            return lhs.to_string();
-        }
-    }
-    name.trim().to_string()
-}
-
-/// Scan a settings GUI's container slots (excluding the player's own 36 slots)
-/// for toggle buttons, returning `(slot_index, label, enabled)` for each,
-/// de-duplicated by label.
-fn scan_settings_entries(slots: &[ItemStack]) -> Vec<(usize, String, bool)> {
-    let container_len = slots.len().saturating_sub(36);
-    let mut out = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for (i, slot) in slots.iter().enumerate().take(container_len) {
-        if let Some((label, enabled)) = parse_setting_item(slot) {
-            if seen.insert(label.to_lowercase()) {
-                out.push((i, label, enabled));
-            }
-        }
-    }
-    out
-}
-
-/// Emit an [`OutEvent::SettingsMenu`] from scanned settings entries.
-fn emit_settings(entries: &[(usize, String, bool)]) {
-    let settings = entries
-        .iter()
-        .map(|(_, label, enabled)| SettingEntry {
-            label: label.clone(),
-            enabled: *enabled,
-        })
-        .collect();
-    emit(&OutEvent::SettingsMenu { settings });
-}
 
 /// Read the bot's own inventory and emit an [`OutEvent::Inventory`] snapshot.
 /// The player inventory menu lays its 46 slots out as: craft result (0), craft
@@ -1880,9 +1422,82 @@ fn tpaccept_target_name(command: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// How long auto-sell should wait before the next attempt after `failures`
+/// consecutive fruitless cycles, or `None` while still inside the grace period
+/// (retry immediately at the configured interval).
+///
+/// Split out as a pure function so the long-term behaviour is testable: this is
+/// the part that decides whether a temporary problem quietly recovers or turns
+/// into "auto-sell just stopped working after a while".
+fn autosell_backoff(failures: u32, interval: Duration) -> Option<Duration> {
+    if failures <= AUTOSELL_FAILURE_GRACE {
+        return None;
+    }
+    let steps = (failures - AUTOSELL_FAILURE_GRACE - 1).min(8);
+    Some(
+        AUTOSELL_BACKOFF_BASE
+            .checked_mul(1u32 << steps)
+            .unwrap_or(AUTOSELL_BACKOFF_MAX)
+            .min(AUTOSELL_BACKOFF_MAX)
+            .max(interval),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_balance, parse_sell_amount, parse_tpa_accept_command, tpaccept_target_name};
+    use super::{
+        autosell_backoff, parse_balance, parse_sell_amount, parse_tpa_accept_command,
+        tpaccept_target_name, AUTOSELL_BACKOFF_MAX, AUTOSELL_FAILURE_GRACE,
+    };
+    use std::time::Duration;
+
+    /// A short hiccup must never slow selling down.
+    #[test]
+    fn autosell_tolerates_short_failure_streaks() {
+        let interval = Duration::from_secs(1);
+        for failures in 1..=AUTOSELL_FAILURE_GRACE {
+            assert_eq!(autosell_backoff(failures, interval), None);
+        }
+    }
+
+    /// A persistent problem must back off instead of spamming the server.
+    #[test]
+    fn autosell_backs_off_after_the_grace_period() {
+        let interval = Duration::from_secs(1);
+        let first = autosell_backoff(AUTOSELL_FAILURE_GRACE + 1, interval).unwrap();
+        let second = autosell_backoff(AUTOSELL_FAILURE_GRACE + 2, interval).unwrap();
+        assert!(second > first, "backoff must grow: {first:?} -> {second:?}");
+    }
+
+    /// The long-term guarantee: however long a failure streak lasts, auto-sell
+    /// keeps retrying at least once a minute and never gives up for good.
+    #[test]
+    fn autosell_backoff_is_capped_and_never_gives_up() {
+        let interval = Duration::from_secs(1);
+        for failures in (AUTOSELL_FAILURE_GRACE + 1)..2000 {
+            let backoff = autosell_backoff(failures, interval)
+                .expect("a failing cycle must always schedule a retry");
+            assert!(
+                backoff <= AUTOSELL_BACKOFF_MAX,
+                "backoff {backoff:?} exceeded the cap at {failures} failures"
+            );
+        }
+        // Saturated: still exactly the cap, not something that overflowed to a
+        // tiny or absurd value.
+        assert_eq!(
+            autosell_backoff(u32::MAX, interval),
+            Some(AUTOSELL_BACKOFF_MAX)
+        );
+    }
+
+    /// A slow interval must not be undercut by a fast backoff.
+    #[test]
+    fn autosell_backoff_never_undercuts_the_interval() {
+        let interval = Duration::from_secs(120);
+        let backoff = autosell_backoff(AUTOSELL_FAILURE_GRACE + 1, interval).unwrap();
+        assert!(backoff >= interval, "{backoff:?} < {interval:?}");
+    }
+
 
     #[test]
     fn balance_dollar_with_commas() {
