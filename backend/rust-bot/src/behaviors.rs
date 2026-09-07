@@ -225,6 +225,9 @@ pub struct BehaviorState {
     last_heartbeat_at: Instant,
     /// Last time we force-re-asserted the crouch state (see CROUCH_REASSERT_INTERVAL).
     last_crouch_reassert_at: Instant,
+    /// Set after releasing sneak for one tick; the next tick presses it again.
+    /// See the crouch section of `on_tick` for why the release is necessary.
+    crouch_repress_pending: bool,
 }
 
 impl BehaviorState {
@@ -269,6 +272,7 @@ impl BehaviorState {
             last_inventory_sig: None,
             last_heartbeat_at: now,
             last_crouch_reassert_at: now,
+            crouch_repress_pending: false,
         }
     }
 
@@ -343,6 +347,20 @@ impl BehaviorState {
 
     /// Called on every `Event::Tick`. Checks each behavior's elapsed time
     /// against its configured interval and fires the corresponding action.
+    /// Called whenever the player (re)spawns into a world: initial join, after
+    /// a death, and after a server/world switch. All three clear the sneak
+    /// state server-side, so force a fresh press instead of waiting up to
+    /// CROUCH_REASSERT_INTERVAL for the periodic re-assert to notice.
+    pub fn on_spawn(&mut self, bot: &Client) {
+        if !self.config.crouch_enabled {
+            return;
+        }
+        // Release now, press on the next tick - the packet only goes out on a
+        // real transition (see the crouch section of `on_tick`).
+        let _ = bot.set_crouching(false);
+        self.crouch_repress_pending = true;
+    }
+
     pub fn on_tick(&mut self, bot: &Client) {
         let now = Instant::now();
 
@@ -354,21 +372,41 @@ impl BehaviorState {
             }
         }
 
-        // Crouch: continuously hold sneak while enabled. Normally we only send a
-        // state change when the desired value differs from the bot's current one
-        // (to avoid spamming a packet every tick). But a death/respawn or server
-        // switch resets sneak server-side while `bot.crouching()` still reports
-        // `true`, so the diff-check alone would never recover it. To fix that we
-        // also force-re-assert the crouch every CROUCH_REASSERT_INTERVAL.
+        // Crouch: continuously hold sneak while enabled.
+        //
+        // `set_crouching` only writes a local field; the sneak flag reaches the
+        // server inside ServerboundPlayerInput, which azalea sends *only when
+        // the input differs from the last one it sent*. So calling
+        // `set_crouching(true)` while it is already true sends nothing at all.
+        //
+        // That matters because a death/respawn or a server switch clears the
+        // sneak state server-side while the client still believes it is
+        // crouching. Nothing differs locally, no packet goes out, and the bot
+        // silently stands up for good.
+        //
+        // The only way to make the packet go out is to produce a real
+        // transition, so every CROUCH_REASSERT_INTERVAL we release sneak for a
+        // single tick and press it again on the next one. Two ticks are
+        // required: both writes within one tick would collapse before the
+        // packet system ever compares them.
         if self.config.crouch_enabled {
-            if !bot.crouching()
-                || now.duration_since(self.last_crouch_reassert_at) >= CROUCH_REASSERT_INTERVAL
-            {
+            if self.crouch_repress_pending {
+                let _ = bot.set_crouching(true);
+                self.crouch_repress_pending = false;
+                self.last_crouch_reassert_at = now;
+            } else if !bot.crouching() {
+                // Fresh connection, or something else cleared it: press now.
                 let _ = bot.set_crouching(true);
                 self.last_crouch_reassert_at = now;
+            } else if now.duration_since(self.last_crouch_reassert_at) >= CROUCH_REASSERT_INTERVAL {
+                let _ = bot.set_crouching(false);
+                self.crouch_repress_pending = true;
             }
-        } else if bot.crouching() {
-            let _ = bot.set_crouching(false);
+        } else {
+            self.crouch_repress_pending = false;
+            if bot.crouching() {
+                let _ = bot.set_crouching(false);
+            }
         }
 
         // AFK: look somewhere random and jump. Keeps the player active without

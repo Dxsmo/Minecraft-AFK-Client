@@ -123,6 +123,7 @@ describe("ItemWorthScanner", () => {
   const C = "acc-c";
 
   beforeEach(async () => {
+    await prisma.itemWorthRun.deleteMany({});
     await prisma.itemWorthValue.deleteMany({});
     await prisma.itemWorthScan.deleteMany({});
     fake = new FakeManager();
@@ -132,6 +133,7 @@ describe("ItemWorthScanner", () => {
 
   afterEach(async () => {
     scanner.dispose();
+    await prisma.itemWorthRun.deleteMany({});
     await prisma.itemWorthValue.deleteMany({});
     await prisma.itemWorthScan.deleteMany({});
   });
@@ -398,6 +400,71 @@ describe("ItemWorthScanner", () => {
       });
     } finally {
       underscored.dispose();
+    }
+  });
+
+  it("keeps every past scan's price list accessible after a newer scan", async () => {
+    fake.prices.set("dirt", 1);
+    fake.prices.set("pumpkin", 10);
+    await scanner.start([A], 1);
+    await waitForStatus(["COMPLETED"]);
+
+    fake.prices.set("pumpkin", 20);
+    await scanner.start([A], 1);
+    await waitForStatus(["COMPLETED"]);
+
+    const runs = await scanner.listRuns();
+    expect(runs.map((r) => r.scanNumber)).toEqual([2, 1]);
+    expect(runs[0]).toMatchObject({ status: "COMPLETED", itemCount: 3, changedCount: 1 });
+
+    // The whole point: scan #1 still holds the OLD price, even though the live
+    // table has long since been overwritten by scan #2.
+    const first = await scanner.getRun(1);
+    expect(first!.values.find((v) => v.itemId === "pumpkin")?.value).toBe(10);
+    const second = await scanner.getRun(2);
+    expect(second!.values.find((v) => v.itemId === "pumpkin")?.value).toBe(20);
+    expect(second!.values.find((v) => v.itemId === "pumpkin")?.previousValue).toBe(10);
+    expect(second!.values.find((v) => v.itemId === "pumpkin")?.changed).toBe(true);
+
+    expect(await scanner.getRun(99)).toBeNull();
+  });
+
+  it("reports the items it just checked, newest first", async () => {
+    fake.prices.set("dirt", 1);
+    fake.prices.set("pumpkin", 2);
+    fake.prices.set("bedrock", 3);
+    await scanner.start([A], 1);
+    await waitForStatus(["COMPLETED"]);
+
+    const state = await scanner.getState();
+    expect(state.recent.map((entry) => entry.itemId)).toEqual(["bedrock", "pumpkin", "dirt"]);
+    expect(state.recent[0]).toMatchObject({ itemName: "Bedrock", value: 3 });
+  });
+
+  it("surfaces a variant that breaks its family price", async () => {
+    const boats = [
+      { id: "oak_boat", name: "Oak Boat" },
+      { id: "birch_boat", name: "Birch Boat" },
+      { id: "acacia_boat", name: "Acacia Boat" },
+      { id: "jungle_boat", name: "Jungle Boat" },
+    ];
+    const boatScanner = makeScanner(fake, boats);
+    try {
+      for (const boat of boats) fake.prices.set(boat.id, 1);
+      fake.prices.set("jungle_boat", 2.5); // the off-meta
+      await boatScanner.start([A], 1);
+      await waitForStatus(["COMPLETED"]);
+
+      const state = await boatScanner.getState();
+      expect(state.suspicious).toHaveLength(1);
+      expect(state.suspicious[0]).toMatchObject({
+        itemId: "jungle_boat",
+        value: 2.5,
+        expected: 1,
+        family: "boat",
+      });
+    } finally {
+      boatScanner.dispose();
     }
   });
 

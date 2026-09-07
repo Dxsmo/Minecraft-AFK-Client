@@ -101,4 +101,26 @@ export default async function itemWorthRoutes(app: FastifyInstance) {
     await recordAuditLog({ userId: req.session!.user.id, action: "ITEM_WORTH_SCAN_STOP" });
     reply.send(await fullState());
   });
+
+  /** Archived scans, so past price lists survive a newer scan. */
+  app.get("/api/item-worth/runs", async (_req, reply) => {
+    reply.send(await itemWorthScanner.listRuns());
+  });
+
+  app.get<{ Params: { scanNumber: string } }>(
+    "/api/item-worth/runs/:scanNumber",
+    async (req, reply) => {
+      const scanNumber = Number(req.params.scanNumber);
+      if (!Number.isInteger(scanNumber) || scanNumber < 1) {
+        reply.code(400).send({ error: "Invalid scan number" });
+        return;
+      }
+      const run = await itemWorthScanner.getRun(scanNumber);
+      if (!run) {
+        reply.code(404).send({ error: "Scan not found" });
+        return;
+      }
+      reply.send(run);
+    },
+  );
 }

@@ -249,6 +249,8 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
         Event::Login => emit(&OutEvent::Login),
         Event::Spawn => {
             SPAWNED.store(true, Ordering::SeqCst);
+            // A respawn or server switch clears sneak server-side; re-press it.
+            shared().lock().behavior.on_spawn(&bot);
             emit(&OutEvent::Spawn);
         }
         Event::Chat(packet) => {

@@ -205,6 +205,8 @@ model ItemWorthScan {
   delaySeconds Int    @default(5)
   // JSON array of MinecraftAccount ids taking part in this scan.
   accountIdsJson String @default("[]")
+  // The archived run the current scan writes its prices into.
+  runId          String?
 
   lastItemId String?
   lastError  String?
@@ -360,4 +362,46 @@ model BannedIp {
   createdBy   User?   @relation("CreatedIpBans", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
+}
+
+// One archived scan. The live ItemWorthValue table only ever holds the newest
+// price per item; these rows keep every past run intact so an admin can go back
+// and compare against any earlier snapshot, not just the previous one.
+model ItemWorthRun {
+  id         String @id @default(cuid())
+  // Mirrors ItemWorthScan.scanNumber, so runs are addressable by "Scan #3".
+  scanNumber Int    @unique
+  // RUNNING | COMPLETED | CANCELLED | PAUSED
+  status     String @default("RUNNING")
+
+  delaySeconds   Int    @default(5)
+  accountIdsJson String @default("[]")
+  changedCount   Int    @default(0)
+  missedCount    Int    @default(0)
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  values ItemWorthRunValue[]
+
+  @@index([scanNumber])
+}
+
+// One item's price as recorded by one specific run.
+model ItemWorthRunValue {
+  id    String       @id @default(cuid())
+  runId String
+  run   ItemWorthRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  itemId   String
+  itemName String
+  // null when the server reported no configured price.
+  value    Float?
+  // What the previous run had, so an archived run is readable on its own.
+  previousValue Float?
+
+  recordedAt DateTime @default(now())
+
+  @@unique([runId, itemId])
+  @@index([runId, recordedAt])
 }

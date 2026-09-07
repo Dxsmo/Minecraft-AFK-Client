@@ -312,6 +312,30 @@ body {
     background-color: var(--accent-soft);
   }
 
+  /* Live feed of the items the bots just asked about. */
+  .item-worth-recent {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background-color: var(--bg-elev);
+    color: var(--text-muted);
+    padding: 0.18rem 0.6rem;
+    font-size: 0.68rem;
+    white-space: nowrap;
+    animation: item-worth-recent-in 0.35s ease both;
+  }
+  @keyframes item-worth-recent-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
   /* Result rows fade in staggered, which makes a long list feel less abrupt. */
   .item-worth-row {
     display: flex;

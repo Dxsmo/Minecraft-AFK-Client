@@ -181,6 +181,59 @@ export interface ItemWorthValue {
 
 export type ItemWorthStatus = "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED" | "CANCELLED";
 
+/** An item the running scan has just checked, for the live feed. */
+export interface ItemWorthRecent {
+  itemId: string;
+  itemName: string;
+  value: number | null;
+  previousValue: number | null;
+  recordedAt: string;
+}
+
+/**
+ * An item whose price breaks the consensus of its cosmetic variant family
+ * (e.g. every boat costs $1 but one costs $2.50) - the strongest tell for a
+ * deliberate, unannounced price change.
+ */
+export interface SuspiciousItem {
+  itemId: string;
+  itemName: string;
+  value: number | null;
+  /** The price the rest of the family agrees on. */
+  expected: number;
+  family: string;
+  agreeing: number;
+  familySize: number;
+  /** Relative deviation, or null when there is no price to compare. */
+  deviation: number | null;
+}
+
+/** One archived scan in the history list. */
+export interface ItemWorthRunSummary {
+  scanNumber: number;
+  status: string;
+  delaySeconds: number;
+  accountIds: string[];
+  changedCount: number;
+  missedCount: number;
+  itemCount: number;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+/** An archived scan's full, permanently stored price list. */
+export interface ItemWorthRunDetail extends ItemWorthRunSummary {
+  suspicious: SuspiciousItem[];
+  values: {
+    itemId: string;
+    itemName: string;
+    value: number | null;
+    previousValue: number | null;
+    changed: boolean;
+    recordedAt: string;
+  }[];
+}
+
 /** A Minecraft account offered as a scan worker, with its live availability. */
 export interface ItemWorthAccount {
   id: string;
@@ -216,5 +269,8 @@ export interface ItemWorthState {
   finishedAt: string | null;
   etaSeconds: number | null;
   registryTotal: number;
+  /** Items just checked, newest first. */
+  recent: ItemWorthRecent[];
+  suspicious: SuspiciousItem[];
   values: ItemWorthValue[];
 }

@@ -1,6 +1,7 @@
 import { prisma } from "../database/prisma.js";
 import { logger } from "../logging/logger.js";
 import { ITEM_REGISTRY, type RegistryItem } from "./itemRegistry.js";
+import { findSuspiciousItems } from "./itemFamilies.js";
 import {
   matchWorthReply,
   worthChanged,
@@ -26,6 +27,9 @@ export const DEFAULT_DELAY_SECONDS = 5;
  * for another few hours helps nobody.
  */
 const MAX_CONSECUTIVE_MISSES = 25;
+
+/** How many just-checked items to return for the live "currently scanning" list. */
+const RECENT_ITEM_LIMIT = 40;
 
 /** How many unmatched chat lines to keep per query for the UI diagnostics. */
 const MAX_SAMPLES_PER_QUERY = 6;
@@ -166,6 +170,17 @@ export class ItemWorthScanner {
       }),
     ]);
 
+    // The items this run has already asked about, newest first, so the page can
+    // show live what is being checked right now.
+    const recent = scan?.runId
+      ? await prisma.itemWorthRunValue.findMany({
+          where: { runId: scan.runId },
+          orderBy: { recordedAt: "desc" },
+          take: RECENT_ITEM_LIMIT,
+          select: { itemId: true, itemName: true, value: true, previousValue: true, recordedAt: true },
+        })
+      : [];
+
     const status = (scan?.status ?? "IDLE") as ScanStatus;
     const cursor = scan?.cursor ?? 0;
     const total = scan?.total || this.items.length;
@@ -197,6 +212,16 @@ export class ItemWorthScanner {
       registryTotal: this.items.length,
       minDelaySeconds: MIN_DELAY_SECONDS,
       maxDelaySeconds: MAX_DELAY_SECONDS,
+      recent: recent.map((entry) => ({
+        itemId: entry.itemId,
+        itemName: entry.itemName,
+        value: entry.value,
+        previousValue: entry.previousValue,
+        recordedAt: entry.recordedAt.toISOString(),
+      })),
+      // Items whose price breaks their variant family's consensus - the most
+      // reliable tell for a deliberate, unannounced price change.
+      suspicious: findSuspiciousItems(values),
       values: values.map((v) => ({
         itemId: v.itemId,
         itemName: v.itemName,
@@ -224,8 +249,21 @@ export class ItemWorthScanner {
     // differences introduced by the newest scan.
     await prisma.itemWorthValue.updateMany({ data: { changedAt: null } });
 
+    const run = await prisma.itemWorthRun.upsert({
+      where: { scanNumber },
+      create: { scanNumber, status: "RUNNING", delaySeconds, accountIdsJson: JSON.stringify(accountIds) },
+      update: {
+        status: "RUNNING",
+        delaySeconds,
+        accountIdsJson: JSON.stringify(accountIds),
+        startedAt: new Date(),
+        finishedAt: null,
+      },
+    });
+
     const shared = {
       status: "RUNNING",
+      runId: run.id,
       cursor: 0,
       total: this.items.length,
       scanNumber,
@@ -252,10 +290,89 @@ export class ItemWorthScanner {
   /** Cancel a running or paused scan. Already-scanned prices are kept. */
   async stop(): Promise<void> {
     this.abortRun();
+    const scan = await prisma.itemWorthScan.findUnique({ where: { id: SCAN_ID } });
     await prisma.itemWorthScan.updateMany({
       where: { id: SCAN_ID, status: { in: ["RUNNING", "PAUSED"] } },
       data: { status: "CANCELLED", finishedAt: new Date() },
     });
+    await this.closeRun(scan?.runId ?? null, "CANCELLED");
+  }
+
+  /**
+   * Freeze an archived run once its scan is over, copying the final counters
+   * across so the history list is readable without joining the live scan row.
+   * A run is only closed for good; a merely paused scan keeps its run open so
+   * it can carry on writing into the same archive when it resumes.
+   */
+  private async closeRun(runId: string | null, status: "COMPLETED" | "CANCELLED"): Promise<void> {
+    if (!runId) return;
+    const scan = await prisma.itemWorthScan.findUnique({ where: { id: SCAN_ID } });
+    await prisma.itemWorthRun
+      .updateMany({
+        where: { id: runId, status: "RUNNING" },
+        data: {
+          status,
+          finishedAt: new Date(),
+          changedCount: scan?.changedCount ?? 0,
+          missedCount: scan?.missedCount ?? 0,
+        },
+      })
+      .catch((err) => {
+        logger.error({ err }, "Failed to close item worth run");
+      });
+  }
+
+  /** Every archived scan, newest first, for the history list. */
+  async listRuns() {
+    const runs = await prisma.itemWorthRun.findMany({
+      orderBy: { scanNumber: "desc" },
+      include: { _count: { select: { values: true } } },
+    });
+    return runs.map((run) => ({
+      scanNumber: run.scanNumber,
+      status: run.status,
+      delaySeconds: run.delaySeconds,
+      accountIds: parseAccountIds(run.accountIdsJson),
+      changedCount: run.changedCount,
+      missedCount: run.missedCount,
+      itemCount: run._count.values,
+      startedAt: run.startedAt.toISOString(),
+      finishedAt: run.finishedAt?.toISOString() ?? null,
+    }));
+  }
+
+  /** One archived scan's full price list. Null when that scan does not exist. */
+  async getRun(scanNumber: number) {
+    const run = await prisma.itemWorthRun.findUnique({
+      where: { scanNumber },
+      include: { values: { orderBy: { itemName: "asc" } } },
+    });
+    if (!run) return null;
+
+    const values = run.values.map((entry) => ({
+      itemId: entry.itemId,
+      itemName: entry.itemName,
+      value: entry.value,
+      previousValue: entry.previousValue,
+      // An archived run knows what the run before it had, so "changed" stays
+      // meaningful even for a scan that is no longer the newest one.
+      changed: entry.previousValue !== null && worthChanged(entry.previousValue, entry.value),
+      recordedAt: entry.recordedAt.toISOString(),
+    }));
+
+    return {
+      scanNumber: run.scanNumber,
+      status: run.status,
+      delaySeconds: run.delaySeconds,
+      accountIds: parseAccountIds(run.accountIdsJson),
+      changedCount: run.changedCount,
+      missedCount: run.missedCount,
+      itemCount: values.length,
+      startedAt: run.startedAt.toISOString(),
+      finishedAt: run.finishedAt?.toISOString() ?? null,
+      suspicious: findSuspiciousItems(values),
+      values,
+    };
   }
 
   // ---------------------------------------------------------------- internals
@@ -372,6 +489,7 @@ export class ItemWorthScanner {
           where: { id: SCAN_ID },
           data: { status: "COMPLETED", finishedAt: new Date() },
         });
+        await this.closeRun(scan.runId, "COMPLETED");
         logger.info({ changed: scan.changedCount }, "Item worth scan completed");
         return;
       }
@@ -423,7 +541,13 @@ export class ItemWorthScanner {
         }
       } else {
         consecutiveMisses = 0;
-        const changed = await this.persistValue(item.id, item.name, reply.value, scan.scanNumber);
+        const changed = await this.persistValue(
+          item.id,
+          item.name,
+          reply.value,
+          scan.scanNumber,
+          scan.runId,
+        );
         const advanced = await this.advance(scan.scanNumber, {
           cursor: scan.cursor + 1,
           lastItemId: item.id,
@@ -508,6 +632,7 @@ export class ItemWorthScanner {
     itemName: string,
     value: number | null,
     scanNumber: number,
+    runId: string | null,
   ): Promise<boolean> {
     const existing = await prisma.itemWorthValue.findUnique({ where: { itemId } });
 
@@ -534,6 +659,23 @@ export class ItemWorthScanner {
         changedAt: changed ? new Date() : null,
       },
     });
+
+    // Also append to this run's archive. ItemWorthValue only ever holds the
+    // newest price, so without this a second scan would erase the first one's
+    // list; these rows keep every past scan readable.
+    if (runId) {
+      const archived = {
+        itemName,
+        value,
+        previousValue: existing?.value ?? null,
+        recordedAt: new Date(),
+      };
+      await prisma.itemWorthRunValue.upsert({
+        where: { runId_itemId: { runId, itemId } },
+        create: { runId, itemId, ...archived },
+        update: archived,
+      });
+    }
 
     return changed;
   }
