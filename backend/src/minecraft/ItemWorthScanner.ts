@@ -1,7 +1,7 @@
 import { prisma } from "../database/prisma.js";
 import { logger } from "../logging/logger.js";
 import { ITEM_REGISTRY, type RegistryItem } from "./itemRegistry.js";
-import { parseWorthReply, worthChanged, type WorthReply } from "./itemWorth.js";
+import { matchWorthReply, worthChanged, type WorthReply } from "./itemWorth.js";
 import { clientManager, type ClientManager } from "./ClientManager.js";
 
 /** The scan is a singleton; this is the primary key of its one row. */
@@ -22,6 +22,9 @@ export const DEFAULT_DELAY_SECONDS = 5;
  */
 const MAX_CONSECUTIVE_MISSES = 25;
 
+/** How many unmatched chat lines to keep per query for the UI diagnostics. */
+const MAX_SAMPLES_PER_QUERY = 6;
+
 /** How long to sit idle while no selected bot is online before re-checking. */
 const OFFLINE_RECHECK_MS = 5_000;
 
@@ -33,8 +36,10 @@ interface RunState {
   pending: ((reply: WorthReply | null) => void) | null;
   /** Which account was asked, so another bot's chat cannot answer for it. */
   expectedAccountId: string | null;
-  /** Display name of the item currently being asked about, for correlation. */
-  expectedName: string | null;
+  /** The item currently being asked about, for correlating the reply to it. */
+  expectedItem: { id: string; name: string } | null;
+  /** Chat lines seen during the current query window that were not accepted. */
+  samples: string[];
   replyTimer: NodeJS.Timeout | null;
   delayTimer: NodeJS.Timeout | null;
   wakeDelay: (() => void) | null;
@@ -55,6 +60,28 @@ export function parseAccountIds(json: string): string[] {
     return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
   } catch {
     return [];
+  }
+}
+
+/** What the server said during the last query nobody could make sense of. */
+export interface WorthSamples {
+  itemId: string;
+  command: string;
+  lines: string[];
+}
+
+export function parseSamples(json: string | null): WorthSamples | null {
+  if (!json) return null;
+  try {
+    const parsed = JSON.parse(json) as Partial<WorthSamples>;
+    if (typeof parsed?.itemId !== "string" || !Array.isArray(parsed.lines)) return null;
+    return {
+      itemId: parsed.itemId,
+      command: typeof parsed.command === "string" ? parsed.command : `/worth ${parsed.itemId}`,
+      lines: parsed.lines.filter((line): line is string => typeof line === "string"),
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -158,6 +185,7 @@ export class ItemWorthScanner {
       accountIds: parseAccountIds(scan?.accountIdsJson ?? "[]"),
       lastItemId: scan?.lastItemId ?? null,
       lastError: scan?.lastError ?? null,
+      lastSamples: parseSamples(scan?.lastSamplesJson ?? null),
       startedAt: scan?.startedAt?.toISOString() ?? null,
       finishedAt: scan?.finishedAt?.toISOString() ?? null,
       etaSeconds,
@@ -229,21 +257,20 @@ export class ItemWorthScanner {
 
   private handleChat(accountId: string, message: string): void {
     const run = this.run;
-    if (!run?.pending) return;
+    if (!run?.pending || !run.expectedItem) return;
     // Only the bot we just asked may answer for this item.
     if (run.expectedAccountId !== null && run.expectedAccountId !== accountId) return;
 
-    const reply = parseWorthReply(message);
-    if (!reply) return;
-    // Only accept a reply that names the item we actually asked about. Without
-    // this, any player typing "Der Wert von X beträgt $999" into public chat
-    // would be written into the price table, and a reply arriving after its own
-    // query timed out would be credited to the *next* item.
-    if (
-      reply.itemName !== null &&
-      run.expectedName !== null &&
-      reply.itemName.toLowerCase() !== run.expectedName.toLowerCase()
-    ) {
+    // Correlating by item name is what keeps another player's chat out of the
+    // price table, and stops a reply that arrived after its own query timed out
+    // from being credited to the *next* item.
+    const reply = matchWorthReply(message, run.expectedItem);
+    if (!reply) {
+      // Remember what the server *did* say. When a query ends up unanswered
+      // these lines are surfaced in the UI, which turns "no answer" from an
+      // unexplainable dead end into something the admin can actually read.
+      const clean = message.trim();
+      if (clean !== "" && run.samples.length < MAX_SAMPLES_PER_QUERY) run.samples.push(clean);
       return;
     }
 
@@ -279,7 +306,8 @@ export class ItemWorthScanner {
       cancelled: false,
       pending: null,
       expectedAccountId: null,
-      expectedName: null,
+      expectedItem: null,
+      samples: [],
       replyTimer: null,
       delayTimer: null,
       wakeDelay: null,
@@ -359,7 +387,7 @@ export class ItemWorthScanner {
 
       const client = this.manager.get(accountId)!;
       const item = this.items[scan.cursor]!;
-      const reply = await this.query(run, client, accountId, item.id, item.name);
+      const reply = await this.query(run, client, accountId, item);
       if (run.cancelled) return;
 
       // Losing the connection mid-query must not burn the item: retry it with
@@ -372,6 +400,13 @@ export class ItemWorthScanner {
           cursor: scan.cursor + 1,
           missedCount: { increment: 1 },
           lastItemId: item.id,
+          // Keep what the server actually said, so an admin can see why the
+          // reply was not understood instead of just "no answer".
+          lastSamplesJson: JSON.stringify({
+            itemId: item.id,
+            command: `/worth ${item.id}`,
+            lines: run.samples,
+          }),
         });
         if (!advanced) return;
         if (consecutiveMisses >= MAX_CONSECUTIVE_MISSES) {
@@ -431,8 +466,7 @@ export class ItemWorthScanner {
     run: RunState,
     client: { sendBackgroundCommand(command: string): boolean },
     accountId: string,
-    itemId: string,
-    expectedName: string,
+    item: RegistryItem,
   ): Promise<WorthReply | null> {
     return new Promise((resolve) => {
       let settled = false;
@@ -440,12 +474,13 @@ export class ItemWorthScanner {
         if (settled) return;
         settled = true;
         run.expectedAccountId = null;
-        run.expectedName = null;
+        run.expectedItem = null;
         resolve(reply);
       };
 
       run.expectedAccountId = accountId;
-      run.expectedName = expectedName;
+      run.expectedItem = item;
+      run.samples = [];
       run.pending = finish;
       run.replyTimer = setTimeout(() => {
         run.pending = null;
@@ -453,7 +488,7 @@ export class ItemWorthScanner {
         finish(null);
       }, this.replyTimeoutMs);
 
-      if (!client.sendBackgroundCommand(`/worth ${itemId}`)) {
+      if (!client.sendBackgroundCommand(`/worth ${item.id}`)) {
         run.pending = null;
         if (run.replyTimer) clearTimeout(run.replyTimer);
         run.replyTimer = null;

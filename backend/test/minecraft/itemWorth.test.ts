@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseWorthReply,
+  matchWorthReply,
   parseWorthNumber,
   worthChanged,
   nextQueryDelayMs,
@@ -137,5 +138,57 @@ describe("item registry", () => {
     expect(findRegistryItem("dirt")?.name).toBe("Dirt");
     expect(findRegistryItem("minecraft:pumpkin")?.name).toBe("Pumpkin");
     expect(findRegistryItem("not_a_real_item")).toBeUndefined();
+  });
+});
+
+describe("matchWorthReply", () => {
+  const dirt = { id: "dirt", name: "Dirt" };
+  const oakLog = { id: "oak_log", name: "Oak Log" };
+
+  it("accepts the documented phrasing", () => {
+    expect(matchWorthReply("<HugoSMP> Der Wert von Dirt beträgt $1.", dirt)).toEqual({
+      itemName: "Dirt",
+      value: 1,
+    });
+  });
+
+  it("accepts a no-price reply, which carries no item name", () => {
+    expect(matchWorthReply("Das Item hat keinen festgelegten Wert.", dirt)).toEqual({
+      itemName: null,
+      value: null,
+    });
+  });
+
+  it("correlates across id/display-name spelling differences", () => {
+    // The server may echo the registry id, the display name, or shout it.
+    for (const echoed of ["Oak Log", "oak_log", "OAK LOG", "Oak-Log"]) {
+      expect(matchWorthReply(`Der Wert von ${echoed} beträgt $7.`, oakLog)?.value).toBe(7);
+    }
+  });
+
+  it("accepts unknown phrasings as long as the item and a $ amount are present", () => {
+    // The exact sentence is server-specific and may change; correlating by the
+    // item name is what keeps this safe, not the wording around it.
+    expect(matchWorthReply("Oak Log » Verkaufspreis: $12.5 pro Stück", oakLog)?.value).toBe(12.5);
+    expect(matchWorthReply("[Worth] oak_log = $1,250.75", oakLog)?.value).toBe(1250.75);
+  });
+
+  it("falls back to the only number on a line without a currency marker", () => {
+    expect(matchWorthReply("Dirt: 3", dirt)?.value).toBe(3);
+  });
+
+  it("refuses an ambiguous line with several numbers and no $ marker", () => {
+    // "64x Dirt = 64" could mean stack size, unit price or total; guessing here
+    // would silently write a wrong price.
+    expect(matchWorthReply("64x Dirt 64", dirt)).toBeNull();
+  });
+
+  it("ignores a line about a different item", () => {
+    expect(matchWorthReply("Der Wert von Pumpkin beträgt $99.", dirt)).toBeNull();
+    expect(matchWorthReply("irgendwer hat $500 verdient", dirt)).toBeNull();
+  });
+
+  it("ignores unrelated chatter that happens to contain the item name", () => {
+    expect(matchWorthReply("Player1: wer verkauft dirt?", dirt)).toBeNull();
   });
 });

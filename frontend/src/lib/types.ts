@@ -207,6 +207,8 @@ export interface ItemWorthState {
   accountIds: string[];
   accounts: ItemWorthAccount[];
   lastItemId: string | null;
+  /** What the server replied during the last query that was not understood. */
+  lastSamples: { itemId: string; command: string; lines: string[] } | null;
   lastError: string | null;
   /** False when the scan gave up; it will not resume by itself. */
   resumable: boolean;

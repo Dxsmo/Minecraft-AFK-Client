@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { useAuth } from "../lib/auth";
 
 type IconName = "dashboard" | "sniper" | "worth" | "users" | "logs" | "settings";
@@ -78,6 +79,7 @@ const navItems: { to: string; label: string; icon: IconName; adminOnly: boolean 
 
 export function Layout() {
   const { user, logout } = useAuth();
+  const location = useLocation();
   const initial = user?.username?.charAt(0).toUpperCase() ?? "?";
 
   return (
@@ -155,7 +157,9 @@ export function Layout() {
         </header>
         <main className="min-w-0 flex-1 overflow-y-auto p-6">
           <div className="mx-auto max-w-6xl">
-            <Outlet />
+            <ErrorBoundary resetKey={location.pathname}>
+              <Outlet />
+            </ErrorBoundary>
           </div>
         </main>
       </div>

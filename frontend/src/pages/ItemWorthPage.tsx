@@ -98,7 +98,7 @@ export function ItemWorthPage() {
   useEffect(() => {
     if (!state || selectionInit) return;
     setDelay(state.delaySeconds);
-    const online = new Set(state.accounts.filter((a) => a.online).map((a) => a.id));
+    const online = new Set((state.accounts ?? []).filter((a) => a.online).map((a) => a.id));
     const previous = state.accountIds.filter((id) => online.has(id));
     setSelected(new Set(previous.length > 0 ? previous : online));
     setSelectionInit(true);
@@ -176,7 +176,10 @@ export function ItemWorthPage() {
   const paused = state.status === "PAUSED";
   const eta = formatDuration(state.etaSeconds);
   const scanned = state.values.length;
-  const onlineAccounts = state.accounts.filter((a) => a.online);
+  // Defensive: a payload without `accounts` must degrade to an empty picker,
+  // never take the whole page down with it.
+  const allAccounts = state.accounts ?? [];
+  const onlineAccounts = allAccounts.filter((a) => a.online);
   const canStart = selected.size > 0 && !busy;
   // Each bot only speaks every (delay * bots) seconds — that is the whole point
   // of spreading the scan, so show it explicitly.
@@ -207,17 +210,17 @@ export function ItemWorthPage() {
         <div className="mb-2 flex items-baseline justify-between gap-3">
           <h2 className="text-sm font-medium">Accounts für den Scan</h2>
           <span className="text-[11px]" style={{ color: "var(--text-subtle)" }}>
-            {onlineAccounts.length} von {state.accounts.length} online
+            {onlineAccounts.length} von {allAccounts.length} online
           </span>
         </div>
 
-        {state.accounts.length === 0 ? (
+        {allAccounts.length === 0 ? (
           <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
             Es gibt noch keine Minecraft-Accounts.
           </p>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {state.accounts.map((account) => {
+            {allAccounts.map((account) => {
               const isSelected = selected.has(account.id);
               return (
                 <button
@@ -348,6 +351,41 @@ export function ItemWorthPage() {
               : " — bitte prüfen und den Scan danach neu starten."}
           </p>
         )}
+
+        {/* The exact /worth wording is server-specific. When nothing is
+            understood, show what actually came back instead of leaving the
+            admin with an unexplainable "no answer". */}
+        {state.missedCount > 0 && state.lastSamples && (
+          <details className="mt-3">
+            <summary className="cursor-pointer text-[11px]" style={{ color: "var(--text-muted)" }}>
+              Warum kam keine Antwort? Serverausgabe zu{" "}
+              <code>{state.lastSamples.command}</code> ansehen
+            </summary>
+            <div
+              className="mt-2 rounded-lg p-2 text-[10px] leading-relaxed"
+              style={{
+                backgroundColor: "var(--bg-elev)",
+                border: "1px solid var(--border)",
+                color: "var(--text-muted)",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              }}
+            >
+              {state.lastSamples.lines.length === 0 ? (
+                <span style={{ color: "var(--text-subtle)" }}>
+                  Der Server hat im Zeitfenster überhaupt nichts geschrieben — der Befehl kam
+                  vermutlich nicht an oder heißt anders.
+                </span>
+              ) : (
+                state.lastSamples.lines.map((line, index) => (
+                  <div key={index} className="truncate">
+                    {line}
+                  </div>
+                ))
+              )}
+            </div>
+          </details>
+        )}
+
         {error && <p className="alert-error mt-3">{error}</p>}
       </div>
 

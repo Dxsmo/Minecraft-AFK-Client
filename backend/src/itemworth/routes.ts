@@ -27,8 +27,13 @@ export default async function itemWorthRoutes(app: FastifyInstance) {
     reply.code(404).send({ error: "Not found" });
   });
 
-  /** Scan state plus the accounts that may take part, with live online status. */
-  app.get("/api/item-worth", async (_req, reply) => {
+  /**
+   * Scan state plus the accounts that may take part, with live online status.
+   * Every route returns this exact same shape - the UI renders the account
+   * picker straight from it, so a start/stop response that omitted `accounts`
+   * would blank the page.
+   */
+  async function fullState() {
     const [state, accounts] = await Promise.all([
       itemWorthScanner.getState(),
       prisma.minecraftAccount.findMany({
@@ -37,7 +42,7 @@ export default async function itemWorthRoutes(app: FastifyInstance) {
       }),
     ]);
 
-    reply.send({
+    return {
       ...state,
       accounts: accounts.map((account) => {
         const status = clientManager.get(account.id)?.getStatus().status ?? "OFFLINE";
@@ -50,7 +55,11 @@ export default async function itemWorthRoutes(app: FastifyInstance) {
           online: status === "ONLINE",
         };
       }),
-    });
+    };
+  }
+
+  app.get("/api/item-worth", async (_req, reply) => {
+    reply.send(await fullState());
   });
 
   app.post("/api/item-worth/start", { preHandler: app.requireCsrf }, async (req, reply) => {
@@ -84,12 +93,12 @@ export default async function itemWorthRoutes(app: FastifyInstance) {
       action: "ITEM_WORTH_SCAN_START",
       details: { accountIds: eligible, delaySeconds: body.delaySeconds },
     });
-    reply.send(await itemWorthScanner.getState());
+    reply.send(await fullState());
   });
 
   app.post("/api/item-worth/stop", { preHandler: app.requireCsrf }, async (req, reply) => {
     await itemWorthScanner.stop();
     await recordAuditLog({ userId: req.session!.user.id, action: "ITEM_WORTH_SCAN_STOP" });
-    reply.send(await itemWorthScanner.getState());
+    reply.send(await fullState());
   });
 }

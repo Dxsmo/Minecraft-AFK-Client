@@ -346,6 +346,38 @@ describe("ItemWorthScanner", () => {
     rebooted.dispose();
   });
 
+  it("records what the server said when a reply is not understood", async () => {
+    fake.prices.set("dirt", "silent");
+    await scanner.start([A], 1);
+    // The server answers, but in a wording nothing recognises.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    fake.say(A, "Unbekanntes Format ohne Preis");
+
+    const scan = await waitForStatus(["COMPLETED"]);
+    expect(scan.missedCount).toBeGreaterThanOrEqual(1);
+    // Without this the admin sees only "no answer" and cannot tell whether the
+    // command failed, the wording changed, or nothing arrived at all.
+    const state = await scanner.getState();
+    expect(state.lastSamples).not.toBeNull();
+    expect(state.lastSamples!.command).toMatch(/^\/worth /);
+    expect(state.lastSamples!.lines.length).toBeGreaterThan(0);
+  });
+
+  it("accepts an unfamiliar reply wording that names the right item", async () => {
+    // The exact /worth sentence is server-specific; correlation is by item
+    // name, so a rephrased answer must still be recorded.
+    fake.prices.set("dirt", "silent");
+    fake.prices.set("pumpkin", "silent");
+    fake.prices.set("bedrock", "silent");
+    await scanner.start([A], 1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    fake.say(A, "[Shop] Dirt >> $42.5 pro Einheit");
+
+    await waitForStatus(["COMPLETED"]);
+    const state = await scanner.getState();
+    expect(state.values.find((v) => v.itemId === "dirt")?.value).toBe(42.5);
+  });
+
   it("reports the configured delay and a matching ETA", async () => {
     fake.prices.set("dirt", "silent");
     await scanner.start([A], 30);

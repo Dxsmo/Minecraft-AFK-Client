@@ -208,6 +208,10 @@ model ItemWorthScan {
 
   lastItemId String?
   lastError  String?
+  // JSON snapshot of the chat lines received during the last unanswered query.
+  // Diagnostic only: /worth reply wording is server-specific, so when nothing
+  // is understood the admin needs to see what actually came back.
+  lastSamplesJson String?
   startedAt  DateTime?
   finishedAt DateTime?
   createdAt  DateTime @default(now())
