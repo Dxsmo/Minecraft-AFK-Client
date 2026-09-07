@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseWorthReply,
   matchWorthReply,
+  worthCommandArgument,
   parseWorthNumber,
   worthChanged,
   nextQueryDelayMs,
@@ -190,5 +191,21 @@ describe("matchWorthReply", () => {
 
   it("ignores unrelated chatter that happens to contain the item name", () => {
     expect(matchWorthReply("Player1: wer verkauft dirt?", dirt)).toBeNull();
+  });
+});
+
+describe("worthCommandArgument", () => {
+  it("turns registry ids into the spaced form the server accepts", () => {
+    expect(worthCommandArgument("leaf_litter")).toBe("leaf litter");
+    expect(worthCommandArgument("dirt")).toBe("dirt");
+    expect(worthCommandArgument("waxed_oxidized_cut_copper_stairs")).toBe(
+      "waxed oxidized cut copper stairs",
+    );
+  });
+
+  it("produces an argument that still correlates with the reply", () => {
+    const item = { id: "leaf_litter", name: "Leaf Litter" };
+    const asked = worthCommandArgument(item.id);
+    expect(matchWorthReply(`Der Wert von ${asked} beträgt $3.`, item)?.value).toBe(3);
   });
 });

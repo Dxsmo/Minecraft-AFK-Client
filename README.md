@@ -211,7 +211,9 @@ additional users access afterwards in the account's **Settings** panel):
   it never searches the surroundings.
 - Item worth (admin-only, own page under Name Sniper at `/item-worth`): on
   request, walks the whole Minecraft 1.21.x item registry (~1500 items) asking
-  the server `/worth <item>` and records every price. The sweep is **global**,
+  the server `/worth <item>` and records every price. The item is passed in the
+  spaced form (`/worth leaf litter`, not `/worth leaf_litter`) because the
+  server rejects registry ids. The sweep is **global**,
   not per account: you pick any number of currently online bots and the queries
   are handed out round-robin (Bot 1 → item A, Bot 2 → item B, Bot 3 → item C,
   Bot 1 → item D, …). The configurable delay (1–60s, default 5s) counts between

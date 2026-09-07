@@ -1,7 +1,12 @@
 import { prisma } from "../database/prisma.js";
 import { logger } from "../logging/logger.js";
 import { ITEM_REGISTRY, type RegistryItem } from "./itemRegistry.js";
-import { matchWorthReply, worthChanged, type WorthReply } from "./itemWorth.js";
+import {
+  matchWorthReply,
+  worthChanged,
+  worthCommandArgument,
+  type WorthReply,
+} from "./itemWorth.js";
 import { clientManager, type ClientManager } from "./ClientManager.js";
 
 /** The scan is a singleton; this is the primary key of its one row. */
@@ -404,7 +409,7 @@ export class ItemWorthScanner {
           // reply was not understood instead of just "no answer".
           lastSamplesJson: JSON.stringify({
             itemId: item.id,
-            command: `/worth ${item.id}`,
+            command: `/worth ${worthCommandArgument(item.id)}`,
             lines: run.samples,
           }),
         });
@@ -488,7 +493,7 @@ export class ItemWorthScanner {
         finish(null);
       }, this.replyTimeoutMs);
 
-      if (!client.sendBackgroundCommand(`/worth ${item.id}`)) {
+      if (!client.sendBackgroundCommand(`/worth ${worthCommandArgument(item.id)}`)) {
         run.pending = null;
         if (run.replyTimer) clearTimeout(run.replyTimer);
         run.replyTimer = null;

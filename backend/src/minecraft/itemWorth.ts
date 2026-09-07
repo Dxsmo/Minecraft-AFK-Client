@@ -42,6 +42,15 @@ export function normaliseItemName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
 
+/**
+ * The argument to pass to `/worth`. The server does not accept registry ids:
+ * `/worth leaf_litter` is rejected, `/worth leaf litter` works. So underscores
+ * become spaces.
+ */
+export function worthCommandArgument(itemId: string): string {
+  return itemId.replace(/_/g, " ");
+}
+
 
 /**
  * Turn the numeric part of a price into a number.

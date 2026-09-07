@@ -25,6 +25,8 @@ class FakeManager {
   online = new Map<string, boolean>();
   /** Every (accountId, itemId) pair that was queried, in order. */
   asked: { accountId: string; itemId: string }[] = [];
+  /** The raw argument passed to /worth, to assert the exact command form. */
+  askedArgs: string[] = [];
   prices = new Map<string, number | null | "silent">();
   echoName = true;
   silentAll = false;
@@ -48,7 +50,11 @@ class FakeManager {
       }),
       sendBackgroundCommand(command: string): boolean {
         if (!self.online.get(accountId)) return false;
-        const itemId = command.replace("/worth ", "");
+        const argument = command.replace("/worth ", "");
+        self.askedArgs.push(argument);
+        // The server takes spaces, not registry ids, so map back to the id the
+        // test's price table is keyed by.
+        const itemId = argument.replace(/ /g, "_");
         self.asked.push({ accountId, itemId });
         const price = self.prices.get(itemId);
         if (price === "silent" || self.silentAll) return true;
@@ -376,6 +382,23 @@ describe("ItemWorthScanner", () => {
     await waitForStatus(["COMPLETED"]);
     const state = await scanner.getState();
     expect(state.values.find((v) => v.itemId === "dirt")?.value).toBe(42.5);
+  });
+
+  it("asks with spaces instead of underscores, which is what the server accepts", async () => {
+    // `/worth leaf_litter` is rejected by the server; `/worth leaf litter` works.
+    const underscored = makeScanner(fake, [{ id: "leaf_litter", name: "Leaf Litter" }]);
+    try {
+      fake.prices.set("leaf_litter", 3);
+      await underscored.start([A], 1);
+      await waitForStatus(["COMPLETED"]);
+      expect(fake.askedArgs).toEqual(["leaf litter"]);
+      expect((await underscored.getState()).values[0]).toMatchObject({
+        itemId: "leaf_litter",
+        value: 3,
+      });
+    } finally {
+      underscored.dispose();
+    }
   });
 
   it("reports the configured delay and a matching ETA", async () => {
