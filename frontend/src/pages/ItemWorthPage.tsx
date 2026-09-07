@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../lib/api";
-import type { ItemWorthState, ItemWorthValue } from "../lib/types";
+import type { ItemWorthAccount, ItemWorthState, ItemWorthValue } from "../lib/types";
 
 /** How often to re-poll while a scan is actually moving. */
 const POLL_INTERVAL_MS = 4000;
+/** Slower heartbeat when idle, just to keep the online badges honest. */
+const IDLE_POLL_INTERVAL_MS = 15000;
 
 type Filter = "changed" | "priced" | "all";
 
@@ -28,12 +30,12 @@ function formatMoney(value: number | null): string {
   return `$${value.toLocaleString("de-DE", { maximumFractionDigits: 2 })}`;
 }
 
-function formatEta(seconds: number | null): string | null {
+function formatDuration(seconds: number | null): string | null {
   if (seconds === null || seconds <= 0) return null;
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.round((seconds % 3600) / 60);
-  if (hours > 0) return `noch ca. ${hours} h ${minutes} min`;
-  return `noch ca. ${Math.max(1, minutes)} min`;
+  if (hours > 0) return `${hours} h ${minutes} min`;
+  return `${Math.max(1, minutes)} min`;
 }
 
 /**
@@ -60,51 +62,76 @@ function changeBadge(item: ItemWorthValue): { label: string; up: boolean } | nul
   return { label: `${delta > 0 ? "+" : ""}${delta.toFixed(0)}%`, up: delta > 0 };
 }
 
+function accountLabel(account: ItemWorthAccount): string {
+  return account.displayName?.trim() || account.name;
+}
+
 /**
- * Admin-only "Item Wert" tab: kicks off a full `/worth` sweep of the item
- * registry and shows the resulting price table, highlighting everything that
- * moved since the previous sweep so silent price changes become obvious.
+ * Admin-only "Item Wert" page: sweeps `/worth <item>` over the whole item
+ * registry, spread round-robin across several bots, and shows the resulting
+ * price table with everything that moved since the previous sweep highlighted.
  */
-export function ItemWorthPanel({ accountId }: { accountId: string }) {
+export function ItemWorthPage() {
   const [state, setState] = useState<ItemWorthState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>("changed");
   const [query, setQuery] = useState("");
-  // Avoids a stale poll from a previous account overwriting fresh state.
-  const accountRef = useRef(accountId);
-  accountRef.current = accountId;
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [delay, setDelay] = useState(5);
+  // The selection is only pre-filled once, so polling never fights the user.
+  const [selectionInit, setSelectionInit] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const next = await api.get<ItemWorthState>(`/minecraft/accounts/${accountId}/item-worth`);
-      if (accountRef.current === accountId) setState(next);
+      setState(await api.get<ItemWorthState>("/item-worth"));
     } catch (err) {
-      if (accountRef.current === accountId) {
-        setError(err instanceof ApiError ? err.message : "Item-Werte konnten nicht geladen werden");
-      }
+      setError(err instanceof ApiError ? err.message : "Item-Werte konnten nicht geladen werden");
     }
-  }, [accountId]);
+  }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  // Poll only while there is something to watch, so an idle tab is free.
+  // Adopt the running scan's settings so a page reload shows what is going on.
+  useEffect(() => {
+    if (!state || selectionInit) return;
+    setDelay(state.delaySeconds);
+    const online = new Set(state.accounts.filter((a) => a.online).map((a) => a.id));
+    const previous = state.accountIds.filter((id) => online.has(id));
+    setSelected(new Set(previous.length > 0 ? previous : online));
+    setSelectionInit(true);
+  }, [state, selectionInit]);
+
   const active = state?.status === "RUNNING" || state?.status === "PAUSED";
   useEffect(() => {
-    if (!active) return;
-    const timer = setInterval(() => void load(), POLL_INTERVAL_MS);
+    const timer = setInterval(
+      () => void load(),
+      active ? POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS,
+    );
     return () => clearInterval(timer);
   }, [active, load]);
+
+  function toggleAccount(account: ItemWorthAccount) {
+    if (!account.online) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(account.id)) next.delete(account.id);
+      else next.add(account.id);
+      return next;
+    });
+  }
 
   async function control(action: "start" | "stop") {
     setBusy(true);
     setError(null);
     try {
-      const next = await api.post<ItemWorthState>(
-        `/minecraft/accounts/${accountId}/item-worth/${action}`,
-      );
+      const body =
+        action === "start"
+          ? { accountIds: [...selected], delaySeconds: delay }
+          : undefined;
+      const next = await api.post<ItemWorthState>(`/item-worth/${action}`, body);
       setState(next);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Aktion fehlgeschlagen");
@@ -121,8 +148,7 @@ export function ItemWorthPanel({ accountId }: { accountId: string }) {
     else if (filter === "priced") list = list.filter((item) => item.value !== null);
     if (needle) {
       list = list.filter(
-        (item) =>
-          item.itemName.toLowerCase().includes(needle) || item.itemId.includes(needle),
+        (item) => item.itemName.toLowerCase().includes(needle) || item.itemId.includes(needle),
       );
     }
     return [...list].sort((a, b) => {
@@ -138,7 +164,7 @@ export function ItemWorthPanel({ accountId }: { accountId: string }) {
 
   if (!state) {
     return (
-      <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+      <p className="text-sm" style={{ color: "var(--text-subtle)" }}>
         {error ?? "Lade Item-Werte…"}
       </p>
     );
@@ -148,44 +174,99 @@ export function ItemWorthPanel({ accountId }: { accountId: string }) {
   const percent = total > 0 ? Math.min(100, (state.cursor / total) * 100) : 0;
   const running = state.status === "RUNNING";
   const paused = state.status === "PAUSED";
-  const eta = formatEta(state.etaSeconds);
+  const eta = formatDuration(state.etaSeconds);
   const scanned = state.values.length;
+  const onlineAccounts = state.accounts.filter((a) => a.online);
+  const canStart = selected.size > 0 && !busy;
+  // Each bot only speaks every (delay * bots) seconds — that is the whole point
+  // of spreading the scan, so show it explicitly.
+  const perBotSeconds = delay * Math.max(1, selected.size);
+  const fullRunSeconds = state.registryTotal * delay;
 
   return (
-    <>
-      <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-        Fragt nacheinander <b>jedes</b> der {state.registryTotal} Items mit{" "}
-        <code>/worth &lt;item&gt;</code> ab und speichert den Preis. Zwischen zwei Abfragen
-        liegen zufällig 5–10 Sekunden, ein kompletter Durchlauf dauert daher rund 3 Stunden.
-        Ab dem zweiten Scan werden alle Preisänderungen markiert — so fallen auch{" "}
-        <b>Off-Metas</b> auf, die nicht angekündigt wurden. Der Scan startet nur, wenn du ihn
-        hier startest.
-      </p>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-semibold" style={{ color: "var(--text)" }}>
+          Item Wert
+        </h1>
+        <p className="mt-0.5 max-w-3xl text-sm" style={{ color: "var(--text-muted)" }}>
+          Fragt nacheinander <b>jedes</b> der {state.registryTotal} Items mit{" "}
+          <code>/worth &lt;item&gt;</code> ab und speichert den Preis. Die Abfragen werden
+          reihum auf die gewählten Accounts verteilt (Acc 1 → Item A, Acc 2 → Item B, …), so
+          bleibt das Tempo hoch, ohne dass ein einzelner Bot auffällt. Ab dem zweiten Scan
+          werden alle Preisänderungen markiert — so fallen auch <b>Off-Metas</b> auf, die nicht
+          angekündigt wurden.
+        </p>
+      </div>
 
-      {/* Progress card. */}
+      {/* Configuration. */}
       <div
         className="rounded-xl border p-4"
         style={{ borderColor: "var(--border)", backgroundColor: "var(--surface)" }}
       >
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span
-              className={running ? "item-worth-pulse" : ""}
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: 999,
-                backgroundColor: STATUS_COLOR[state.status],
-                display: "inline-block",
-              }}
-            />
-            <span className="text-sm font-medium">{STATUS_LABEL[state.status]}</span>
-            {state.scanNumber > 0 && (
-              <span className="text-[11px]" style={{ color: "var(--text-subtle)" }}>
-                Scan #{state.scanNumber}
-              </span>
-            )}
+        <div className="mb-2 flex items-baseline justify-between gap-3">
+          <h2 className="text-sm font-medium">Accounts für den Scan</h2>
+          <span className="text-[11px]" style={{ color: "var(--text-subtle)" }}>
+            {onlineAccounts.length} von {state.accounts.length} online
+          </span>
+        </div>
+
+        {state.accounts.length === 0 ? (
+          <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+            Es gibt noch keine Minecraft-Accounts.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {state.accounts.map((account) => {
+              const isSelected = selected.has(account.id);
+              return (
+                <button
+                  key={account.id}
+                  type="button"
+                  disabled={!account.online || running}
+                  onClick={() => toggleAccount(account)}
+                  data-active={isSelected && account.online}
+                  className="item-worth-chip"
+                  title={account.online ? undefined : `Offline (${account.status})`}
+                  style={
+                    account.online
+                      ? undefined
+                      : { opacity: 0.4, cursor: "not-allowed", textDecoration: "line-through" }
+                  }
+                >
+                  <span
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: 999,
+                      display: "inline-block",
+                      marginRight: 6,
+                      backgroundColor: account.online ? "#4ade80" : "var(--text-subtle)",
+                    }}
+                  />
+                  {accountLabel(account)}
+                </button>
+              );
+            })}
           </div>
+        )}
+
+        <div className="mt-4 flex flex-wrap items-end gap-4">
+          <label className="min-w-[16rem] flex-1">
+            <span className="mb-1 block text-xs" style={{ color: "var(--text-muted)" }}>
+              Pause zwischen zwei Abfragen: <b>{delay}s</b>
+            </span>
+            <input
+              type="range"
+              min={state.minDelaySeconds}
+              max={state.maxDelaySeconds}
+              step={1}
+              value={delay}
+              disabled={running}
+              onChange={(event) => setDelay(Number(event.target.value))}
+              className="w-full accent-indigo-500"
+            />
+          </label>
 
           {running || (paused && state.resumable) ? (
             <button
@@ -200,11 +281,42 @@ export function ItemWorthPanel({ accountId }: { accountId: string }) {
             <button
               type="button"
               onClick={() => void control("start")}
-              disabled={busy}
+              disabled={!canStart}
               className="btn btn-primary btn-sm"
             >
               {state.scanNumber > 0 ? "Neuen Scan starten" : "Scan starten"}
             </button>
+          )}
+        </div>
+
+        <p className="mt-2 text-[11px]" style={{ color: "var(--text-subtle)" }}>
+          {selected.size === 0
+            ? "Wähle mindestens einen Online-Account aus."
+            : `${selected.size} Account${selected.size === 1 ? "" : "s"} · ein Item alle ${delay}s · jeder Bot schreibt nur alle ${perBotSeconds}s · kompletter Durchlauf ca. ${formatDuration(fullRunSeconds)}`}
+        </p>
+      </div>
+
+      {/* Progress. */}
+      <div
+        className="rounded-xl border p-4"
+        style={{ borderColor: "var(--border)", backgroundColor: "var(--surface)" }}
+      >
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <span
+            className={running ? "item-worth-pulse" : ""}
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: 999,
+              backgroundColor: STATUS_COLOR[state.status],
+              display: "inline-block",
+            }}
+          />
+          <span className="text-sm font-medium">{STATUS_LABEL[state.status]}</span>
+          {state.scanNumber > 0 && (
+            <span className="text-[11px]" style={{ color: "var(--text-subtle)" }}>
+              Scan #{state.scanNumber}
+            </span>
           )}
         </div>
 
@@ -223,18 +335,16 @@ export function ItemWorthPanel({ accountId }: { accountId: string }) {
             <span style={{ color: "#fbbf24" }}>{state.changedCount} Änderungen</span>
           )}
           {state.missedCount > 0 && (
-            <span style={{ color: "var(--text-subtle)" }}>
-              {state.missedCount} ohne Antwort
-            </span>
+            <span style={{ color: "var(--text-subtle)" }}>{state.missedCount} ohne Antwort</span>
           )}
-          {running && eta && <span style={{ color: "var(--text-subtle)" }}>{eta}</span>}
+          {running && eta && <span style={{ color: "var(--text-subtle)" }}>noch ca. {eta}</span>}
         </div>
 
         {paused && state.lastError && (
           <p className="mt-3 text-[11px]" style={{ color: state.resumable ? "#fbbf24" : "#f87171" }}>
             {state.lastError}
             {state.resumable
-              ? " — der Scan macht automatisch weiter, sobald der Bot wieder online ist."
+              ? " — der Scan macht automatisch weiter, sobald wieder ein Bot online ist."
               : " — bitte prüfen und den Scan danach neu starten."}
           </p>
         )}
@@ -243,7 +353,7 @@ export function ItemWorthPanel({ accountId }: { accountId: string }) {
 
       {/* Results. */}
       {scanned > 0 && (
-        <>
+        <div className="space-y-3">
           <div className="flex flex-wrap items-center gap-2">
             {(
               [
@@ -266,7 +376,7 @@ export function ItemWorthPanel({ accountId }: { accountId: string }) {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Item suchen…"
-              className="ml-auto min-w-[8rem] flex-1 rounded-lg px-2 py-1 text-xs"
+              className="ml-auto min-w-[8rem] max-w-xs flex-1 rounded-lg px-2 py-1 text-xs"
               style={{
                 backgroundColor: "var(--bg-elev)",
                 border: "1px solid var(--border)",
@@ -283,7 +393,7 @@ export function ItemWorthPanel({ accountId }: { accountId: string }) {
             </p>
           ) : (
             <div
-              className="max-h-96 overflow-y-auto rounded-xl border"
+              className="max-h-[32rem] overflow-y-auto rounded-xl border"
               style={{ borderColor: "var(--border)" }}
             >
               {rows.map((item, index) => {
@@ -340,8 +450,8 @@ export function ItemWorthPanel({ accountId }: { accountId: string }) {
               })}
             </div>
           )}
-        </>
+        </div>
       )}
-    </>
+    </div>
   );
 }

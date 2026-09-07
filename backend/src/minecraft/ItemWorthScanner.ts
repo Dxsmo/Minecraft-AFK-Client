@@ -1,20 +1,29 @@
 import { prisma } from "../database/prisma.js";
 import { logger } from "../logging/logger.js";
 import { ITEM_REGISTRY, type RegistryItem } from "./itemRegistry.js";
-import { parseWorthReply, worthChanged, nextQueryDelayMs, type WorthReply } from "./itemWorth.js";
+import { parseWorthReply, worthChanged, type WorthReply } from "./itemWorth.js";
 import { clientManager, type ClientManager } from "./ClientManager.js";
+
+/** The scan is a singleton; this is the primary key of its one row. */
+const SCAN_ID = "global";
 
 /** How long to wait for the server to answer a single `/worth` query. */
 const REPLY_TIMEOUT_MS = 8_000;
-/** Random pause between two queries, as requested: 5 to 10 seconds. */
-const MIN_DELAY_SECONDS = 5;
-const MAX_DELAY_SECONDS = 10;
+
+/** Bounds for the admin-configurable pause between two queries. */
+export const MIN_DELAY_SECONDS = 1;
+export const MAX_DELAY_SECONDS = 60;
+export const DEFAULT_DELAY_SECONDS = 5;
+
 /**
  * Give up after this many consecutive unanswered queries. Something is wrong
  * with the server or the command (renamed, permission lost), and hammering it
- * for another three hours helps nobody.
+ * for another few hours helps nobody.
  */
 const MAX_CONSECUTIVE_MISSES = 25;
+
+/** How long to sit idle while no selected bot is online before re-checking. */
+const OFFLINE_RECHECK_MS = 5_000;
 
 export type ScanStatus = "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED" | "CANCELLED";
 
@@ -22,11 +31,31 @@ interface RunState {
   cancelled: boolean;
   /** Resolver for the query currently in flight, if any. */
   pending: ((reply: WorthReply | null) => void) | null;
+  /** Which account was asked, so another bot's chat cannot answer for it. */
+  expectedAccountId: string | null;
   /** Display name of the item currently being asked about, for correlation. */
   expectedName: string | null;
   replyTimer: NodeJS.Timeout | null;
   delayTimer: NodeJS.Timeout | null;
   wakeDelay: (() => void) | null;
+}
+
+/** Knobs that only the tests change; production uses the defaults above. */
+export interface ItemWorthScannerOptions {
+  items?: readonly RegistryItem[];
+  replyTimeoutMs?: number;
+  /** Multiplier applied to the configured delay, so tests can run instantly. */
+  delayScale?: number;
+  offlineRecheckMs?: number;
+}
+
+export function parseAccountIds(json: string): string[] {
+  try {
+    const parsed = JSON.parse(json);
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -35,46 +64,46 @@ interface RunState {
  * price changes ("off metas").
  *
  * Design notes:
+ * - One site-wide scan, not one per account: a price belongs to the server, so
+ *   splitting the work over several bots only changes *who* asks, not the
+ *   answer. Queries go round-robin over the selected bots, which means each
+ *   individual bot sends far fewer commands and draws much less attention,
+ *   while the scan as a whole finishes proportionally faster.
+ * - The configured delay is global: with 3 bots and 2s, one item leaves every
+ *   2s but any single bot only speaks every 6s.
  * - The scan lives here in Node, not in the Rust bot: it is a slow, stateful,
  *   database-backed job, and keeping it out of the bot means no bot rebuild and
  *   no interference with the bot's foreground task queue (auto-sell, spawner).
- * - Progress is persisted after *every* item. A scan takes ~3 hours, so it has
- *   to survive a disconnect, a bot restart and a backend restart.
- * - A scan only ever runs because an admin pressed the button. On disconnect it
- *   parks itself in PAUSED and resumes automatically once the bot is back.
+ * - Progress is persisted after *every* item, so a scan survives a disconnect,
+ *   a bot restart and a backend restart.
  */
-/** Knobs that only the tests change; production uses the defaults above. */
-export interface ItemWorthScannerOptions {
-  items?: readonly RegistryItem[];
-  minDelaySeconds?: number;
-  maxDelaySeconds?: number;
-  replyTimeoutMs?: number;
-}
-
 export class ItemWorthScanner {
-  private runs = new Map<string, RunState>();
+  private run: RunState | null = null;
   private readonly items: readonly RegistryItem[];
-  private readonly minDelaySeconds: number;
-  private readonly maxDelaySeconds: number;
   private readonly replyTimeoutMs: number;
+  private readonly delayScale: number;
+  private readonly offlineRecheckMs: number;
+  /** Round-robin cursor over the selected accounts. */
+  private rrIndex = 0;
 
   constructor(private manager: ClientManager, options: ItemWorthScannerOptions = {}) {
     this.items = options.items ?? ITEM_REGISTRY;
-    this.minDelaySeconds = options.minDelaySeconds ?? MIN_DELAY_SECONDS;
-    this.maxDelaySeconds = options.maxDelaySeconds ?? MAX_DELAY_SECONDS;
     this.replyTimeoutMs = options.replyTimeoutMs ?? REPLY_TIMEOUT_MS;
+    this.delayScale = options.delayScale ?? 1;
+    this.offlineRecheckMs = options.offlineRecheckMs ?? OFFLINE_RECHECK_MS;
 
     manager.onChatEvent(({ minecraftAccountId, message }) => {
       this.handleChat(minecraftAccountId, message);
     });
     manager.onStatusEvent((status) => {
-      if (status.status === "ONLINE") void this.resumeIfPending(status.id);
+      // A bot coming back online may be the only one left to continue with.
+      if (status.status === "ONLINE") void this.resumeIfPending();
     });
   }
 
   /**
    * Called once at boot. A scan that was RUNNING when the process died is
-   * parked in PAUSED; it resumes on its own as soon as the bot reports ONLINE.
+   * parked in PAUSED; it resumes on its own as soon as a bot reports ONLINE.
    */
   async init(): Promise<void> {
     await prisma.itemWorthScan.updateMany({
@@ -83,16 +112,15 @@ export class ItemWorthScanner {
     });
   }
 
-  /** Stop every in-flight scan (process shutdown). Progress stays in the DB. */
+  /** Stop the in-flight scan (process shutdown). Progress stays in the DB. */
   dispose(): void {
-    for (const accountId of [...this.runs.keys()]) this.abortRun(accountId);
+    this.abortRun();
   }
 
-  async getState(accountId: string) {
+  async getState() {
     const [scan, values] = await Promise.all([
-      prisma.itemWorthScan.findUnique({ where: { minecraftAccountId: accountId } }),
+      prisma.itemWorthScan.findUnique({ where: { id: SCAN_ID } }),
       prisma.itemWorthValue.findMany({
-        where: { minecraftAccountId: accountId },
         orderBy: { itemName: "asc" },
         select: {
           itemId: true,
@@ -109,11 +137,13 @@ export class ItemWorthScanner {
     const status = (scan?.status ?? "IDLE") as ScanStatus;
     const cursor = scan?.cursor ?? 0;
     const total = scan?.total || this.items.length;
+    const delaySeconds = scan?.delaySeconds ?? DEFAULT_DELAY_SECONDS;
     const remaining = Math.max(0, total - cursor);
-    // Average pace, used for the "done in ~x" hint in the UI.
+    const resumable = scan?.resumable ?? true;
+    // A paused-and-given-up scan will never move again, so it has no ETA.
     const etaSeconds =
-      status === "RUNNING" || (status === "PAUSED" && (scan?.resumable ?? true))
-        ? Math.round((remaining * (this.minDelaySeconds + this.maxDelaySeconds)) / 2)
+      status === "RUNNING" || (status === "PAUSED" && resumable)
+        ? remaining * delaySeconds
         : null;
 
     return {
@@ -123,13 +153,17 @@ export class ItemWorthScanner {
       scanNumber: scan?.scanNumber ?? 0,
       changedCount: scan?.changedCount ?? 0,
       missedCount: scan?.missedCount ?? 0,
+      resumable,
+      delaySeconds,
+      accountIds: parseAccountIds(scan?.accountIdsJson ?? "[]"),
       lastItemId: scan?.lastItemId ?? null,
       lastError: scan?.lastError ?? null,
-      resumable: scan?.resumable ?? true,
       startedAt: scan?.startedAt?.toISOString() ?? null,
       finishedAt: scan?.finishedAt?.toISOString() ?? null,
       etaSeconds,
       registryTotal: this.items.length,
+      minDelaySeconds: MIN_DELAY_SECONDS,
+      maxDelaySeconds: MAX_DELAY_SECONDS,
       values: values.map((v) => ({
         itemId: v.itemId,
         itemName: v.itemName,
@@ -142,56 +176,51 @@ export class ItemWorthScanner {
     };
   }
 
-  /** Begin a fresh scan from item 0. Throws if one is already running. */
-  async start(accountId: string): Promise<void> {
-    const existing = await prisma.itemWorthScan.findUnique({
-      where: { minecraftAccountId: accountId },
-    });
+  /** Begin a fresh scan from item 0. Throws if one is already in progress. */
+  async start(accountIds: string[], delaySeconds: number): Promise<void> {
+    const existing = await prisma.itemWorthScan.findUnique({ where: { id: SCAN_ID } });
     if (existing && (existing.status === "RUNNING" || existing.status === "PAUSED")) {
       throw new Error("A scan is already in progress");
     }
+    if (accountIds.length === 0) {
+      throw new Error("Select at least one account");
+    }
 
     const scanNumber = (existing?.scanNumber ?? 0) + 1;
-    // Clear the previous run's change highlights so the tab only ever shows
+    // Clear the previous run's change highlights so the page only ever shows
     // differences introduced by the newest scan.
-    await prisma.itemWorthValue.updateMany({
-      where: { minecraftAccountId: accountId },
-      data: { changedAt: null },
-    });
+    await prisma.itemWorthValue.updateMany({ data: { changedAt: null } });
+
+    const shared = {
+      status: "RUNNING",
+      cursor: 0,
+      total: this.items.length,
+      scanNumber,
+      resumable: true,
+      delaySeconds,
+      accountIdsJson: JSON.stringify(accountIds),
+      changedCount: 0,
+      missedCount: 0,
+      lastItemId: null,
+      lastError: null,
+      startedAt: new Date(),
+      finishedAt: null,
+    };
     await prisma.itemWorthScan.upsert({
-      where: { minecraftAccountId: accountId },
-      create: {
-        minecraftAccountId: accountId,
-        status: "RUNNING",
-        cursor: 0,
-        total: this.items.length,
-        scanNumber,
-        resumable: true,
-        startedAt: new Date(),
-      },
-      update: {
-        status: "RUNNING",
-        cursor: 0,
-        total: this.items.length,
-        scanNumber,
-        resumable: true,
-        changedCount: 0,
-        missedCount: 0,
-        lastItemId: null,
-        lastError: null,
-        startedAt: new Date(),
-        finishedAt: null,
-      },
+      where: { id: SCAN_ID },
+      create: { id: SCAN_ID, ...shared },
+      update: shared,
     });
 
-    this.spawnRun(accountId);
+    this.rrIndex = 0;
+    this.spawnRun();
   }
 
   /** Cancel a running or paused scan. Already-scanned prices are kept. */
-  async stop(accountId: string): Promise<void> {
-    this.abortRun(accountId);
+  async stop(): Promise<void> {
+    this.abortRun();
     await prisma.itemWorthScan.updateMany({
-      where: { minecraftAccountId: accountId, status: { in: ["RUNNING", "PAUSED"] } },
+      where: { id: SCAN_ID, status: { in: ["RUNNING", "PAUSED"] } },
       data: { status: "CANCELLED", finishedAt: new Date() },
     });
   }
@@ -199,8 +228,11 @@ export class ItemWorthScanner {
   // ---------------------------------------------------------------- internals
 
   private handleChat(accountId: string, message: string): void {
-    const run = this.runs.get(accountId);
+    const run = this.run;
     if (!run?.pending) return;
+    // Only the bot we just asked may answer for this item.
+    if (run.expectedAccountId !== null && run.expectedAccountId !== accountId) return;
+
     const reply = parseWorthReply(message);
     if (!reply) return;
     // Only accept a reply that names the item we actually asked about. Without
@@ -214,6 +246,7 @@ export class ItemWorthScanner {
     ) {
       return;
     }
+
     const resolve = run.pending;
     run.pending = null;
     if (run.replyTimer) {
@@ -223,50 +256,52 @@ export class ItemWorthScanner {
     resolve(reply);
   }
 
-  private async resumeIfPending(accountId: string): Promise<void> {
-    if (this.runs.has(accountId)) return;
-    const scan = await prisma.itemWorthScan.findUnique({
-      where: { minecraftAccountId: accountId },
-    });
+  private async resumeIfPending(): Promise<void> {
+    if (this.run) return;
+    const scan = await prisma.itemWorthScan.findUnique({ where: { id: SCAN_ID } });
     if (!scan || (scan.status !== "PAUSED" && scan.status !== "RUNNING")) return;
     // A scan that gave up stays parked until an admin starts a new one. Status
     // events fire on every health/balance update, not just on transitions, so
     // without this guard the give-up state would be undone within seconds.
     if (!scan.resumable) return;
+
     await prisma.itemWorthScan.update({
-      where: { minecraftAccountId: accountId },
+      where: { id: SCAN_ID },
       data: { status: "RUNNING", lastError: null },
     });
-    logger.info({ accountId, cursor: scan.cursor }, "Resuming item worth scan");
-    this.spawnRun(accountId);
+    logger.info({ cursor: scan.cursor }, "Resuming item worth scan");
+    this.spawnRun();
   }
 
-  private spawnRun(accountId: string): void {
-    if (this.runs.has(accountId)) return;
+  private spawnRun(): void {
+    if (this.run) return;
     const run: RunState = {
       cancelled: false,
       pending: null,
+      expectedAccountId: null,
       expectedName: null,
       replyTimer: null,
       delayTimer: null,
       wakeDelay: null,
     };
-    this.runs.set(accountId, run);
-    void this.runLoop(accountId, run).catch((err) => {
-      logger.error({ err, accountId }, "Item worth scan crashed");
-      return prisma.itemWorthScan
-        .updateMany({
-          where: { minecraftAccountId: accountId, status: "RUNNING" },
-          data: { status: "PAUSED", lastError: String(err?.message ?? err), resumable: false },
-        })
-        .catch(() => undefined);
-    }).finally(() => {
-      if (this.runs.get(accountId) === run) this.runs.delete(accountId);
-    });
+    this.run = run;
+    void this.runLoop(run)
+      .catch((err) => {
+        logger.error({ err }, "Item worth scan crashed");
+        return prisma.itemWorthScan
+          .updateMany({
+            where: { id: SCAN_ID, status: "RUNNING" },
+            data: { status: "PAUSED", lastError: String(err?.message ?? err), resumable: false },
+          })
+          .catch(() => undefined);
+      })
+      .finally(() => {
+        if (this.run === run) this.run = null;
+      });
   }
 
-  private abortRun(accountId: string): void {
-    const run = this.runs.get(accountId);
+  private abortRun(): void {
+    const run = this.run;
     if (!run) return;
     run.cancelled = true;
     if (run.replyTimer) clearTimeout(run.replyTimer);
@@ -274,49 +309,66 @@ export class ItemWorthScanner {
     run.pending?.(null);
     run.pending = null;
     run.wakeDelay?.();
-    this.runs.delete(accountId);
+    this.run = null;
   }
 
-  private async runLoop(accountId: string, run: RunState): Promise<void> {
+  /**
+   * The next selected account that is actually online, advancing the
+   * round-robin cursor. Offline bots are simply skipped and rejoin the rotation
+   * automatically as soon as they are back. Returns null when none are online.
+   */
+  private pickAccount(accountIds: string[]): string | null {
+    for (let attempt = 0; attempt < accountIds.length; attempt += 1) {
+      const accountId = accountIds[this.rrIndex % accountIds.length]!;
+      this.rrIndex = (this.rrIndex + 1) % accountIds.length;
+      if (this.manager.get(accountId)?.getStatus().status === "ONLINE") return accountId;
+    }
+    return null;
+  }
+
+  private async runLoop(run: RunState): Promise<void> {
     let consecutiveMisses = 0;
 
     while (!run.cancelled) {
-      const scan = await prisma.itemWorthScan.findUnique({
-        where: { minecraftAccountId: accountId },
-      });
+      const scan = await prisma.itemWorthScan.findUnique({ where: { id: SCAN_ID } });
       // Deleted, cancelled or restarted from elsewhere: this loop is obsolete.
       if (!scan || scan.status !== "RUNNING") return;
 
       if (scan.cursor >= this.items.length) {
         await prisma.itemWorthScan.update({
-          where: { minecraftAccountId: accountId },
+          where: { id: SCAN_ID },
           data: { status: "COMPLETED", finishedAt: new Date() },
         });
-        logger.info({ accountId, changed: scan.changedCount }, "Item worth scan completed");
+        logger.info({ changed: scan.changedCount }, "Item worth scan completed");
         return;
       }
 
-      const client = this.manager.get(accountId);
-      if (!client || client.getStatus().status !== "ONLINE") {
-        // Park the scan; the status listener restarts it once the bot is back.
-        await this.pause(accountId, "Bot offline - scan paused, resumes automatically");
-        return;
+      const accountIds = parseAccountIds(scan.accountIdsJson);
+      const accountId = this.pickAccount(accountIds);
+      if (!accountId) {
+        // Nobody to ask right now. Idle briefly and look again rather than
+        // burning the item — a bot may come back at any moment.
+        await this.sleep(run, this.offlineRecheckMs);
+        if (run.cancelled) return;
+        if (this.pickAccount(accountIds) === null) {
+          await this.pause("Kein ausgewählter Account online - Scan wartet");
+          return;
+        }
+        continue;
       }
 
+      const client = this.manager.get(accountId)!;
       const item = this.items[scan.cursor]!;
-      const reply = await this.query(run, client, item.id, item.name);
+      const reply = await this.query(run, client, accountId, item.id, item.name);
       if (run.cancelled) return;
 
-      // Losing the connection mid-query must not burn the item: park the scan
-      // and let it retry this exact item once the bot is back.
-      if (reply === null && client.getStatus().status !== "ONLINE") {
-        await this.pause(accountId, "Bot offline - scan paused, resumes automatically");
-        return;
-      }
+      // Losing the connection mid-query must not burn the item: retry it with
+      // the next bot in the rotation.
+      if (reply === null && client.getStatus().status !== "ONLINE") continue;
 
       if (reply === null) {
         consecutiveMisses += 1;
-        const advanced = await this.advance(accountId, scan.scanNumber, {
+        const advanced = await this.advance(scan.scanNumber, {
           cursor: scan.cursor + 1,
           missedCount: { increment: 1 },
           lastItemId: item.id,
@@ -324,16 +376,15 @@ export class ItemWorthScanner {
         if (!advanced) return;
         if (consecutiveMisses >= MAX_CONSECUTIVE_MISSES) {
           await this.pause(
-            accountId,
-            `No answer to /worth for ${MAX_CONSECUTIVE_MISSES} items in a row - scan stopped`,
+            `Keine Antwort auf /worth bei ${MAX_CONSECUTIVE_MISSES} Items in Folge - Scan gestoppt`,
             false,
           );
           return;
         }
       } else {
         consecutiveMisses = 0;
-        const changed = await this.persistValue(accountId, item.id, item.name, reply.value, scan.scanNumber);
-        const advanced = await this.advance(accountId, scan.scanNumber, {
+        const changed = await this.persistValue(item.id, item.name, reply.value, scan.scanNumber);
+        const advanced = await this.advance(scan.scanNumber, {
           cursor: scan.cursor + 1,
           lastItemId: item.id,
           lastError: null,
@@ -342,16 +393,10 @@ export class ItemWorthScanner {
         if (!advanced) return;
       }
 
-      await this.sleep(run, nextQueryDelayMs(this.minDelaySeconds, this.maxDelaySeconds));
+      await this.sleep(run, scan.delaySeconds * 1000 * this.delayScale);
     }
   }
 
-  /**
-   * Park a running scan. `resumable` false means the scan gave up rather than
-   * merely losing the bot, so it must NOT be picked up again by the status
-   * listener - otherwise the give-up guard would be undone by the next health
-   * tick and the scan would hammer the server for its full three hours.
-   */
   /**
    * Write one item's progress, but only if this loop still owns the scan.
    * `stop()` followed by `start()` resets the cursor to 0 while an old loop may
@@ -359,30 +404,33 @@ export class ItemWorthScanner {
    * that stale write a no-op instead of silently skipping hundreds of items.
    * Returns false when the write was rejected, i.e. this loop is obsolete.
    */
-  private async advance(
-    accountId: string,
-    scanNumber: number,
-    data: Record<string, unknown>,
-  ): Promise<boolean> {
+  private async advance(scanNumber: number, data: Record<string, unknown>): Promise<boolean> {
     const result = await prisma.itemWorthScan.updateMany({
-      where: { minecraftAccountId: accountId, status: "RUNNING", scanNumber },
+      where: { id: SCAN_ID, status: "RUNNING", scanNumber },
       data,
     });
     return result.count > 0;
   }
 
-  private async pause(accountId: string, reason: string, resumable = true): Promise<void> {
-    logger.info({ accountId, resumable }, `Item worth scan paused: ${reason}`);
+  /**
+   * Park a running scan. `resumable` false means the scan gave up rather than
+   * merely losing its bots, so it must NOT be picked up again by the status
+   * listener - otherwise the give-up guard would be undone by the next health
+   * tick and the scan would hammer the server for hours.
+   */
+  private async pause(reason: string, resumable = true): Promise<void> {
+    logger.info({ resumable }, `Item worth scan paused: ${reason}`);
     await prisma.itemWorthScan.updateMany({
-      where: { minecraftAccountId: accountId, status: "RUNNING" },
+      where: { id: SCAN_ID, status: "RUNNING" },
       data: { status: "PAUSED", lastError: reason, resumable },
     });
   }
 
-  /** Send one `/worth <item>` and wait for the reply, or null on timeout. */
+  /** Send one `/worth <item>` from one bot and await its reply. */
   private query(
     run: RunState,
     client: { sendBackgroundCommand(command: string): boolean },
+    accountId: string,
     itemId: string,
     expectedName: string,
   ): Promise<WorthReply | null> {
@@ -391,10 +439,12 @@ export class ItemWorthScanner {
       const finish = (reply: WorthReply | null) => {
         if (settled) return;
         settled = true;
+        run.expectedAccountId = null;
         run.expectedName = null;
         resolve(reply);
       };
 
+      run.expectedAccountId = accountId;
       run.expectedName = expectedName;
       run.pending = finish;
       run.replyTimer = setTimeout(() => {
@@ -414,23 +464,19 @@ export class ItemWorthScanner {
 
   /** Store one price, carrying the old one over as `previousValue`. */
   private async persistValue(
-    accountId: string,
     itemId: string,
     itemName: string,
     value: number | null,
     scanNumber: number,
   ): Promise<boolean> {
-    const existing = await prisma.itemWorthValue.findUnique({
-      where: { minecraftAccountId_itemId: { minecraftAccountId: accountId, itemId } },
-    });
+    const existing = await prisma.itemWorthValue.findUnique({ where: { itemId } });
 
     // The very first scan has nothing to compare against, so nothing "changed".
     const changed = existing ? worthChanged(existing.value, value) : false;
 
     await prisma.itemWorthValue.upsert({
-      where: { minecraftAccountId_itemId: { minecraftAccountId: accountId, itemId } },
+      where: { itemId },
       create: {
-        minecraftAccountId: accountId,
         itemId,
         itemName,
         value,

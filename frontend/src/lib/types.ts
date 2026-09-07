@@ -181,6 +181,16 @@ export interface ItemWorthValue {
 
 export type ItemWorthStatus = "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED" | "CANCELLED";
 
+/** A Minecraft account offered as a scan worker, with its live availability. */
+export interface ItemWorthAccount {
+  id: string;
+  name: string;
+  displayName: string | null;
+  status: ClientStatus;
+  /** Only online bots can answer `/worth`, so offline ones are unselectable. */
+  online: boolean;
+}
+
 /** Progress and results of the admin-only `/worth` price scan. */
 export interface ItemWorthState {
   status: ItemWorthStatus;
@@ -189,6 +199,13 @@ export interface ItemWorthState {
   scanNumber: number;
   changedCount: number;
   missedCount: number;
+  /** Seconds between two checks overall, shared by all participating bots. */
+  delaySeconds: number;
+  minDelaySeconds: number;
+  maxDelaySeconds: number;
+  /** The accounts the running/last scan is spread across. */
+  accountIds: string[];
+  accounts: ItemWorthAccount[];
   lastItemId: string | null;
   lastError: string | null;
   /** False when the scan gave up; it will not resume by itself. */

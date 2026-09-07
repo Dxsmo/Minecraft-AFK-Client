@@ -10,6 +10,7 @@ import { LogsPage } from "./pages/LogsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { NameSniperPage } from "./pages/NameSniperPage";
 import { SniperAccountDetailPage } from "./pages/SniperAccountDetailPage";
+import { ItemWorthPage } from "./pages/ItemWorthPage";
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
               <Route element={<RequireAdmin />}>
                 <Route path="/namesniper" element={<NameSniperPage />} />
                 <Route path="/namesniper/:id" element={<SniperAccountDetailPage />} />
+                <Route path="/item-worth" element={<ItemWorthPage />} />
                 <Route path="/users" element={<UsersPage />} />
                 <Route path="/logs" element={<LogsPage />} />
               </Route>

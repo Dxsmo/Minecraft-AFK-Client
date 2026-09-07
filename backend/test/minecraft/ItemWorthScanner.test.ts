@@ -16,20 +16,18 @@ type StatusListener = (status: { id: string; status: string }) => void;
 /**
  * Stands in for ClientManager + MinecraftClient. `prices` decides what the
  * fake server answers for each item id; a missing entry means "no price", and
- * an explicit `null` price entry means the server stays silent (timeout).
+ * a `"silent"` entry means the server never answers.
  */
 class FakeManager {
   chatListeners: ChatListener[] = [];
   statusListeners: StatusListener[] = [];
-  online = true;
-  asked: string[] = [];
+  /** Per-account online flag, so tests can drop a single bot. */
+  online = new Map<string, boolean>();
+  /** Every (accountId, itemId) pair that was queried, in order. */
+  asked: { accountId: string; itemId: string }[] = [];
   prices = new Map<string, number | null | "silent">();
-  /** When false the fake answers about the wrong item, to test correlation. */
   echoName = true;
-  /** When true the fake never answers at all. */
   silentAll = false;
-
-  constructor(private accountId: string) {}
 
   onChatEvent(listener: ChatListener) {
     this.chatListeners.push(listener);
@@ -41,14 +39,17 @@ class FakeManager {
     return () => undefined;
   }
 
-  get(_accountId: string) {
+  get(accountId: string) {
     const self = this;
     return {
-      getStatus: () => ({ id: self.accountId, status: self.online ? "ONLINE" : "OFFLINE" }),
+      getStatus: () => ({
+        id: accountId,
+        status: self.online.get(accountId) ? "ONLINE" : "OFFLINE",
+      }),
       sendBackgroundCommand(command: string): boolean {
-        if (!self.online) return false;
+        if (!self.online.get(accountId)) return false;
         const itemId = command.replace("/worth ", "");
-        self.asked.push(itemId);
+        self.asked.push({ accountId, itemId });
         const price = self.prices.get(itemId);
         if (price === "silent" || self.silentAll) return true;
         // The real server echoes the item's display name back; the scanner
@@ -57,44 +58,51 @@ class FakeManager {
           ? (ITEMS.find((i) => i.id === itemId)?.name ?? itemId)
           : "Some Other Item";
         // Reply asynchronously, exactly like a real server round-trip.
-        setTimeout(() => self.say(price === undefined || price === null
-          ? "Das Item hat keinen festgelegten Wert."
-          : `Der Wert von ${name} beträgt $${price}.`), 1);
+        setTimeout(
+          () =>
+            self.say(
+              accountId,
+              price === undefined || price === null
+                ? "Das Item hat keinen festgelegten Wert."
+                : `Der Wert von ${name} beträgt $${price}.`,
+            ),
+          1,
+        );
         return true;
       },
     };
   }
 
-  say(message: string) {
+  say(accountId: string, message: string) {
     for (const listener of this.chatListeners) {
-      listener({ minecraftAccountId: this.accountId, message });
+      listener({ minecraftAccountId: accountId, message });
     }
   }
 
-  goOnline() {
-    this.online = true;
-    for (const listener of this.statusListeners) {
-      listener({ id: this.accountId, status: "ONLINE" });
+  setOnline(accountId: string, value: boolean) {
+    this.online.set(accountId, value);
+    if (value) {
+      for (const listener of this.statusListeners) {
+        listener({ id: accountId, status: "ONLINE" });
+      }
     }
   }
 }
 
-function makeScanner(fake: FakeManager) {
+function makeScanner(fake: FakeManager, items: RegistryItem[] = ITEMS) {
   return new ItemWorthScanner(fake as unknown as ClientManager, {
-    items: ITEMS,
-    minDelaySeconds: 0,
-    maxDelaySeconds: 0,
+    items,
     replyTimeoutMs: 60,
+    delayScale: 0, // no pause between items in tests
+    offlineRecheckMs: 20,
   });
 }
 
-/** Poll the scan row until it leaves RUNNING, so tests never sleep blindly. */
-async function waitForStatus(accountId: string, statuses: string[], timeoutMs = 5000) {
+/** Poll the scan row until it reaches one of the given statuses. */
+async function waitForStatus(statuses: string[], timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const scan = await prisma.itemWorthScan.findUnique({
-      where: { minecraftAccountId: accountId },
-    });
+    const scan = await prisma.itemWorthScan.findUnique({ where: { id: "global" } });
     if (scan && statuses.includes(scan.status)) return scan;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
@@ -102,22 +110,24 @@ async function waitForStatus(accountId: string, statuses: string[], timeoutMs = 
 }
 
 describe("ItemWorthScanner", () => {
-  let accountId: string;
   let fake: FakeManager;
   let scanner: ItemWorthScanner;
+  const A = "acc-a";
+  const B = "acc-b";
+  const C = "acc-c";
 
   beforeEach(async () => {
-    const account = await prisma.minecraftAccount.create({
-      data: { name: `worth-test-${Date.now()}-${Math.random()}`, serverHost: "example.invalid" },
-    });
-    accountId = account.id;
-    fake = new FakeManager(accountId);
+    await prisma.itemWorthValue.deleteMany({});
+    await prisma.itemWorthScan.deleteMany({});
+    fake = new FakeManager();
+    fake.setOnline(A, true);
     scanner = makeScanner(fake);
   });
 
   afterEach(async () => {
     scanner.dispose();
-    await prisma.minecraftAccount.deleteMany({ where: { id: accountId } });
+    await prisma.itemWorthValue.deleteMany({});
+    await prisma.itemWorthScan.deleteMany({});
   });
 
   it("scans every item and stores prices, including items without one", async () => {
@@ -125,14 +135,14 @@ describe("ItemWorthScanner", () => {
     fake.prices.set("pumpkin", 12.5);
     // bedrock intentionally absent -> "kein festgelegter Wert"
 
-    await scanner.start(accountId);
-    const scan = await waitForStatus(accountId, ["COMPLETED"]);
+    await scanner.start([A], 1);
+    const scan = await waitForStatus(["COMPLETED"]);
 
     expect(scan.cursor).toBe(3);
     expect(scan.scanNumber).toBe(1);
-    expect(fake.asked).toEqual(["dirt", "pumpkin", "bedrock"]);
+    expect(fake.asked.map((a) => a.itemId)).toEqual(["dirt", "pumpkin", "bedrock"]);
 
-    const state = await scanner.getState(accountId);
+    const state = await scanner.getState();
     const byId = new Map(state.values.map((v) => [v.itemId, v]));
     expect(byId.get("dirt")?.value).toBe(1);
     expect(byId.get("pumpkin")?.value).toBe(12.5);
@@ -142,75 +152,103 @@ describe("ItemWorthScanner", () => {
     expect(state.values.every((v) => !v.changed)).toBe(true);
   });
 
+  it("spreads the queries round-robin over all selected accounts", async () => {
+    for (const item of ITEMS) fake.prices.set(item.id, 1);
+    fake.setOnline(B, true);
+    fake.setOnline(C, true);
+
+    await scanner.start([A, B, C], 1);
+    await waitForStatus(["COMPLETED"]);
+
+    // Acc1 -> ItemA, Acc2 -> ItemB, Acc3 -> ItemC, exactly as specified.
+    expect(fake.asked).toEqual([
+      { accountId: A, itemId: "dirt" },
+      { accountId: B, itemId: "pumpkin" },
+      { accountId: C, itemId: "bedrock" },
+    ]);
+  });
+
+  it("skips an account that went offline and keeps the others going", async () => {
+    for (const item of ITEMS) fake.prices.set(item.id, 1);
+    fake.setOnline(B, true);
+
+    await scanner.start([A, B], 1);
+    // Drop B immediately; A must carry the whole scan on its own.
+    fake.setOnline(B, false);
+    const scan = await waitForStatus(["COMPLETED"]);
+
+    expect(scan.cursor).toBe(3);
+    expect(fake.asked.every((a) => a.accountId === A)).toBe(true);
+    // No item may be lost just because one bot disappeared.
+    expect(fake.asked.map((a) => a.itemId)).toEqual(["dirt", "pumpkin", "bedrock"]);
+    expect((await scanner.getState()).values).toHaveLength(3);
+  });
+
+  it("waits when every account is offline and resumes when one returns", async () => {
+    fake.prices.set("dirt", 1);
+    fake.setOnline(A, false);
+
+    await scanner.start([A], 1);
+    const paused = await waitForStatus(["PAUSED"]);
+    expect(paused.cursor).toBe(0);
+    expect(fake.asked).toEqual([]);
+    expect(paused.resumable).toBe(true);
+
+    fake.setOnline(A, true);
+    const done = await waitForStatus(["COMPLETED"]);
+    expect(done.cursor).toBe(3);
+    expect((await scanner.getState()).values).toHaveLength(3);
+  });
+
   it("flags price changes on a second scan and keeps the old value", async () => {
     fake.prices.set("dirt", 1);
     fake.prices.set("pumpkin", 10);
-    await scanner.start(accountId);
-    await waitForStatus(accountId, ["COMPLETED"]);
+    await scanner.start([A], 1);
+    await waitForStatus(["COMPLETED"]);
 
     // The "off meta": pumpkin silently doubles, dirt stays put.
     fake.prices.set("pumpkin", 20);
-    await scanner.start(accountId);
-    const scan = await waitForStatus(accountId, ["COMPLETED"]);
+    await scanner.start([A], 1);
+    const scan = await waitForStatus(["COMPLETED"]);
 
     expect(scan.scanNumber).toBe(2);
     expect(scan.changedCount).toBe(1);
 
-    const state = await scanner.getState(accountId);
+    const state = await scanner.getState();
     const pumpkin = state.values.find((v) => v.itemId === "pumpkin")!;
     expect(pumpkin.changed).toBe(true);
     expect(pumpkin.previousValue).toBe(10);
     expect(pumpkin.value).toBe(20);
-
     expect(state.values.find((v) => v.itemId === "dirt")!.changed).toBe(false);
   });
 
   it("clears the previous run's change flags when a new scan starts", async () => {
     fake.prices.set("dirt", 1);
-    await scanner.start(accountId);
-    await waitForStatus(accountId, ["COMPLETED"]);
+    await scanner.start([A], 1);
+    await waitForStatus(["COMPLETED"]);
     fake.prices.set("dirt", 2);
-    await scanner.start(accountId);
-    await waitForStatus(accountId, ["COMPLETED"]);
-    expect((await scanner.getState(accountId)).values.find((v) => v.itemId === "dirt")!.changed).toBe(true);
+    await scanner.start([A], 1);
+    await waitForStatus(["COMPLETED"]);
+    expect((await scanner.getState()).values.find((v) => v.itemId === "dirt")!.changed).toBe(true);
 
     // Third scan with no movement must drop the stale highlight.
-    await scanner.start(accountId);
-    await waitForStatus(accountId, ["COMPLETED"]);
-    const state = await scanner.getState(accountId);
+    await scanner.start([A], 1);
+    await waitForStatus(["COMPLETED"]);
+    const state = await scanner.getState();
     expect(state.values.find((v) => v.itemId === "dirt")!.changed).toBe(false);
     expect(state.changedCount).toBe(0);
-  });
-
-  it("pauses when the bot goes offline and resumes at the same item", async () => {
-    fake.prices.set("dirt", 1);
-    fake.online = false;
-
-    await scanner.start(accountId);
-    const paused = await waitForStatus(accountId, ["PAUSED"]);
-    expect(paused.cursor).toBe(0);
-    expect(fake.asked).toEqual([]);
-    expect(paused.lastError).toContain("offline");
-
-    // Coming back online must restart the loop by itself.
-    fake.prices.set("pumpkin", 5);
-    fake.goOnline();
-    const done = await waitForStatus(accountId, ["COMPLETED"]);
-    expect(done.cursor).toBe(3);
-    expect(fake.asked).toEqual(["dirt", "pumpkin", "bedrock"]);
-    expect((await scanner.getState(accountId)).values).toHaveLength(3);
   });
 
   it("counts unanswered items and moves on instead of hanging", async () => {
     fake.prices.set("dirt", "silent");
     fake.prices.set("pumpkin", 5);
 
-    await scanner.start(accountId);
-    const scan = await waitForStatus(accountId, ["COMPLETED"]);
+    await scanner.start([A], 1);
+    const scan = await waitForStatus(["COMPLETED"]);
 
     expect(scan.missedCount).toBe(1);
     expect(scan.cursor).toBe(3);
-    const state = await scanner.getState(accountId);
+    const state = await scanner.getState();
     // A silent item must not be recorded at all, so an old price is preserved.
     expect(state.values.some((v) => v.itemId === "dirt")).toBe(false);
     expect(state.values.find((v) => v.itemId === "pumpkin")?.value).toBe(5);
@@ -222,37 +260,46 @@ describe("ItemWorthScanner", () => {
     // name and therefore cannot be correlated (and is accepted as-is).
     for (const item of ITEMS) fake.prices.set(item.id, 1);
 
-    await scanner.start(accountId);
-    const scan = await waitForStatus(accountId, ["COMPLETED"]);
+    await scanner.start([A], 1);
+    const scan = await waitForStatus(["COMPLETED"]);
 
     // Every mismatching reply must time out rather than be recorded, otherwise
     // a random player's chat line could poison the price table.
     expect(scan.missedCount).toBe(3);
-    expect((await scanner.getState(accountId)).values).toHaveLength(0);
+    expect((await scanner.getState()).values).toHaveLength(0);
+  });
+
+  it("ignores a reply coming from an account we did not ask", async () => {
+    fake.setOnline(B, true);
+    fake.prices.set("dirt", "silent");
+
+    await scanner.start([A], 1);
+    // B answers even though A was asked; that reply must be discarded.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    fake.say(B, "Der Wert von Dirt beträgt $999.");
+
+    const scan = await waitForStatus(["COMPLETED"]);
+    expect(scan.missedCount).toBeGreaterThanOrEqual(1);
+    expect((await scanner.getState()).values.some((v) => v.itemId === "dirt")).toBe(false);
   });
 
   it("stays parked after giving up, even when status events keep firing", async () => {
-    // Every item silent -> the miss limit is reached almost immediately.
     fake.silentAll = true;
-    const giveUp = new ItemWorthScanner(fake as unknown as ClientManager, {
-      items: Array.from({ length: 40 }, (_, i) => ({ id: `i${i}`, name: `I${i}` })),
-      minDelaySeconds: 0,
-      maxDelaySeconds: 0,
-      replyTimeoutMs: 5,
-    });
+    const giveUp = makeScanner(
+      fake,
+      Array.from({ length: 40 }, (_, i) => ({ id: `i${i}`, name: `I${i}` })),
+    );
     try {
-      await giveUp.start(accountId);
-      const paused = await waitForStatus(accountId, ["PAUSED"]);
+      await giveUp.start([A], 1);
+      const paused = await waitForStatus(["PAUSED"]);
       expect(paused.resumable).toBe(false);
 
       // Status events fire on every health/balance tick, not just transitions.
       // They must not revive a scan that deliberately gave up.
-      fake.goOnline();
-      fake.goOnline();
+      fake.setOnline(A, true);
+      fake.setOnline(A, true);
       await new Promise((resolve) => setTimeout(resolve, 150));
-      const still = await prisma.itemWorthScan.findUnique({
-        where: { minecraftAccountId: accountId },
-      });
+      const still = await prisma.itemWorthScan.findUnique({ where: { id: "global" } });
       expect(still?.status).toBe("PAUSED");
       expect(still?.resumable).toBe(false);
     } finally {
@@ -260,47 +307,53 @@ describe("ItemWorthScanner", () => {
     }
   });
 
-  it("refuses to start a second scan while one is in progress", async () => {
+  it("refuses to start without an account or while a scan is in progress", async () => {
+    await expect(scanner.start([], 1)).rejects.toThrow(/at least one account/i);
     fake.prices.set("dirt", "silent");
-    await scanner.start(accountId);
-    await expect(scanner.start(accountId)).rejects.toThrow(/already in progress/i);
-    await scanner.stop(accountId);
+    await scanner.start([A], 1);
+    await expect(scanner.start([A], 1)).rejects.toThrow(/already in progress/i);
+    await scanner.stop();
   });
 
   it("stops on request and keeps the prices gathered so far", async () => {
     fake.prices.set("dirt", 1);
     fake.prices.set("pumpkin", "silent");
 
-    await scanner.start(accountId);
-    // Wait until dirt has been recorded, then cancel mid-run.
+    await scanner.start([A], 1);
     const deadline = Date.now() + 3000;
     while (Date.now() < deadline) {
-      const count = await prisma.itemWorthValue.count({ where: { minecraftAccountId: accountId } });
-      if (count >= 1) break;
+      if ((await prisma.itemWorthValue.count()) >= 1) break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    await scanner.stop(accountId);
+    await scanner.stop();
 
-    const scan = await prisma.itemWorthScan.findUnique({ where: { minecraftAccountId: accountId } });
+    const scan = await prisma.itemWorthScan.findUnique({ where: { id: "global" } });
     expect(scan?.status).toBe("CANCELLED");
-    const state = await scanner.getState(accountId);
-    expect(state.values.find((v) => v.itemId === "dirt")?.value).toBe(1);
+    expect((await scanner.getState()).values.find((v) => v.itemId === "dirt")?.value).toBe(1);
   });
 
   it("parks an interrupted scan as PAUSED on boot so it can resume", async () => {
     fake.prices.set("dirt", "silent");
-    await scanner.start(accountId);
+    await scanner.start([A], 1);
     scanner.dispose();
     // Simulate the process dying mid-scan: the row is still RUNNING.
-    await prisma.itemWorthScan.update({
-      where: { minecraftAccountId: accountId },
-      data: { status: "RUNNING" },
-    });
+    await prisma.itemWorthScan.update({ where: { id: "global" }, data: { status: "RUNNING" } });
 
     const rebooted = makeScanner(fake);
     await rebooted.init();
-    const scan = await prisma.itemWorthScan.findUnique({ where: { minecraftAccountId: accountId } });
+    const scan = await prisma.itemWorthScan.findUnique({ where: { id: "global" } });
     expect(scan?.status).toBe("PAUSED");
     rebooted.dispose();
+  });
+
+  it("reports the configured delay and a matching ETA", async () => {
+    fake.prices.set("dirt", "silent");
+    await scanner.start([A], 30);
+    const state = await scanner.getState();
+    expect(state.delaySeconds).toBe(30);
+    expect(state.accountIds).toEqual([A]);
+    // 3 items left * 30s.
+    expect(state.etaSeconds).toBeLessThanOrEqual(90);
+    await scanner.stop();
   });
 });

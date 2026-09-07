@@ -1,7 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 
-type IconName = "dashboard" | "sniper" | "users" | "logs" | "settings";
+type IconName = "dashboard" | "sniper" | "worth" | "users" | "logs" | "settings";
 
 function Icon({ name }: { name: IconName }) {
   const common = {
@@ -30,6 +30,13 @@ function Icon({ name }: { name: IconName }) {
           <circle cx="12" cy="12" r="8" />
           <circle cx="12" cy="12" r="2.5" />
           <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+        </svg>
+      );
+    case "worth":
+      return (
+        <svg {...common}>
+          <polyline points="3 16 9 10 13 14 21 6" />
+          <polyline points="15 6 21 6 21 12" />
         </svg>
       );
     case "users":
@@ -63,6 +70,7 @@ function Icon({ name }: { name: IconName }) {
 const navItems: { to: string; label: string; icon: IconName; adminOnly: boolean }[] = [
   { to: "/dashboard", label: "Dashboard", icon: "dashboard", adminOnly: false },
   { to: "/namesniper", label: "Name Sniper", icon: "sniper", adminOnly: true },
+  { to: "/item-worth", label: "Item Wert", icon: "worth", adminOnly: true },
   { to: "/users", label: "Users", icon: "users", adminOnly: true },
   { to: "/logs", label: "Audit Logs", icon: "logs", adminOnly: true },
   { to: "/settings", label: "Settings", icon: "settings", adminOnly: false },
