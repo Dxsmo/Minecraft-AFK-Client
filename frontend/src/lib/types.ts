@@ -165,3 +165,37 @@ export interface SniperAccount {
   createdBy: { id: string; username: string } | null;
   live?: SniperLiveStatus;
 }
+
+/** One item's scanned price, plus what the previous scan recorded for it. */
+export interface ItemWorthValue {
+  itemId: string;
+  itemName: string;
+  /** null means the server reports no configured price for this item. */
+  value: number | null;
+  previousValue: number | null;
+  hasPrevious: boolean;
+  /** True when this item's price differs from the previous scan. */
+  changed: boolean;
+  updatedAt: string;
+}
+
+export type ItemWorthStatus = "IDLE" | "RUNNING" | "PAUSED" | "COMPLETED" | "CANCELLED";
+
+/** Progress and results of the admin-only `/worth` price scan. */
+export interface ItemWorthState {
+  status: ItemWorthStatus;
+  cursor: number;
+  total: number;
+  scanNumber: number;
+  changedCount: number;
+  missedCount: number;
+  lastItemId: string | null;
+  lastError: string | null;
+  /** False when the scan gave up; it will not resume by itself. */
+  resumable: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  etaSeconds: number | null;
+  registryTotal: number;
+  values: ItemWorthValue[];
+}

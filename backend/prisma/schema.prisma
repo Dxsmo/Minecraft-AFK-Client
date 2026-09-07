@@ -175,6 +175,65 @@ model MinecraftAccount {
   assignments UserMinecraftAccount[]
   consoleLogs ConsoleLog[]
   sellEarnings SellEarning[]
+  itemWorthScan   ItemWorthScan?
+  itemWorthValues ItemWorthValue[]
+}
+
+// Progress of the "item worth" price scan for one account. Exactly one row per
+// account: a scan is a long-running (multi-hour) job that walks the whole item
+// registry asking the server `/worth <item>`, so its cursor is persisted after
+// every item and survives a bot disconnect or a backend restart.
+model ItemWorthScan {
+  id                 String           @id @default(cuid())
+  minecraftAccountId String           @unique
+  account            MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+
+  // IDLE | RUNNING | PAUSED | COMPLETED | CANCELLED
+  status    String @default("IDLE")
+  // Index of the next item to query, into the generated ITEM_REGISTRY array.
+  cursor    Int    @default(0)
+  total     Int    @default(0)
+  // Monotonic counter; incremented when a scan starts. Lets the UI tell a
+  // first-ever scan (no comparison possible) from a repeat scan.
+  scanNumber Int   @default(0)
+  // Items whose price differed from the previous scan, for the current run.
+  changedCount Int @default(0)
+  // Items the server did not answer at all in the current run.
+  missedCount  Int @default(0)
+  // False when the scan was parked because it gave up (miss limit hit, or the
+  // loop crashed) rather than because the bot merely went offline. Only a
+  // resumable pause is picked up again automatically.
+  resumable    Boolean @default(true)
+  lastItemId   String?
+  lastError    String?
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// The most recently scanned worth of a single item for a single account, plus
+// the value the previous scan recorded so the UI can highlight changes ("off
+// metas"). `value` is null when the server reports no configured price.
+model ItemWorthValue {
+  id                 String           @id @default(cuid())
+  minecraftAccountId String
+  account            MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+
+  itemId   String
+  itemName String
+
+  value    Float?
+  // Distinguishes "previous scan recorded no price" from "never scanned before".
+  hasPrevious   Boolean @default(false)
+  previousValue Float?
+
+  scanNumber Int      @default(0)
+  changedAt  DateTime?
+  updatedAt  DateTime @updatedAt
+
+  @@unique([minecraftAccountId, itemId])
+  @@index([minecraftAccountId, changedAt])
 }
 
 // One row per money amount earned from an auto-sell action, used to compute the

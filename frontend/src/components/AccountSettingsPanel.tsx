@@ -3,6 +3,7 @@ import { api, ApiError } from "../lib/api";
 import type { ManagedUser, MinecraftAccount } from "../lib/types";
 import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
 import { SPAWNER_TYPES, getSpawnerType, spawnerItemTexture, type SpawnerAction } from "../lib/spawners";
+import { ItemWorthPanel } from "./ItemWorthPanel";
 
 export function AccountSettingsPanel({
   account,
@@ -211,6 +212,7 @@ export function AccountSettingsPanel({
     ...(isAdmin ? [{ id: "balance", label: "Balance", icon: "coin" as CatIcon, on: balanceEnabled }] : []),
     ...(isAdmin ? [{ id: "autotpa", label: "Auto-TPA", icon: "portal" as CatIcon, on: tpAutoEnabled }] : []),
     { id: "autosell", label: "Auto-sell", icon: "tag", on: autoSellEnabled },
+    ...(isAdmin ? [{ id: "itemworth", label: "Item Wert", icon: "chart" as CatIcon }] : []),
     {
       id: "spawner",
       label: "Spawner",
@@ -598,6 +600,8 @@ export function AccountSettingsPanel({
               </>
             )}
 
+            {activeCat === "itemworth" && isAdmin && <ItemWorthPanel accountId={account.id} />}
+
             {activeCat === "spawner" && (
               <>
                 <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
@@ -795,6 +799,7 @@ type CatIcon =
   | "portal"
   | "tag"
   | "users"
+  | "chart"
   | "cube";
 
 /** Small line icon used in the settings category navigation. */
@@ -868,6 +873,13 @@ function CatGlyph({ name }: { name: CatIcon }) {
           <path d="M12 2.8 20.5 7v10L12 21.2 3.5 17V7z" />
           <path d="M3.5 7 12 11.5 20.5 7" />
           <line x1="12" y1="11.5" x2="12" y2="21.2" />
+        </svg>
+      );
+    case "chart":
+      return (
+        <svg {...common}>
+          <polyline points="3 16 9 10 13 14 21 6" />
+          <polyline points="15 6 21 6 21 12" />
         </svg>
       );
     case "users":

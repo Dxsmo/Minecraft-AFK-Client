@@ -223,6 +223,18 @@ export class MinecraftClient extends EventEmitter {
   }
 
   /**
+   * Send a command on behalf of a background job (currently the item-worth
+   * scan). Unlike {@link sendCommand} this writes nothing to the console: a
+   * scan issues ~1500 commands, which would bury the user's own chat and bloat
+   * the console log table. Returns false when the bot is not online.
+   */
+  sendBackgroundCommand(command: string): boolean {
+    if (this.status !== "ONLINE" || !this.subprocess) return false;
+    this.sendToBot({ type: "chat", text: command });
+    return true;
+  }
+
+  /**
    * Queue a clean-spawner run on the bot. The bot right-clicks a spawner within
    * reach (never walking to it) and drops the container's items. Runs through
    * the bot's foreground task queue, so it pauses/resumes auto-sell cleanly.
@@ -499,6 +511,7 @@ export class MinecraftClient extends EventEmitter {
         const { sender, message } = event as { sender: string | null; message: string };
         const clean = stripMinecraftFormatting(message);
         this.tryUpdateHomesFromChat(clean);
+        this.emit("chat", { minecraftAccountId: this.config.id, message: clean });
         if (sender) this.emitConsole("CHAT", `<${stripMinecraftFormatting(sender)}> ${clean}`);
         else this.emitConsole("SERVER_MESSAGE", clean);
         break;

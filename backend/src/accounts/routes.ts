@@ -13,6 +13,7 @@ import {
 import * as accountsService from "./service.js";
 import { executeCommand } from "../commands/service.js";
 import { clientManager } from "../minecraft/ClientManager.js";
+import { itemWorthScanner } from "../minecraft/ItemWorthScanner.js";
 import { getConsoleLogs } from "../logging/consoleLogService.js";
 import { parseOrReject } from "../utils/validate.js";
 import { recordAuditLog } from "../logging/auditLog.js";
@@ -83,6 +84,71 @@ export default async function accountsRoutes(app: FastifyInstance) {
     clientManager.requestInventory(id);
     reply.send({ inventory: clientManager.getInventory(id) ?? null });
   });
+
+  // ---- Item worth (admin only) ----
+  // Walks the whole 1.21.x item registry with `/worth <item>` and records the
+  // prices, so silent price changes ("off metas") become visible. The scan is
+  // slow on purpose (5-10s between items) and only ever starts on request.
+
+  app.get("/api/minecraft/accounts/:id/item-worth", async (req, reply) => {
+    if (!requireAdminFeature(req, reply)) return;
+    const { id } = req.params as { id: string };
+    const account = await accountsService.getAccountForSession(req.session!, id);
+    if (!account) {
+      reply.code(404).send({ error: "Account not found" });
+      return;
+    }
+    reply.send(await itemWorthScanner.getState(id));
+  });
+
+  app.post(
+    "/api/minecraft/accounts/:id/item-worth/start",
+    { preHandler: app.requireCsrf },
+    async (req, reply) => {
+      if (!requireAdminFeature(req, reply)) return;
+      const { id } = req.params as { id: string };
+      const account = await accountsService.getAccountForSession(req.session!, id);
+      if (!account) {
+        reply.code(404).send({ error: "Account not found" });
+        return;
+      }
+      try {
+        await itemWorthScanner.start(id);
+      } catch (err) {
+        reply.code(409).send({ error: err instanceof Error ? err.message : "Failed to start scan" });
+        return;
+      }
+      await recordAuditLog({
+        userId: req.session!.user.id,
+        action: "ITEM_WORTH_SCAN_START",
+        targetType: "MinecraftAccount",
+        targetId: id,
+      });
+      reply.send(await itemWorthScanner.getState(id));
+    },
+  );
+
+  app.post(
+    "/api/minecraft/accounts/:id/item-worth/stop",
+    { preHandler: app.requireCsrf },
+    async (req, reply) => {
+      if (!requireAdminFeature(req, reply)) return;
+      const { id } = req.params as { id: string };
+      const account = await accountsService.getAccountForSession(req.session!, id);
+      if (!account) {
+        reply.code(404).send({ error: "Account not found" });
+        return;
+      }
+      await itemWorthScanner.stop(id);
+      await recordAuditLog({
+        userId: req.session!.user.id,
+        action: "ITEM_WORTH_SCAN_STOP",
+        targetType: "MinecraftAccount",
+        targetId: id,
+      });
+      reply.send(await itemWorthScanner.getState(id));
+    },
+  );
 
   // ---- Management ----
   // Creating an account is open to any authenticated user (they become the

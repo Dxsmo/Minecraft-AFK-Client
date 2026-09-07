@@ -9,6 +9,8 @@ import type { MinecraftAccount } from "@prisma/client";
 
 export type ConsoleEventListener = (event: ConsoleEvent) => void;
 export type StatusEventListener = (status: ClientStatusSnapshot) => void;
+/** Raw incoming chat/server line, formatting stripped, sender prefix removed. */
+export type ChatEventListener = (event: { minecraftAccountId: string; message: string }) => void;
 
 function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
   const spawner = resolveSpawnerActions(account.spawnerType, parseSpawnerActions(account.spawnerActions));
@@ -61,6 +63,12 @@ export class ClientManager {
   private clients = new Map<string, MinecraftClient>();
   private consoleListeners = new Set<ConsoleEventListener>();
   private statusListeners = new Set<StatusEventListener>();
+  private chatListeners = new Set<ChatEventListener>();
+
+  onChatEvent(listener: ChatEventListener): () => void {
+    this.chatListeners.add(listener);
+    return () => this.chatListeners.delete(listener);
+  }
 
   onConsoleEvent(listener: ConsoleEventListener): () => void {
     this.consoleListeners.add(listener);
@@ -128,6 +136,15 @@ export class ClientManager {
           listener(status);
         } catch (err) {
           logger.error({ err }, "Status listener threw");
+        }
+      }
+    });
+    client.on("chat", (event: { minecraftAccountId: string; message: string }) => {
+      for (const listener of this.chatListeners) {
+        try {
+          listener(event);
+        } catch (err) {
+          logger.error({ err }, "Chat listener threw");
         }
       }
     });

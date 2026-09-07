@@ -238,6 +238,115 @@ body {
     box-shadow: inset 2px 0 0 var(--accent), 0 0 20px -5px var(--accent-light);
   }
 
+  /* --- Item worth ("Item Wert") tab --------------------------------------- */
+
+  /* Scan progress bar. The fill animates its width so incremental polls glide
+     forward instead of jumping, and gets a travelling sheen while running. */
+  .item-worth-track {
+    height: 6px;
+    border-radius: 999px;
+    background-color: var(--bg-elev);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .item-worth-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-light));
+    box-shadow: 0 0 12px -2px var(--accent-light);
+    transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .item-worth-fill.is-running {
+    background-image: linear-gradient(
+      90deg,
+      var(--accent),
+      var(--accent-light) 45%,
+      #ffffff 50%,
+      var(--accent-light) 55%,
+      var(--accent)
+    );
+    background-size: 220% 100%;
+    animation: item-worth-sheen 1.8s linear infinite;
+  }
+  @keyframes item-worth-sheen {
+    from {
+      background-position: 120% 0;
+    }
+    to {
+      background-position: -120% 0;
+    }
+  }
+
+  /* Status dot while a scan is live. */
+  .item-worth-pulse {
+    animation: item-worth-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes item-worth-pulse {
+    0%,
+    100% {
+      opacity: 1;
+      box-shadow: 0 0 0 0 var(--accent-soft);
+    }
+    50% {
+      opacity: 0.55;
+      box-shadow: 0 0 0 5px transparent;
+    }
+  }
+
+  .item-worth-chip {
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background-color: var(--bg-elev);
+    color: var(--text-muted);
+    padding: 0.25rem 0.7rem;
+    font-size: 0.72rem;
+    transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+  }
+  .item-worth-chip:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+  .item-worth-chip[data-active="true"] {
+    color: var(--text);
+    border-color: var(--accent);
+    background-color: var(--accent-soft);
+  }
+
+  /* Result rows fade in staggered, which makes a long list feel less abrupt. */
+  .item-worth-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.4rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    animation: item-worth-row-in 0.28s ease both;
+  }
+  .item-worth-row:last-child {
+    border-bottom: none;
+  }
+  .item-worth-row:hover {
+    background-color: var(--surface-hover);
+  }
+  @keyframes item-worth-row-in {
+    from {
+      opacity: 0;
+      transform: translateY(3px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  .item-worth-delta {
+    display: inline-block;
+    border-radius: 999px;
+    padding: 0.08rem 0.4rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
   /* Terminal-style console, intentionally distinct from the rest of the app. */
   .console-output {
     background-color: #060607;

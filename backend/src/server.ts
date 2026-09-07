@@ -4,6 +4,7 @@ import { logger } from "./logging/logger.js";
 import { bootstrapAdmin } from "./auth/bootstrapAdmin.js";
 import { pruneExpiredSessions, clearAllSessions } from "./auth/session.js";
 import { clientManager } from "./minecraft/ClientManager.js";
+import { itemWorthScanner } from "./minecraft/ItemWorthScanner.js";
 import { sniperManager } from "./namesniper/SniperManager.js";
 import { disconnectDatabase } from "./database/prisma.js";
 import { purgeStoredPasswords } from "./accounts/service.js";
@@ -21,6 +22,7 @@ async function main() {
   // product requirement), rather than resuming previously-valid sessions.
   await clearAllSessions();
   await clientManager.loadAll();
+  await itemWorthScanner.init();
   await sniperManager.loadAll();
   await loadBannedIps();
 
@@ -39,6 +41,7 @@ async function main() {
     shuttingDown = true;
     logger.info({ signal }, "Shutting down gracefully...");
     clearInterval(pruneInterval);
+    itemWorthScanner.dispose();
     clientManager.shutdownAll();
     sniperManager.shutdownAll();
     await app.close();
