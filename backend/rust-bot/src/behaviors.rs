@@ -108,7 +108,12 @@ const INVENTORY_RESYNC_DELAY: Duration = Duration::from_millis(300);
 enum AutoSellPhase {
     Idle,
     /// The sell command was sent; waiting for the server to open its GUI.
-    WaitingForMenu { since: Instant },
+    WaitingForMenu {
+        since: Instant,
+        /// Diagnostic only; never prevents sending the command. It makes a
+        /// server that opens no GUI for an empty inventory a harmless no-op.
+        started_empty: bool,
+    },
     /// The sell container is open. Fill it and close it again.
     Selling {
         /// Earliest time the next shift-click may be sent.
@@ -218,9 +223,6 @@ pub struct BehaviorState {
     /// Whether the current failure/idle streak has already been logged, so the
     /// console shows one line per streak instead of one per attempt.
     autosell_streak_logged: bool,
-    /// True after observing an empty inventory. New items then trigger an
-    /// immediate cycle instead of waiting a full interval.
-    autosell_was_empty: bool,
     /// Player inventory signature observed while idle. A content change clears
     /// a stale failure backoff, because newly arrived items may be sellable.
     last_autosell_inventory_sig: Option<u64>,
@@ -274,7 +276,6 @@ impl BehaviorState {
             autosell_failures: 0,
             autosell_retry_at: None,
             autosell_streak_logged: false,
-            autosell_was_empty: false,
             last_autosell_inventory_sig: None,
             sell_earning_window: None,
             task_queue: VecDeque::new(),
@@ -823,7 +824,6 @@ impl BehaviorState {
             self.autosell_failures = 0;
             self.autosell_retry_at = None;
             self.autosell_streak_logged = false;
-            self.autosell_was_empty = false;
             self.last_autosell_inventory_sig = None;
             return;
         }
@@ -839,31 +839,15 @@ impl BehaviorState {
                     return;
                 }
 
-                // Inspect the inventory continuously while idle. Empty is a
-                // normal wait state, not a failed sell. Crucially, do not move
-                // the interval clock here: the first newly arriving item should
-                // trigger a cycle immediately.
-                let items = player_item_count(bot);
+                // Never gate a due sell cycle on a local "empty" snapshot. The
+                // inventory briefly reads as empty while a container closes and
+                // new drops may arrive immediately afterwards. Trust the sell
+                // menu instead, so a two-second interval remains two seconds.
                 let signature = player_inventory_signature(bot);
-                if items == 0 {
-                    self.autosell_was_empty = true;
-                    self.last_autosell_inventory_sig = signature;
-                    self.autosell_failures = 0;
-                    self.autosell_retry_at = None;
-                    if !self.autosell_streak_logged {
-                        self.autosell_streak_logged = true;
-                        emit(&OutEvent::BehaviorLog {
-                            message: "AutoSell: nichts zu verkaufen, überwache Inventar".into(),
-                        });
-                    }
-                    return;
-                }
-
-                let woke_from_empty = std::mem::take(&mut self.autosell_was_empty);
                 let changed_after_failure = self.last_autosell_inventory_sig != signature
                     && (self.autosell_failures > 0 || self.autosell_retry_at.is_some());
                 self.last_autosell_inventory_sig = signature;
-                if woke_from_empty || changed_after_failure {
+                if changed_after_failure {
                     // A newly changed inventory deserves a fresh attempt even
                     // when the previous contents were unsellable or a menu had
                     // timed out. This prevents a stale backoff from hiding new
@@ -881,8 +865,7 @@ impl BehaviorState {
                     }
                     self.autosell_retry_at = None;
                 }
-                if !woke_from_empty
-                    && !changed_after_failure
+                if !changed_after_failure
                     && now.duration_since(self.last_autosell_at) < interval
                 {
                     return;
@@ -903,10 +886,16 @@ impl BehaviorState {
                 self.last_autosell_at = now;
                 bot.chat(command.to_string());
                 self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
-                self.autosell_phase = AutoSellPhase::WaitingForMenu { since: now };
+                self.autosell_phase = AutoSellPhase::WaitingForMenu {
+                    since: now,
+                    started_empty: player_item_count(bot) == 0,
+                };
             }
 
-            AutoSellPhase::WaitingForMenu { since } => {
+            AutoSellPhase::WaitingForMenu {
+                since,
+                started_empty,
+            } => {
                 // A real sell container is open once the menu id is non-zero AND
                 // the menu has slots in front of the player's own section.
                 if let Ok(inv) = bot.get_inventory() {
@@ -928,10 +917,25 @@ impl BehaviorState {
                     }
                 }
 
-                if now.duration_since(since) >= AUTOSELL_MENU_TIMEOUT {
+                let menu_timeout = if started_empty {
+                    interval.min(AUTOSELL_MENU_TIMEOUT)
+                } else {
+                    AUTOSELL_MENU_TIMEOUT
+                };
+                if now.duration_since(since) >= menu_timeout {
                     self.close_open_menu(bot);
                     self.autosell_phase = AutoSellPhase::Idle;
-                    self.register_autosell_failure(now, interval, "Verkaufsmenü ging nicht auf");
+                    if started_empty {
+                        self.autosell_failures = 0;
+                        self.autosell_retry_at = None;
+                        self.autosell_streak_logged = false;
+                    } else {
+                        self.register_autosell_failure(
+                            now,
+                            interval,
+                            "Verkaufsmenü ging nicht auf",
+                        );
+                    }
                 }
             }
 
@@ -1048,6 +1052,25 @@ impl BehaviorState {
                             initial_items - remaining
                         ),
                     });
+                    return;
+                }
+                if clicks == 0 && initial_items == 0 {
+                    // A genuinely empty cycle is a harmless no-op. It must not
+                    // create a failure streak/backoff or an "empty inventory"
+                    // message that makes every second interval look skipped.
+                    self.autosell_phase = AutoSellPhase::Idle;
+                    self.autosell_failures = 0;
+                    self.autosell_retry_at = None;
+                    self.autosell_streak_logged = false;
+                    self.last_autosell_inventory_sig = player_inventory_signature(bot);
+                    if remaining > 0 {
+                        // Items arrived during the empty probe. Make the next
+                        // tick due immediately instead of waiting another full
+                        // configured interval.
+                        self.last_autosell_at = now
+                            .checked_sub(interval)
+                            .unwrap_or(self.last_autosell_at);
+                    }
                     return;
                 }
                 if now >= deadline {

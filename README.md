@@ -195,9 +195,10 @@ additional users access afterwards in the account's **Settings** panel):
   server's menu, move inventory stacks with paced shift-clicks, wait for the
   server to confirm an inventory decrease, then close the menu. Server-side
   auto-closing is accepted as success when the inventory actually changed.
-  While the inventory is empty it is monitored continuously, so newly arriving
-  items trigger a fresh attempt immediately. Failed cycles keep retrying with a
-  capped backoff, and any inventory change clears stale failure state.
+  Due cycles are not skipped based on a transient local "empty" snapshot; the
+  configured interval therefore remains exact even while items arrive quickly.
+  A genuinely empty sell menu is treated as a harmless no-op. Failed cycles
+  keep retrying with a capped backoff, and inventory changes clear stale state.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once
