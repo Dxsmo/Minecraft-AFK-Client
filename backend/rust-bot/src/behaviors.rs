@@ -22,51 +22,34 @@ use regex::Regex;
 use crate::emit;
 use crate::protocol::{BehaviorConfig, Config, InventorySlot, OutEvent};
 
-/// Give the server this long to open its sell menu after the sell command is
-/// sent before giving up on the current auto-sell cycle.
-///
-/// This used to be 1.5s, which is below the round-trip time of a busy server:
-/// the menu then opened *after* the cycle had already been abandoned, so the
-/// next cycle found a "lingering" menu, closed it and sent the command again —
-/// selling nothing while spamming chat forever.
-const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_millis(4000);
-/// Once the sell container opens, wait this long before shift-clicking so the
-/// server has synced the container's slot contents. Without this settle delay
-/// the player slots can still read as empty the instant the menu opens, so the
-/// cycle would sell nothing and close — the "opens menu but sells nothing" stall.
-const AUTOSELL_SETTLE_DELAY: Duration = Duration::from_millis(150);
-
-/// Hard stop for a single sell cycle. However the server misbehaves, the menu
-/// is closed and the cycle abandoned after this, so the bot can never get stuck
-/// in an open GUI.
-const AUTOSELL_RUN_TIMEOUT: Duration = Duration::from_secs(15);
-/// Move a small batch per game tick. A single click per 75 ms needed several
-/// seconds for a full inventory; an unlimited burst made busy servers discard
-/// the tail. Four ordered clicks per tick drains up to 80 stacks/second while
-/// retaining transaction pacing.
-const AUTOSELL_CLICKS_PER_TICK: usize = 4;
-const AUTOSELL_CLICK_DELAY: Duration = Duration::from_millis(40);
-/// Short acknowledgement windows around the close packet. The old 400+400 ms
-/// waits dominated a one-second interval even after all clicks were complete.
-const AUTOSELL_CONFIRM_DELAY: Duration = Duration::from_millis(150);
-const AUTOSELL_CLOSE_SETTLE_DELAY: Duration = Duration::from_millis(100);
+/// A missing menu must recover quickly, but commands are never overlapped while
+/// one request is still inside this window.
+const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_millis(750);
+/// Avoid flooding `/sell` twenty times per second while genuinely empty. Fresh
+/// arrivals bypass this immediately via the inventory-change check below.
+const AUTOSELL_EMPTY_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+/// All player slots are shift-clicked immediately when the populated container
+/// becomes visible. Keep it open for one game tick so the queued click packets
+/// precede the close packet on the wire.
+const AUTOSELL_CLOSE_DELAY: Duration = Duration::from_millis(50);
 /// Wait after a full spawn before sending automation commands. `Spawn` means
 /// the chunk is usable, but proxy networks may still be restoring the player
 /// inventory for a brief moment (the attached HugoSMP log showed exactly this).
-const SPAWN_STABILIZE_DELAY: Duration = Duration::from_secs(2);
+const SPAWN_STABILIZE_DELAY: Duration = Duration::from_millis(250);
 /// Position sync packets are emitted for /home, accepted TPAs and other
 /// same-world teleports. Let the destination and inventory settle before the
 /// next sell cycle starts.
-const TELEPORT_STABILIZE_DELAY: Duration = Duration::from_millis(1250);
+const TELEPORT_STABILIZE_DELAY: Duration = Duration::from_millis(100);
 /// A teleport command is paused immediately, even before its position packet
 /// arrives. This also covers rejected/slow commands without freezing forever.
-const TELEPORT_COMMAND_GUARD: Duration = Duration::from_secs(3);
+const TELEPORT_COMMAND_GUARD: Duration = Duration::from_millis(750);
 /// Small serialization gap after a normal chat command. Commands can open a
 /// GUI asynchronously, so auto-sell must not start on the following tick.
-const CHAT_COMMAND_GUARD: Duration = Duration::from_secs(1);
+const CHAT_COMMAND_GUARD: Duration = Duration::from_millis(100);
+const COMMAND_MENU_CLOSE_DELAY: Duration = Duration::from_millis(750);
 /// Retry delay when the server explicitly says the inventory is still being
 /// saved/loaded. This is a transient lifecycle state, not an auto-sell failure.
-const INVENTORY_BUSY_DELAY: Duration = Duration::from_secs(2);
+const INVENTORY_BUSY_DELAY: Duration = Duration::from_millis(250);
 /// Repeated menu failures are logged at most this often. Retrying itself still
 /// follows the configured interval and is never slowed down by logging.
 const AUTOSELL_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(30);
@@ -111,9 +94,9 @@ const SPAWNER_SELL_KEYWORDS: [&str; 6] = ["verkauf", "sell", "vend", "money", "g
 /// resyncs with the bot's real inventory state.
 const INVENTORY_RESYNC_DELAY: Duration = Duration::from_millis(300);
 
-/// Tracks one auto-sell cycle. Each cycle opens the sell menu, fills it,
-/// confirms the sale and closes the menu again ("open/close principle") — the
-/// menu is never left open between cycles, so the bot's GUI is free for chat,
+/// Tracks one auto-sell cycle. Each cycle opens the sell menu, immediately
+/// shift-clicks the inventory and closes it again ("open/close principle") —
+/// the menu is never left open between cycles, so the bot's GUI is free for chat,
 /// scheduled commands and the spawner tasks in between.
 #[derive(Clone, Copy)]
 enum AutoSellPhase {
@@ -124,23 +107,9 @@ enum AutoSellPhase {
         /// Used only to shorten an empty probe; it never suppresses `/sell`.
         started_empty: bool,
     },
-    /// The sell container is open. Fill it and close it again.
-    Selling {
-        /// Earliest time the next shift-click may be sent.
-        next_at: Instant,
-        /// Abort the cycle at this time no matter what.
-        deadline: Instant,
-        /// Next player-menu slot to inspect. Each occupied slot is clicked once.
-        next_slot: usize,
-        clicks: usize,
-    },
-    /// All occupied player slots were clicked. Give the server a short
-    /// acknowledgement window, then close the GUI unconditionally.
-    Confirming {
-        check_at: Instant,
-        clicks: usize,
-        menu_closed: bool,
-    },
+    /// Every occupied player slot has already been shift-clicked. Close the
+    /// menu on the following game tick and immediately release the next cycle.
+    Closing { close_at: Instant },
 }
 
 /// A one-shot, foreground task. While one is queued or running, the continuous
@@ -418,7 +387,7 @@ impl BehaviorState {
             CHAT_COMMAND_GUARD
         };
         self.postpone_automation_until(now + delay);
-        self.command_menu_close_at = (!teleporting).then_some(now + CHAT_COMMAND_GUARD);
+        self.command_menu_close_at = (!teleporting).then_some(now + COMMAND_MENU_CLOSE_DELAY);
     }
 
     /// Called for Login, including proxy server and dimension/world changes.
@@ -437,7 +406,11 @@ impl BehaviorState {
         }
         let now = Instant::now();
         self.interrupt_for_transition(bot);
-        self.postpone_automation_until(now + TELEPORT_STABILIZE_DELAY);
+        // The position packet is the authoritative completion signal. Replace
+        // the provisional command timeout so /home does not always cost the
+        // full guard duration after it has already completed.
+        self.automation_ready_at = now + TELEPORT_STABILIZE_DELAY;
+        self.next_autosell_at = self.automation_ready_at;
     }
 
     /// Called whenever the player (re)spawns into a world: initial join, after
@@ -953,10 +926,9 @@ impl BehaviorState {
 
     /// Drives the auto-sell cycle.
     ///
-    /// Opens the menu, moves one stack at a time and always closes it again.
-    /// A cycle that got as far as sending shift-clicks is considered complete:
-    /// at fast farms, newly arriving items can fully mask a decreasing total
-    /// item count, so total-count confirmation creates false failures.
+    /// Basic fast path: open the menu, shift every occupied player slot in one
+    /// pass, close on the next game tick. There is no batch/confirmation phase
+    /// and no success logging on the hot path.
     fn tick_autosell(&mut self, bot: &Client, now: Instant) {
         if !self.config.autosell_enabled {
             if !matches!(self.autosell_phase, AutoSellPhase::Idle) {
@@ -1014,11 +986,29 @@ impl BehaviorState {
                         if let Some(slots) = inv.slots() {
                             if let Some(container_len) = container_len(bot) {
                                 if container_len > 0 && slots.len() > container_len {
-                                    self.autosell_phase = AutoSellPhase::Selling {
-                                        next_at: now + AUTOSELL_SETTLE_DELAY,
-                                        deadline: now + AUTOSELL_RUN_TIMEOUT,
-                                        next_slot: container_len,
-                                        clicks: 0,
+                                    // The container-content packet has arrived,
+                                    // so its player slots are authoritative. Do
+                                    // the basic operation in one pass: shift all
+                                    // occupied slots now, close next game tick.
+                                    let Ok(menu) = bot.menu() else { return };
+                                    let player_slots: Vec<usize> = menu
+                                        .player_slots_range()
+                                        .filter(|&slot| {
+                                            slots
+                                                .get(slot)
+                                                .is_some_and(ItemStack::is_present)
+                                        })
+                                        .collect();
+                                    for slot in &player_slots {
+                                        inv.shift_click(*slot);
+                                    }
+                                    if !player_slots.is_empty() {
+                                        self.sell_earning_window =
+                                            Some(now + SELL_EARNING_WINDOW);
+                                        self.last_autosell_failure_log = None;
+                                    }
+                                    self.autosell_phase = AutoSellPhase::Closing {
+                                        close_at: now + AUTOSELL_CLOSE_DELAY,
                                     };
                                     return;
                                 }
@@ -1037,7 +1027,9 @@ impl BehaviorState {
                 }
 
                 let timeout = if started_empty {
-                    interval.min(AUTOSELL_MENU_TIMEOUT)
+                    interval
+                        .max(AUTOSELL_EMPTY_PROBE_TIMEOUT)
+                        .min(AUTOSELL_MENU_TIMEOUT)
                 } else {
                     AUTOSELL_MENU_TIMEOUT
                 };
@@ -1054,103 +1046,12 @@ impl BehaviorState {
                 }
             }
 
-            AutoSellPhase::Selling {
-                next_at,
-                deadline,
-                next_slot,
-                clicks,
-            } => {
-                // Some servers close the GUI as soon as one stack sells. That
-                // is a completed cycle as long as at least one click was sent.
-                let inv = match bot.get_inventory() {
-                    Ok(inv) if inv.id() != 0 => inv,
-                    _ => {
-                        self.autosell_phase = AutoSellPhase::Confirming {
-                            check_at: now + AUTOSELL_CONFIRM_DELAY,
-                            clicks,
-                            menu_closed: true,
-                        };
-                        return;
-                    }
-                };
-
-                // Whatever goes wrong, never stay stuck in the GUI.
-                if now >= deadline {
-                    inv.close();
-                    self.autosell_phase = AutoSellPhase::Idle;
-                    self.log_autosell_failure(now, "Verkauf hat zu lange gedauert");
-                    return;
-                }
-
-                // Give the server a moment to sync the container's contents,
-                // otherwise the player slots can still read as empty and the
-                // cycle would sell nothing.
-                if now < next_at {
-                    return;
-                }
-
-                let Some(slots) = inv.slots() else { return };
-                let Ok(menu) = bot.menu() else { return };
-                let batch: Vec<usize> = menu
-                    .player_slots_range()
-                    .filter(|&slot| {
-                        slot >= next_slot
-                            && slots.get(slot).is_some_and(ItemStack::is_present)
-                    })
-                    .take(AUTOSELL_CLICKS_PER_TICK)
-                    .collect();
-                if let Some(&last_slot) = batch.last() {
-                    for slot in &batch {
-                        inv.shift_click(*slot);
-                    }
-                    self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
-                    self.autosell_phase = AutoSellPhase::Selling {
-                        next_at: now + AUTOSELL_CLICK_DELAY,
-                        deadline,
-                        next_slot: last_slot + 1,
-                        clicks: clicks + batch.len(),
-                    };
-                    return;
-                }
-
-                self.autosell_phase = AutoSellPhase::Confirming {
-                    check_at: now + AUTOSELL_CONFIRM_DELAY,
-                    clicks,
-                    menu_closed: false,
-                };
-            }
-
-            AutoSellPhase::Confirming {
-                check_at,
-                clicks,
-                menu_closed,
-            } => {
-                // Keep the GUI open briefly after the final click so the server
-                // can acknowledge it, then close it before releasing the cycle.
-                if !menu_closed {
-                    if now < check_at {
-                        return;
-                    }
-                    self.close_open_menu(bot);
-                    self.autosell_phase = AutoSellPhase::Confirming {
-                        check_at: now + AUTOSELL_CLOSE_SETTLE_DELAY,
-                        clicks,
-                        menu_closed: true,
-                    };
-                    return;
-                }
-                if now < check_at {
+            AutoSellPhase::Closing { close_at } => {
+                if now < close_at {
                     return;
                 }
                 self.close_open_menu(bot);
                 self.autosell_phase = AutoSellPhase::Idle;
-                if clicks > 0 {
-                    self.last_autosell_failure_log = None;
-                    self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
-                    emit(&OutEvent::BehaviorLog {
-                        message: format!("AutoSell: Zyklus abgeschlossen ({clicks} Klick(s))"),
-                    });
-                }
             }
         }
     }

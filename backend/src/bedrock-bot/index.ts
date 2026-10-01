@@ -110,7 +110,7 @@ async function main(): Promise<void> {
     } catch (err) {
       emit({ type: "warning", message: `Behavior tick error: ${errMsg(err)}` });
     }
-  }, 1000);
+  }, 50);
 
   const shutdown = (code: number) => {
     clearInterval(watchdog);

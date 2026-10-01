@@ -19,11 +19,11 @@ const SELL_EARNING_WINDOW_MS = 4000;
 const TPACCEPT_DEDUP_MS = 5000;
 /** Emit a heartbeat at most this often. */
 const HEARTBEAT_INTERVAL_MS = 15000;
-const SPAWN_STABILIZE_MS = 2000;
-const TELEPORT_STABILIZE_MS = 1250;
-const TELEPORT_COMMAND_GUARD_MS = 3000;
-const CHAT_COMMAND_GUARD_MS = 500;
-const INVENTORY_BUSY_DELAY_MS = 2000;
+const SPAWN_STABILIZE_MS = 250;
+const TELEPORT_STABILIZE_MS = 100;
+const TELEPORT_COMMAND_GUARD_MS = 750;
+const CHAT_COMMAND_GUARD_MS = 100;
+const INVENTORY_BUSY_DELAY_MS = 250;
 
 type ForegroundTask =
   | { kind: "command"; text: string }
@@ -142,7 +142,8 @@ export class BehaviorState {
   markTeleported(): void {
     if (!this.spawned) return;
     this.inv.containerOpen = false;
-    this.postponeAutomation(Date.now() + TELEPORT_STABILIZE_MS);
+    this.automationReadyAt = Date.now() + TELEPORT_STABILIZE_MS;
+    this.nextAutosellAt = this.automationReadyAt;
   }
 
   // --- Foreground task enqueue (called from stdin command handling) ---
@@ -208,7 +209,7 @@ export class BehaviorState {
 
     // Continuous auto-sell yields to any foreground task.
     if (this.cfg.autosell_enabled && !this.foregroundBusy() && !actionSentThisTick) {
-      const interval = Math.max(0.5, this.cfg.autosell_interval_seconds ?? 60) * 1000;
+      const interval = Math.max(0.05, this.cfg.autosell_interval_seconds ?? 60) * 1000;
       if (now >= this.nextAutosellAt) {
         this.nextAutosellAt = now + interval;
         const command = (this.cfg.autosell_command ?? "/sell").trim() || "/sell";
