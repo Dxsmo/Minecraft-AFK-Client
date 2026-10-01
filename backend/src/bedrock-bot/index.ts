@@ -119,7 +119,10 @@ async function main(): Promise<void> {
   };
 
   // --- Lifecycle events ---
-  c.on("join", () => emit({ type: "login" }));
+  c.on("join", () => {
+    behavior.markJoining();
+    emit({ type: "login" });
+  });
 
   c.on("spawn", () => {
     spawned = true;
@@ -146,14 +149,27 @@ async function main(): Promise<void> {
   });
 
   // --- World / telemetry packets (all defensive) ---
+  let localRuntimeEntityId: bigint | null = null;
   c.on("start_game", (packet: unknown) => {
     try {
       const p = packet as { runtime_entity_id?: unknown; itemstates?: unknown };
       const id = toBigIntOrNull(p.runtime_entity_id);
+      localRuntimeEntityId = id;
       sender.setRuntimeEntityId(id);
       captureItemPalette(p.itemstates);
     } catch {
       /* ignore */
+    }
+  });
+
+  c.on("move_player", (packet: unknown) => {
+    try {
+      const p = packet as { runtime_id?: unknown; mode?: unknown };
+      const id = toBigIntOrNull(p.runtime_id);
+      const teleport = p.mode === "teleport" || p.mode === 2;
+      if (teleport && id != null && id === localRuntimeEntityId) behavior.markTeleported();
+    } catch {
+      /* ignore malformed movement packet */
     }
   });
 
@@ -216,19 +232,18 @@ async function main(): Promise<void> {
   });
 
   // --- stdin command loop ---
-  startCommandReader((cmd) => handleCommand(cmd, sender, behavior, c, shutdown));
+  startCommandReader((cmd) => handleCommand(cmd, behavior, c, shutdown));
 }
 
 function handleCommand(
   cmd: Command,
-  sender: BotSender,
   behavior: BehaviorState,
   c: { close?: () => void; disconnect?: () => void },
   shutdown: (code: number) => void,
 ): void {
   switch (cmd.type) {
     case "chat":
-      sender.send(cmd.text);
+      behavior.enqueueChat(cmd.text);
       break;
     case "configure":
       behavior.updateConfig(cmd);

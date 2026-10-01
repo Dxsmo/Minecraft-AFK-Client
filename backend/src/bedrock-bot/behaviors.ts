@@ -19,6 +19,11 @@ const SELL_EARNING_WINDOW_MS = 4000;
 const TPACCEPT_DEDUP_MS = 5000;
 /** Emit a heartbeat at most this often. */
 const HEARTBEAT_INTERVAL_MS = 15000;
+const SPAWN_STABILIZE_MS = 2000;
+const TELEPORT_STABILIZE_MS = 1250;
+const TELEPORT_COMMAND_GUARD_MS = 3000;
+const CHAT_COMMAND_GUARD_MS = 500;
+const INVENTORY_BUSY_DELAY_MS = 2000;
 
 type ForegroundTask =
   | { kind: "command"; text: string }
@@ -43,6 +48,25 @@ export function parseCurrency(text: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function isTeleportCommand(text: string): boolean {
+  const command = text.trim().match(/^\/([^\s]+)/)?.[1]?.toLowerCase();
+  return !!command && [
+    "home", "spawn", "warp", "server", "hub", "lobby", "back", "rtp", "wild",
+    "tpaccept", "tpyes", "is", "island", "skyblock",
+  ].includes(command);
+}
+
+function isInventoryBusyMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (lower.includes("inventar") || lower.includes("inventory")) && (
+    (lower.includes("gespeichert") && lower.includes("geladen")) ||
+    lower.includes("saved or loaded") ||
+    lower.includes("saving or loading") ||
+    lower.includes("being saved") ||
+    lower.includes("being loaded")
+  );
+}
+
 export class BehaviorState {
   private sender: BotSender;
   private cfg: BehaviorConfig;
@@ -51,7 +75,8 @@ export class BehaviorState {
   private lastHeartbeatAt = 0;
   private lastAutoCommandAt = Date.now();
   private nextRandomAutoCommandAt: number | null = null;
-  private lastAutosellAt = Date.now();
+  private nextAutosellAt = Date.now();
+  private automationReadyAt = Number.POSITIVE_INFINITY;
 
   private queue: ForegroundTask[] = [];
   /** Set while a balance query is awaiting a reply (pauses auto-sell). */
@@ -85,22 +110,52 @@ export class BehaviorState {
 
   updateConfig(cfg: BehaviorConfig): void {
     const wasCrouch = this.cfg.crouch_enabled;
+    const autosellChanged =
+      this.cfg.autosell_enabled !== cfg.autosell_enabled ||
+      this.cfg.autosell_interval_seconds !== cfg.autosell_interval_seconds ||
+      this.cfg.autosell_command !== cfg.autosell_command;
     this.cfg = { ...cfg, tpauto_allowlist: cfg.tpauto_allowlist ?? [] };
     this.nextRandomAutoCommandAt = null;
+    if (autosellChanged && this.cfg.autosell_enabled) {
+      this.nextAutosellAt = Math.max(Date.now(), this.automationReadyAt);
+    }
     // Apply crouch changes immediately rather than waiting for the next tick.
     if (this.cfg.crouch_enabled && !wasCrouch) this.applyCrouch(true);
     if (!this.cfg.crouch_enabled && wasCrouch) this.applyCrouch(false);
   }
 
   markSpawned(): void {
+    const now = Date.now();
     this.spawned = true;
+    this.automationReadyAt = now + SPAWN_STABILIZE_MS;
+    this.nextAutosellAt = this.automationReadyAt;
     if (this.cfg.crouch_enabled) this.applyCrouch(true);
+  }
+
+  markJoining(): void {
+    this.spawned = false;
+    this.automationReadyAt = Number.POSITIVE_INFINITY;
+    this.balanceDeadline = null;
+    this.inv.containerOpen = false;
+  }
+
+  markTeleported(): void {
+    if (!this.spawned) return;
+    this.inv.containerOpen = false;
+    this.postponeAutomation(Date.now() + TELEPORT_STABILIZE_MS);
   }
 
   // --- Foreground task enqueue (called from stdin command handling) ---
 
   enqueueTask(text: string): void {
     this.queue.push({ kind: "command", text });
+  }
+  enqueueChat(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const task: ForegroundTask = { kind: "command", text: trimmed };
+    if (isTeleportCommand(trimmed)) this.queue.unshift(task);
+    else this.queue.push(task);
   }
   enqueueBalance(command: string): void {
     const pending = this.balanceDeadline != null || this.queue.some((t) => t.kind === "balance");
@@ -131,7 +186,7 @@ export class BehaviorState {
       emit({ type: "heartbeat" });
     }
 
-    if (!this.spawned) return;
+    if (!this.spawned || now < this.automationReadyAt) return;
 
     // Balance reply timeout: stop pausing auto-sell if the server never answered.
     if (this.balanceDeadline != null && now >= this.balanceDeadline) {
@@ -154,8 +209,8 @@ export class BehaviorState {
     // Continuous auto-sell yields to any foreground task.
     if (this.cfg.autosell_enabled && !this.foregroundBusy() && !actionSentThisTick) {
       const interval = Math.max(0.5, this.cfg.autosell_interval_seconds ?? 60) * 1000;
-      if (now - this.lastAutosellAt >= interval) {
-        this.lastAutosellAt = now;
+      if (now >= this.nextAutosellAt) {
+        this.nextAutosellAt = now + interval;
         const command = (this.cfg.autosell_command ?? "/sell").trim() || "/sell";
         this.sellWindowUntil = now + SELL_EARNING_WINDOW_MS;
         this.sender.command(command);
@@ -177,7 +232,11 @@ export class BehaviorState {
           this.nextRandomAutoCommandAt = now + this.randomAutoCommandDelayMs();
         }
         if (now >= this.nextRandomAutoCommandAt) {
-          this.sender.send(this.cfg.auto_command_text.trim());
+          const text = this.cfg.auto_command_text.trim();
+          this.sender.send(text);
+          this.postponeAutomation(
+            now + (isTeleportCommand(text) ? TELEPORT_COMMAND_GUARD_MS : CHAT_COMMAND_GUARD_MS),
+          );
           this.nextRandomAutoCommandAt = now + this.randomAutoCommandDelayMs();
           emit({ type: "behavior_log", message: "Auto-command sent (random range)" });
         }
@@ -185,7 +244,11 @@ export class BehaviorState {
         const interval = Math.max(1, this.cfg.auto_command_interval_minutes) * 60_000;
         if (now - this.lastAutoCommandAt >= interval) {
           this.lastAutoCommandAt = now;
-          this.sender.send(this.cfg.auto_command_text.trim());
+          const text = this.cfg.auto_command_text.trim();
+          this.sender.send(text);
+          this.postponeAutomation(
+            now + (isTeleportCommand(text) ? TELEPORT_COMMAND_GUARD_MS : CHAT_COMMAND_GUARD_MS),
+          );
           emit({ type: "behavior_log", message: "Auto-command sent" });
         }
       }
@@ -197,6 +260,9 @@ export class BehaviorState {
     switch (task.kind) {
       case "command":
         this.sender.send(task.text);
+        this.postponeAutomation(
+          now + (isTeleportCommand(task.text) ? TELEPORT_COMMAND_GUARD_MS : CHAT_COMMAND_GUARD_MS),
+        );
         emit({ type: "behavior_log", message: `Scheduled command dispatched: ${task.text}` });
         break;
       case "balance":
@@ -227,6 +293,11 @@ export class BehaviorState {
   onChat(sender: string | null, message: string): void {
     const now = Date.now();
 
+    if (isInventoryBusyMessage(message)) {
+      this.postponeAutomation(now + INVENTORY_BUSY_DELAY_MS);
+      return;
+    }
+
     // Balance reply.
     if (this.balanceDeadline != null) {
       const amount = parseCurrency(message);
@@ -245,7 +316,7 @@ export class BehaviorState {
     }
 
     // Auto-accept /tpa requests.
-    if (this.cfg.tpauto_enabled && /request(?:ed)?\b.*teleport|teleport.*to you|wants to teleport|/i.test(message)) {
+    if (this.cfg.tpauto_enabled && /request(?:ed)?\b.*teleport|teleport.*to you|wants to teleport/i.test(message)) {
       // Ignore /tpahere ("teleport to them") requests.
       if (/tpahere|teleport to (?:them|their)/i.test(message)) return;
       const requester = this.extractTpaRequester(message) ?? sender ?? "";
@@ -255,9 +326,14 @@ export class BehaviorState {
         return;
       }
       this.lastTpAccept = { name: requester, at: now };
-      this.sender.command("/tpaccept");
-      emit({ type: "behavior_log", message: `Auto-accepted /tpa${requester ? ` from ${requester}` : ""}` });
+      this.enqueueChat("/tpaccept");
+      emit({ type: "behavior_log", message: `Queued /tpaccept${requester ? ` from ${requester}` : ""}` });
     }
+  }
+
+  private postponeAutomation(until: number): void {
+    this.automationReadyAt = Math.max(this.automationReadyAt, until);
+    this.nextAutosellAt = Math.max(this.nextAutosellAt, until);
   }
 
   private extractTpaRequester(message: string): string | null {

@@ -40,17 +40,6 @@ const AUTOSELL_SETTLE_DELAY: Duration = Duration::from_millis(150);
 /// is closed and the cycle abandoned after this, so the bot can never get stuck
 /// in an open GUI.
 const AUTOSELL_RUN_TIMEOUT: Duration = Duration::from_secs(15);
-/// Consecutive failed cycles tolerated before the retry delay starts growing.
-/// Generous on purpose: a single hiccup (server lag, a menu that closed itself)
-/// must not slow selling down, only a persistent problem should.
-const AUTOSELL_FAILURE_GRACE: u32 = 5;
-/// Shortest retry delay once auto-sell has started backing off.
-const AUTOSELL_BACKOFF_BASE: Duration = Duration::from_secs(10);
-/// Longest retry delay. Once here, the sell command is sent at most this often,
-/// which keeps a permanently broken sell menu from flooding the server's chat.
-/// Deliberately capped at a minute so auto-sell always comes back on its own.
-const AUTOSELL_BACKOFF_MAX: Duration = Duration::from_secs(60);
-
 /// Pace inventory clicks so the server can acknowledge each one before the
 /// next stack is moved. Sending all clicks and closing in one tick caused busy
 /// servers to discard the tail of a sell cycle.
@@ -58,7 +47,26 @@ const AUTOSELL_CLICK_DELAY: Duration = Duration::from_millis(75);
 /// Give the server time to publish its authoritative inventory update after the
 /// last click before deciding whether the cycle made progress.
 const AUTOSELL_CONFIRM_DELAY: Duration = Duration::from_millis(400);
-const AUTOSELL_CONFIRM_TIMEOUT: Duration = Duration::from_secs(3);
+/// Wait after a full spawn before sending automation commands. `Spawn` means
+/// the chunk is usable, but proxy networks may still be restoring the player
+/// inventory for a brief moment (the attached HugoSMP log showed exactly this).
+const SPAWN_STABILIZE_DELAY: Duration = Duration::from_secs(2);
+/// Position sync packets are emitted for /home, accepted TPAs and other
+/// same-world teleports. Let the destination and inventory settle before the
+/// next sell cycle starts.
+const TELEPORT_STABILIZE_DELAY: Duration = Duration::from_millis(1250);
+/// A teleport command is paused immediately, even before its position packet
+/// arrives. This also covers rejected/slow commands without freezing forever.
+const TELEPORT_COMMAND_GUARD: Duration = Duration::from_secs(3);
+/// Small serialization gap after a normal chat command. Commands can open a
+/// GUI asynchronously, so auto-sell must not start on the following tick.
+const CHAT_COMMAND_GUARD: Duration = Duration::from_secs(1);
+/// Retry delay when the server explicitly says the inventory is still being
+/// saved/loaded. This is a transient lifecycle state, not an auto-sell failure.
+const INVENTORY_BUSY_DELAY: Duration = Duration::from_secs(2);
+/// Repeated menu failures are logged at most this often. Retrying itself still
+/// follows the configured interval and is never slowed down by logging.
+const AUTOSELL_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(30);
 /// Ignore an identical `/tpaccept …` command if we already sent it within this
 /// window, to avoid reacting multiple times to a burst of duplicate server
 /// messages (request line + clickable hint often arrive together).
@@ -110,8 +118,7 @@ enum AutoSellPhase {
     /// The sell command was sent; waiting for the server to open its GUI.
     WaitingForMenu {
         since: Instant,
-        /// Diagnostic only; never prevents sending the command. It makes a
-        /// server that opens no GUI for an empty inventory a harmless no-op.
+        /// Used only to shorten an empty probe; it never suppresses `/sell`.
         started_empty: bool,
     },
     /// The sell container is open. Fill it and close it again.
@@ -120,18 +127,14 @@ enum AutoSellPhase {
         next_at: Instant,
         /// Abort the cycle at this time no matter what.
         deadline: Instant,
-        /// Total item count before the first click, used for real confirmation.
-        initial_items: u64,
         /// Next player-menu slot to inspect. Each occupied slot is clicked once.
         next_slot: usize,
         clicks: usize,
     },
-    /// All occupied player slots were clicked. Wait for the server's inventory
-    /// acknowledgement before closing and calling the cycle successful.
+    /// All occupied player slots were clicked. Give the server a short
+    /// acknowledgement window, then close the GUI unconditionally.
     Confirming {
         check_at: Instant,
-        deadline: Instant,
-        initial_items: u64,
         clicks: usize,
         menu_closed: bool,
     },
@@ -145,7 +148,7 @@ enum AutoSellPhase {
 /// safe, non-overlapping execution.
 enum ForegroundTask {
     /// Send a single chat line (e.g. a scheduled daily command).
-    Chat(String),
+    Chat { text: String, teleporting: bool },
     /// Send a balance query, then wait for the reply (parsed in `on_chat`).
     Balance(String),
     /// Right-click a nearby spawner and drop the items in its container.
@@ -210,22 +213,21 @@ pub struct BehaviorState {
     last_auto_command_at: Instant,
     /// Next due time for random-range auto-command mode.
     next_random_auto_command_at: Option<Instant>,
-    last_autosell_at: Instant,
+    /// Earliest time a new auto-sell cycle may start. The timestamp is advanced
+    /// when a command is sent, so a slow cycle never overlaps the next one.
+    next_autosell_at: Instant,
     autosell_phase: AutoSellPhase,
-    /// Consecutive auto-sell cycles that sold nothing (menu never opened, or it
-    /// opened but no item could be moved into it). Drives the backoff below.
-    autosell_failures: u32,
-    /// While set, no sell command is sent before this time. This is the guard
-    /// against the chat-spam loop: without it a server that stops opening the
-    /// sell menu makes the bot repeat the command every interval indefinitely,
-    /// which floods chat and gets the account muted by the server's anti-spam.
-    autosell_retry_at: Option<Instant>,
-    /// Whether the current failure/idle streak has already been logged, so the
-    /// console shows one line per streak instead of one per attempt.
-    autosell_streak_logged: bool,
-    /// Player inventory signature observed while idle. A content change clears
-    /// a stale failure backoff, because newly arrived items may be sellable.
-    last_autosell_inventory_sig: Option<u64>,
+    last_autosell_failure_log: Option<Instant>,
+    /// Automation is disabled before the first Spawn and between Login/Spawn
+    /// during world/server changes. This prevents commands while the server is
+    /// saving or loading the inventory.
+    spawned: bool,
+    /// Shared quiescence gate for spawn, teleports and asynchronous commands.
+    automation_ready_at: Instant,
+    /// A non-teleport foreground chat command may open its own menu (for
+    /// example `/homes`). Close only that command-owned menu after its guard;
+    /// auto-sell itself never closes an unrelated pre-existing GUI.
+    command_menu_close_at: Option<Instant>,
     /// When set, sell-confirmation messages until this time count as earnings.
     sell_earning_window: Option<Instant>,
     /// Foreground one-shot tasks awaiting execution (see [`ForegroundTask`]).
@@ -271,12 +273,12 @@ impl BehaviorState {
             },
             last_auto_command_at: now,
             next_random_auto_command_at: None,
-            last_autosell_at: now,
+            next_autosell_at: now,
             autosell_phase: AutoSellPhase::Idle,
-            autosell_failures: 0,
-            autosell_retry_at: None,
-            autosell_streak_logged: false,
-            last_autosell_inventory_sig: None,
+            last_autosell_failure_log: None,
+            spawned: false,
+            automation_ready_at: now,
+            command_menu_close_at: None,
             sell_earning_window: None,
             task_queue: VecDeque::new(),
             active_task: None,
@@ -290,9 +292,16 @@ impl BehaviorState {
 
     /// Apply a live settings update (from a `Command::Configure`).
     pub fn update_config(&mut self, config: BehaviorConfig) {
+        let autosell_schedule_changed = self.config.autosell_enabled != config.autosell_enabled
+            || self.config.autosell_interval_seconds != config.autosell_interval_seconds
+            || self.config.autosell_command != config.autosell_command;
         self.config = config;
         // Re-arm random scheduling from "now" whenever span settings change.
         self.next_random_auto_command_at = None;
+        if autosell_schedule_changed && self.config.autosell_enabled {
+            let now = Instant::now();
+            self.next_autosell_at = self.automation_ready_at.max(now);
+        }
     }
 
     /// Enqueue a scheduled chat command as a foreground one-shot task. Auto-sell
@@ -300,7 +309,27 @@ impl BehaviorState {
     pub fn enqueue_task(&mut self, text: String) {
         let text = text.trim().to_string();
         if !text.is_empty() {
-            self.task_queue.push_back(ForegroundTask::Chat(text));
+            let teleporting = is_teleport_command(&text);
+            self.task_queue
+                .push_back(ForegroundTask::Chat { text, teleporting });
+        }
+    }
+
+    /// Queue a user/background chat command through the same serialization
+    /// point as auto-sell. Teleport commands are urgent: they cancel an open
+    /// sell GUI first, then run before ordinary queued work.
+    pub fn enqueue_chat(&mut self, bot: &Client, text: String) {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let teleporting = is_teleport_command(&text);
+        let task = ForegroundTask::Chat { text, teleporting };
+        if teleporting {
+            self.interrupt_for_transition(bot);
+            self.task_queue.push_front(task);
+        } else {
+            self.task_queue.push_back(task);
         }
     }
 
@@ -308,7 +337,11 @@ impl BehaviorState {
     /// pending/active balance query so repeated requests don't stack up.
     pub fn enqueue_balance(&mut self, command: String) {
         let command = command.trim().to_string();
-        let command = if command.is_empty() { "/balance".to_string() } else { command };
+        let command = if command.is_empty() {
+            "/balance".to_string()
+        } else {
+            command
+        };
         let already_pending = matches!(self.active_task, Some(ActiveTask::Balance { .. }))
             || self
                 .task_queue
@@ -344,7 +377,6 @@ impl BehaviorState {
         self.task_queue.push_back(ForegroundTask::DropItem { slot });
     }
 
-
     /// Emit a live snapshot of the bot's own inventory. Read-only, so it is not
     /// routed through the task queue.
     pub fn emit_inventory(&self, bot: &Client) {
@@ -357,21 +389,77 @@ impl BehaviorState {
         self.active_task.is_some() || !self.task_queue.is_empty()
     }
 
+    fn postpone_automation_until(&mut self, at: Instant) {
+        if at > self.automation_ready_at {
+            self.automation_ready_at = at;
+        }
+        if at > self.next_autosell_at {
+            self.next_autosell_at = at;
+        }
+    }
+
+    /// Tear down interactions whose container/world identity becomes invalid
+    /// across a teleport, respawn or proxy server transfer.
+    fn interrupt_for_transition(&mut self, bot: &Client) {
+        self.close_open_menu(bot);
+        self.autosell_phase = AutoSellPhase::Idle;
+        self.sell_earning_window = None;
+        self.active_task = None;
+        self.command_menu_close_at = None;
+    }
+
+    fn guard_after_chat(&mut self, now: Instant, teleporting: bool) {
+        let delay = if teleporting {
+            TELEPORT_COMMAND_GUARD
+        } else {
+            CHAT_COMMAND_GUARD
+        };
+        self.postpone_automation_until(now + delay);
+        self.command_menu_close_at = (!teleporting).then_some(now + CHAT_COMMAND_GUARD);
+    }
+
+    /// Called for Login, including proxy server and dimension/world changes.
+    /// No automation is allowed again until the matching Spawn event arrives.
+    pub fn on_login(&mut self, bot: &Client) {
+        self.interrupt_for_transition(bot);
+        self.spawned = false;
+    }
+
+    /// Called for a server position synchronization. After the initial spawn
+    /// these packets cover /home, TPA and same-world teleports that do not emit
+    /// another Login/Spawn pair.
+    pub fn on_position_sync(&mut self, bot: &Client) {
+        if !self.spawned {
+            return;
+        }
+        let now = Instant::now();
+        self.interrupt_for_transition(bot);
+        self.postpone_automation_until(now + TELEPORT_STABILIZE_DELAY);
+    }
+
     /// Called whenever the player (re)spawns into a world: initial join, after
     /// a death, and after a server/world switch. Respawns clear sneak server-side,
     /// so create one local transition there only. Normal gameplay never releases
     /// crouch periodically.
     pub fn on_spawn(&mut self, bot: &Client) {
-        if !self.config.crouch_enabled {
-            return;
-        }
-        if bot.crouching() {
-            // The server already cleared sneak as part of the respawn/world
-            // switch. Reset Azalea's stale local value, then press next tick.
-            let _ = bot.set_crouching(false);
-            self.crouch_repress_pending = true;
+        let now = Instant::now();
+        self.interrupt_for_transition(bot);
+        self.spawned = true;
+        self.automation_ready_at = now + SPAWN_STABILIZE_DELAY;
+        self.next_autosell_at = self.automation_ready_at;
+        self.last_autosell_failure_log = None;
+
+        if self.config.crouch_enabled {
+            if bot.crouching() {
+                // The server already cleared sneak as part of the respawn/world
+                // switch. Reset Azalea's stale local value, then press next tick.
+                let _ = bot.set_crouching(false);
+                self.crouch_repress_pending = true;
+            } else {
+                let _ = bot.set_crouching(true);
+                self.crouch_repress_pending = false;
+            }
         } else {
-            let _ = bot.set_crouching(true);
             self.crouch_repress_pending = false;
         }
     }
@@ -409,11 +497,23 @@ impl BehaviorState {
             }
         }
 
+        if self.command_menu_close_at.is_some_and(|at| now >= at) {
+            self.close_open_menu(bot);
+            self.command_menu_close_at = None;
+        }
+
+        // Before Spawn, and for a short stabilization period after a spawn or
+        // teleport, only passive reporting may run. In particular no /sell or
+        // queued chat command may touch the inventory-loading phase.
+        let automation_ready = self.spawned && now >= self.automation_ready_at;
+
         // Auto-command: type a configured chat message/command at a fixed
         // interval. "Zeitspanne"
         // (random-range) mode is its own independent toggle, so it must run
         // even if the fixed-interval "Interval" toggle is off.
-        if self.config.auto_command_enabled || self.config.auto_command_span_enabled {
+        if automation_ready
+            && (self.config.auto_command_enabled || self.config.auto_command_span_enabled)
+        {
             let text = self.config.auto_command_text.trim().to_string();
             if !text.is_empty() {
                 if self.config.auto_command_span_enabled {
@@ -424,9 +524,14 @@ impl BehaviorState {
                     if now >= self.next_random_auto_command_at.expect("set above")
                         && matches!(self.autosell_phase, AutoSellPhase::Idle)
                         && !self.foreground_busy()
+                        && (is_teleport_command(&text) || inventory_is_mutable(bot))
                     {
+                        if is_teleport_command(&text) {
+                            self.close_open_menu(bot);
+                        }
                         bot.chat(text.clone());
                         command_sent_this_tick = true;
+                        self.guard_after_chat(now, is_teleport_command(&text));
                         self.next_random_auto_command_at =
                             Some(now + random_auto_command_delay(&self.config));
                         emit(&OutEvent::BehaviorLog {
@@ -439,23 +544,30 @@ impl BehaviorState {
                     if now.duration_since(self.last_auto_command_at) >= interval
                         && matches!(self.autosell_phase, AutoSellPhase::Idle)
                         && !self.foreground_busy()
+                        && (is_teleport_command(&text) || inventory_is_mutable(bot))
                     {
                         self.last_auto_command_at = now;
+                        if is_teleport_command(&text) {
+                            self.close_open_menu(bot);
+                        }
                         bot.chat(text.clone());
                         command_sent_this_tick = true;
+                        self.guard_after_chat(now, is_teleport_command(&text));
                         emit(&OutEvent::BehaviorLog {
                             message: format!("Auto-command sent: {text}"),
                         });
                     }
                 }
             }
-        } else {
+        } else if !self.config.auto_command_enabled && !self.config.auto_command_span_enabled {
             self.next_random_auto_command_at = None;
         }
 
-        let foreground_ran = self.tick_foreground(bot, now);
-        if !command_sent_this_tick && !foreground_ran {
-            self.tick_autosell(bot, now);
+        if automation_ready && !command_sent_this_tick {
+            let foreground_ran = self.tick_foreground(bot, now);
+            if !foreground_ran {
+                self.tick_autosell(bot, now);
+            }
         }
 
         // Deferred inventory resync after a move/drop, so the UI reflects the
@@ -517,17 +629,35 @@ impl BehaviorState {
             if let Some(task) = self.task_queue.pop_front() {
                 ran = true;
                 match task {
-                    ForegroundTask::Chat(text) => {
+                    ForegroundTask::Chat { text, teleporting } => {
+                        if !teleporting && !inventory_is_mutable(bot) {
+                            self.task_queue
+                                .push_front(ForegroundTask::Chat { text, teleporting });
+                            return true;
+                        }
+                        if teleporting {
+                            self.close_open_menu(bot);
+                        }
                         bot.chat(text.clone());
+                        self.guard_after_chat(now, teleporting);
                         emit(&OutEvent::BehaviorLog {
                             message: format!("Scheduled command sent: {text}"),
                         });
                     }
                     ForegroundTask::Balance(command) => {
+                        if !inventory_is_mutable(bot) {
+                            self.task_queue.push_front(ForegroundTask::Balance(command));
+                            return true;
+                        }
                         bot.chat(command.clone());
+                        self.guard_after_chat(now, false);
                         self.active_task = Some(ActiveTask::Balance {
                             deadline: now + BALANCE_TIMEOUT,
                         });
+                    }
+                    ForegroundTask::CleanSpawner if !inventory_is_mutable(bot) => {
+                        self.task_queue.push_front(ForegroundTask::CleanSpawner);
+                        return true;
                     }
                     ForegroundTask::CleanSpawner => match find_spawner_in_reach(bot) {
                         Some(pos) => {
@@ -565,10 +695,9 @@ impl BehaviorState {
                             inv.click(PickupClick::Left { slot: Some(to) });
                             self.inventory_resync_at = Some(now + INVENTORY_RESYNC_DELAY);
                         } else {
-                            emit(&OutEvent::BehaviorLog {
-                                message: "Inventory move ignored: a container is open".into(),
-                            });
-                            emit_inventory_snapshot(bot);
+                            self.task_queue
+                                .push_front(ForegroundTask::MoveItem { from, to });
+                            return true;
                         }
                     }
                     ForegroundTask::DropItem { slot } => {
@@ -577,10 +706,8 @@ impl BehaviorState {
                             inv.click(ThrowClick::All { slot });
                             self.inventory_resync_at = Some(now + INVENTORY_RESYNC_DELAY);
                         } else {
-                            emit(&OutEvent::BehaviorLog {
-                                message: "Inventory drop ignored: a container is open".into(),
-                            });
-                            emit_inventory_snapshot(bot);
+                            self.task_queue.push_front(ForegroundTask::DropItem { slot });
+                            return true;
                         }
                     }
                 }
@@ -588,7 +715,6 @@ impl BehaviorState {
         }
         ran
     }
-
 
     /// Drives one tick of a spawner clear-out.
     ///
@@ -662,7 +788,11 @@ impl BehaviorState {
             return;
         }
 
-        let targets = if p.stage == SpawnerStage::Dropping { &drop_items } else { &sell_items };
+        let targets = if p.stage == SpawnerStage::Dropping {
+            &drop_items
+        } else {
+            &sell_items
+        };
         let matching = matching_slots(&slots, container_len, targets);
 
         // Progress tracking: a step that leaves the count unchanged counts as a
@@ -720,7 +850,11 @@ impl BehaviorState {
             SpawnerStage::Selling => {
                 // Everything the spawner can hold, so a stock stack is never
                 // mistaken for the sell button.
-                let stock: Vec<String> = drop_items.iter().chain(sell_items.iter()).cloned().collect();
+                let stock: Vec<String> = drop_items
+                    .iter()
+                    .chain(sell_items.iter())
+                    .cloned()
+                    .collect();
                 let Some(sell_slot) = find_spawner_sell_slot(&slots, container_len, &stock) else {
                     p.button_misses += 1;
                     p.steps += 1;
@@ -737,7 +871,9 @@ impl BehaviorState {
                     return;
                 };
                 p.button_misses = 0;
-                inv.click(PickupClick::Left { slot: Some(sell_slot) });
+                inv.click(PickupClick::Left {
+                    slot: Some(sell_slot),
+                });
                 // Sale confirmations right after the click count as earnings.
                 self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
                 p.sold += 1;
@@ -775,7 +911,9 @@ impl BehaviorState {
             return;
         }
 
-        let remaining = (0..container_len).filter(|&s| slots[s].is_present()).count();
+        let remaining = (0..container_len)
+            .filter(|&s| slots[s].is_present())
+            .count();
         // Give up when the server keeps refusing the throws, so a spawner whose
         // contents can't be dropped never traps the bot in an open GUI.
         if remaining < p.last_count {
@@ -812,19 +950,17 @@ impl BehaviorState {
 
     /// Drives the auto-sell cycle.
     ///
-    /// Opens the menu, moves one stack at a time, then waits for an authoritative
-    /// player-inventory change before declaring success. This survives lag and
-    /// servers that close their sell menu automatically after the first sale.
+    /// Opens the menu, moves one stack at a time and always closes it again.
+    /// A cycle that got as far as sending shift-clicks is considered complete:
+    /// at fast farms, newly arriving items can fully mask a decreasing total
+    /// item count, so total-count confirmation creates false failures.
     fn tick_autosell(&mut self, bot: &Client, now: Instant) {
         if !self.config.autosell_enabled {
             if !matches!(self.autosell_phase, AutoSellPhase::Idle) {
                 self.close_open_menu(bot);
             }
             self.autosell_phase = AutoSellPhase::Idle;
-            self.autosell_failures = 0;
-            self.autosell_retry_at = None;
-            self.autosell_streak_logged = false;
-            self.last_autosell_inventory_sig = None;
+            self.last_autosell_failure_log = None;
             return;
         }
 
@@ -839,51 +975,23 @@ impl BehaviorState {
                     return;
                 }
 
-                // Never gate a due sell cycle on a local "empty" snapshot. The
-                // inventory briefly reads as empty while a container closes and
-                // new drops may arrive immediately afterwards. Trust the sell
-                // menu instead, so a two-second interval remains two seconds.
-                let signature = player_inventory_signature(bot);
-                let changed_after_failure = self.last_autosell_inventory_sig != signature
-                    && (self.autosell_failures > 0 || self.autosell_retry_at.is_some());
-                self.last_autosell_inventory_sig = signature;
-                if changed_after_failure {
-                    // A newly changed inventory deserves a fresh attempt even
-                    // when the previous contents were unsellable or a menu had
-                    // timed out. This prevents a stale backoff from hiding new
-                    // sellable drops.
-                    self.autosell_failures = 0;
-                    self.autosell_retry_at = None;
-                    self.autosell_streak_logged = false;
-                }
-
-                // Backoff after repeated failures, checked before the interval
-                // so a sub-second interval can't override it.
-                if let Some(retry_at) = self.autosell_retry_at {
-                    if now < retry_at {
-                        return;
-                    }
-                    self.autosell_retry_at = None;
-                }
-                if !changed_after_failure
-                    && now.duration_since(self.last_autosell_at) < interval
-                {
+                // Never gate a due sell cycle on a local "empty" snapshot. It
+                // may be stale for a moment after close or while drops arrive.
+                if now < self.next_autosell_at {
                     return;
                 }
 
-                // Close any lingering/stale menu before starting so we never
-                // shift-click into the wrong container. Don't consume the
-                // interval; the next tick starts fresh.
+                // Never shift-click into, or close, a menu auto-sell did not
+                // open. Wait until the other interaction is finished.
                 if let Ok(inv) = bot.get_inventory() {
                     if inv.id() != 0 {
-                        inv.close();
                         return;
                     }
                 }
 
                 let command = self.config.autosell_command.trim();
                 let command = if command.is_empty() { "/sell" } else { command };
-                self.last_autosell_at = now;
+                self.next_autosell_at = now + interval;
                 bot.chat(command.to_string());
                 self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
                 self.autosell_phase = AutoSellPhase::WaitingForMenu {
@@ -906,7 +1014,6 @@ impl BehaviorState {
                                     self.autosell_phase = AutoSellPhase::Selling {
                                         next_at: now + AUTOSELL_SETTLE_DELAY,
                                         deadline: now + AUTOSELL_RUN_TIMEOUT,
-                                        initial_items: player_item_count(bot),
                                         next_slot: container_len,
                                         clicks: 0,
                                     };
@@ -917,24 +1024,29 @@ impl BehaviorState {
                     }
                 }
 
-                let menu_timeout = if started_empty {
+                // If drops arrive during an empty probe, restart immediately.
+                // This removes the old "empty interval + another full interval"
+                // delay without ever overlapping two open menu cycles.
+                if started_empty && player_item_count(bot) > 0 {
+                    self.autosell_phase = AutoSellPhase::Idle;
+                    self.next_autosell_at = now;
+                    return;
+                }
+
+                let timeout = if started_empty {
                     interval.min(AUTOSELL_MENU_TIMEOUT)
                 } else {
                     AUTOSELL_MENU_TIMEOUT
                 };
-                if now.duration_since(since) >= menu_timeout {
+                if now.duration_since(since) >= timeout {
                     self.close_open_menu(bot);
                     self.autosell_phase = AutoSellPhase::Idle;
                     if started_empty {
-                        self.autosell_failures = 0;
-                        self.autosell_retry_at = None;
-                        self.autosell_streak_logged = false;
+                        // Empty is a normal no-op. The next attempt is due now,
+                        // so the configured cadence continues without a skip.
+                        self.next_autosell_at = now;
                     } else {
-                        self.register_autosell_failure(
-                            now,
-                            interval,
-                            "Verkaufsmenü ging nicht auf",
-                        );
+                        self.log_autosell_failure(now, "Verkaufsmenü ging nicht auf");
                     }
                 }
             }
@@ -942,20 +1054,16 @@ impl BehaviorState {
             AutoSellPhase::Selling {
                 next_at,
                 deadline,
-                initial_items,
                 next_slot,
                 clicks,
             } => {
                 // Some servers close the GUI as soon as one stack sells. That
-                // is not automatically a failure: enter confirmation and judge
-                // it by the resulting player inventory.
+                // is a completed cycle as long as at least one click was sent.
                 let inv = match bot.get_inventory() {
                     Ok(inv) if inv.id() != 0 => inv,
                     _ => {
                         self.autosell_phase = AutoSellPhase::Confirming {
                             check_at: now + AUTOSELL_CONFIRM_DELAY,
-                            deadline: now + AUTOSELL_CONFIRM_TIMEOUT,
-                            initial_items,
                             clicks,
                             menu_closed: true,
                         };
@@ -967,7 +1075,7 @@ impl BehaviorState {
                 if now >= deadline {
                     inv.close();
                     self.autosell_phase = AutoSellPhase::Idle;
-                    self.register_autosell_failure(now, interval, "Verkauf hat zu lange gedauert");
+                    self.log_autosell_failure(now, "Verkauf hat zu lange gedauert");
                     return;
                 }
 
@@ -980,19 +1088,15 @@ impl BehaviorState {
 
                 let Some(slots) = inv.slots() else { return };
                 let Ok(menu) = bot.menu() else { return };
-                let next = menu
-                    .player_slots_range()
-                    .find(|&slot| {
-                        slot >= next_slot
-                            && slots.get(slot).is_some_and(ItemStack::is_present)
-                    });
+                let next = menu.player_slots_range().find(|&slot| {
+                    slot >= next_slot && slots.get(slot).is_some_and(ItemStack::is_present)
+                });
                 if let Some(slot) = next {
                     inv.shift_click(slot);
                     self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
                     self.autosell_phase = AutoSellPhase::Selling {
                         next_at: now + AUTOSELL_CLICK_DELAY,
                         deadline,
-                        initial_items,
                         next_slot: slot + 1,
                         clicks: clicks + 1,
                     };
@@ -1001,8 +1105,6 @@ impl BehaviorState {
 
                 self.autosell_phase = AutoSellPhase::Confirming {
                     check_at: now + AUTOSELL_CONFIRM_DELAY,
-                    deadline: (now + AUTOSELL_CONFIRM_TIMEOUT).min(deadline),
-                    initial_items,
                     clicks,
                     menu_closed: false,
                 };
@@ -1010,15 +1112,11 @@ impl BehaviorState {
 
             AutoSellPhase::Confirming {
                 check_at,
-                deadline,
-                initial_items,
                 clicks,
                 menu_closed,
             } => {
-                // Keep the GUI open briefly after the final click, then close it
-                // before measuring success. Otherwise an unsold stack merely
-                // sitting in the container looks like it vanished from the
-                // player's inventory and creates a false success.
+                // Keep the GUI open briefly after the final click so the server
+                // can acknowledge it, then close it before releasing the cycle.
                 if !menu_closed {
                     if now < check_at {
                         return;
@@ -1026,8 +1124,6 @@ impl BehaviorState {
                     self.close_open_menu(bot);
                     self.autosell_phase = AutoSellPhase::Confirming {
                         check_at: now + AUTOSELL_CONFIRM_DELAY,
-                        deadline,
-                        initial_items,
                         clicks,
                         menu_closed: true,
                     };
@@ -1036,80 +1132,30 @@ impl BehaviorState {
                 if now < check_at {
                     return;
                 }
-                let remaining = player_item_count(bot);
-                if remaining < initial_items {
-                    self.close_open_menu(bot);
-                    self.autosell_phase = AutoSellPhase::Idle;
-                    self.autosell_streak_logged = false;
-                    self.autosell_failures = 0;
-                    self.autosell_retry_at = None;
+                self.close_open_menu(bot);
+                self.autosell_phase = AutoSellPhase::Idle;
+                if clicks > 0 {
+                    self.last_autosell_failure_log = None;
                     self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
-                    self.last_autosell_inventory_sig = player_inventory_signature(bot);
                     emit(&OutEvent::BehaviorLog {
-                        message: format!(
-                            "AutoSell: bestätigt ({} Klick(s), {} Item(s) entfernt)",
-                            clicks,
-                            initial_items - remaining
-                        ),
+                        message: format!("AutoSell: Zyklus abgeschlossen ({clicks} Klick(s))"),
                     });
-                    return;
-                }
-                if clicks == 0 && initial_items == 0 {
-                    // A genuinely empty cycle is a harmless no-op. It must not
-                    // create a failure streak/backoff or an "empty inventory"
-                    // message that makes every second interval look skipped.
-                    self.autosell_phase = AutoSellPhase::Idle;
-                    self.autosell_failures = 0;
-                    self.autosell_retry_at = None;
-                    self.autosell_streak_logged = false;
-                    self.last_autosell_inventory_sig = player_inventory_signature(bot);
-                    if remaining > 0 {
-                        // Items arrived during the empty probe. Make the next
-                        // tick due immediately instead of waiting another full
-                        // configured interval.
-                        self.last_autosell_at = now
-                            .checked_sub(interval)
-                            .unwrap_or(self.last_autosell_at);
-                    }
-                    return;
-                }
-                if now >= deadline {
-                    self.close_open_menu(bot);
-                    self.autosell_phase = AutoSellPhase::Idle;
-                    let reason = if clicks == 0 {
-                        "keine Items im Verkaufsmenü gefunden"
-                    } else {
-                        "Server hat keine Inventaränderung bestätigt"
-                    };
-                    self.register_autosell_failure(now, interval, reason);
                 }
             }
         }
     }
 
-    /// Records a sell cycle that achieved nothing and schedules the next
-    /// attempt. The delay grows once [`AUTOSELL_FAILURE_GRACE`] cycles in a row
-    /// have failed, so a broken sell menu can never turn into a chat flood -
-    /// while a single hiccup still retries immediately.
-    fn register_autosell_failure(&mut self, now: Instant, interval: Duration, reason: &str) {
-        self.autosell_failures = self.autosell_failures.saturating_add(1);
-        if self.autosell_failures == 1 {
+    /// Log repeated server/menu failures without changing the configured retry
+    /// cadence. This keeps diagnostics useful without turning a transient miss
+    /// into a 10-60 second period where auto-sell appears to have stopped.
+    fn log_autosell_failure(&mut self, now: Instant, reason: &str) {
+        let should_log = self
+            .last_autosell_failure_log
+            .is_none_or(|at| now.duration_since(at) >= AUTOSELL_FAILURE_LOG_INTERVAL);
+        if should_log {
+            self.last_autosell_failure_log = Some(now);
             emit(&OutEvent::BehaviorLog {
                 message: format!("AutoSell: {reason} - versuche es weiter"),
-            });
-        }
-        let Some(backoff) = autosell_backoff(self.autosell_failures, interval) else {
-            return;
-        };
-        self.autosell_retry_at = Some(now + backoff);
-        if !self.autosell_streak_logged || self.autosell_failures == AUTOSELL_FAILURE_GRACE + 1 {
-            self.autosell_streak_logged = true;
-            emit(&OutEvent::BehaviorLog {
-                message: format!(
-                    "AutoSell: {reason} ({}x) - neuer Versuch alle {}s",
-                    self.autosell_failures,
-                    backoff.as_secs()
-                ),
             });
         }
     }
@@ -1134,6 +1180,7 @@ impl BehaviorState {
     /// `/tpaccept <name> tpa`) and only falls back to a bare `/tpaccept` when no
     /// such hint is present.
     pub fn on_chat(&mut self, bot: &Client, message: &str) {
+        let now = Instant::now();
         // Balance reply: while a balance query is in flight, the next chat line
         // carrying a money amount is the answer.
         if matches!(self.active_task, Some(ActiveTask::Balance { .. })) {
@@ -1150,7 +1197,7 @@ impl BehaviorState {
         // short window after a sell command. Nothing outside that window (e.g.
         // `/pay` income) is ever counted.
         if let Some(until) = self.sell_earning_window {
-            if Instant::now() <= until {
+            if now <= until {
                 if let Some(amount) = parse_sell_amount(message) {
                     emit(&OutEvent::SellEarning {
                         amount,
@@ -1158,6 +1205,15 @@ impl BehaviorState {
                     });
                 }
             }
+        }
+
+        // Proxy networks reject commands while they are persisting/restoring
+        // the inventory. Treat that reply as a lifecycle signal: tear down the
+        // current menu, wait briefly, then resume at normal configured cadence.
+        if is_inventory_busy_message(message) {
+            self.interrupt_for_transition(bot);
+            self.postpone_automation_until(now + INVENTORY_BUSY_DELAY);
+            return;
         }
 
         if !self.config.tpauto_enabled {
@@ -1189,7 +1245,6 @@ impl BehaviorState {
             }
         }
 
-        let now = Instant::now();
         if let Some((last_cmd, last_at)) = &self.last_tpaccept {
             if *last_cmd == command && now.duration_since(*last_at) < TPACCEPT_DEDUP {
                 return;
@@ -1197,9 +1252,12 @@ impl BehaviorState {
         }
         self.last_tpaccept = Some((command.clone(), now));
 
-        bot.chat(command.clone());
+        // TPA acceptance may itself trigger a position sync. It must never be
+        // sent while auto-sell owns a container; queue it first after forcibly
+        // closing/cancelling that sell cycle.
+        self.enqueue_chat(bot, command.clone());
         emit(&OutEvent::BehaviorLog {
-            message: format!("TPAuto: accepted teleport request ({command})"),
+            message: format!("TPAuto: teleport acceptance queued ({command})"),
         });
     }
 }
@@ -1209,6 +1267,46 @@ impl BehaviorState {
 /// refuse inventory edits while one is open).
 fn inventory_is_mutable(bot: &Client) -> bool {
     matches!(bot.get_inventory(), Ok(inv) if inv.id() == 0)
+}
+
+/// Commands that commonly move the player or transfer it through a proxy.
+/// They get priority over inventory work and a longer stabilization guard.
+fn is_teleport_command(text: &str) -> bool {
+    let Some(command) = text
+        .trim()
+        .strip_prefix('/')
+        .and_then(|rest| rest.split_whitespace().next())
+    else {
+        return false;
+    };
+    matches!(
+        command.to_ascii_lowercase().as_str(),
+        "home"
+            | "spawn"
+            | "warp"
+            | "server"
+            | "hub"
+            | "lobby"
+            | "back"
+            | "rtp"
+            | "wild"
+            | "tpaccept"
+            | "tpyes"
+            | "is"
+            | "island"
+            | "skyblock"
+    )
+}
+
+/// Server reply emitted while a proxy is persisting/restoring inventory data.
+fn is_inventory_busy_message(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    (lower.contains("inventar") || lower.contains("inventory"))
+        && ((lower.contains("gespeichert") && lower.contains("geladen"))
+            || lower.contains("saved or loaded")
+            || lower.contains("saving or loading")
+            || lower.contains("being saved")
+            || lower.contains("being loaded"))
 }
 
 fn random_auto_command_delay(cfg: &BehaviorConfig) -> Duration {
@@ -1257,7 +1355,6 @@ fn slot_to_snapshot(stack: &ItemStack) -> Option<InventorySlot> {
         None
     }
 }
-
 
 /// Extract an item's display name and lore as plain strings (formatting stripped).
 fn item_text(stack: &ItemStack) -> (String, Vec<String>) {
@@ -1337,9 +1434,9 @@ fn container_len(bot: &Client) -> Option<usize> {
     Some(*menu.player_slots_range().start())
 }
 
-/// Total number of items in the player's storage/hotbar section. A decrease is
-/// auto-sell's success signal; unlike counting occupied stacks this also catches
-/// servers that sell only part of a stack.
+/// Total number of items in the player's storage/hotbar section. This is only
+/// used to wake an empty probe when fresh drops arrive; it is deliberately not
+/// used to decide whether `/sell` may run or whether clicks were successful.
 fn player_item_count(bot: &Client) -> u64 {
     let Ok(menu) = bot.menu() else { return 0 };
     let slots = menu.slots();
@@ -1349,30 +1446,6 @@ fn player_item_count(bot: &Client) -> u64 {
         .map(|stack| stack.count().max(0) as u64)
         .sum()
 }
-
-/// Stable signature of only the player's storage/hotbar contents. Container id
-/// is intentionally excluded so opening/closing the sell GUI is not mistaken
-/// for newly arrived items.
-fn player_inventory_signature(bot: &Client) -> Option<u64> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let menu = bot.menu().ok()?;
-    let slots = menu.slots();
-    let mut hasher = DefaultHasher::new();
-    for slot in menu.player_slots_range() {
-        match slots.get(slot) {
-            Some(stack) if stack.is_present() => {
-                stack.kind().to_str().hash(&mut hasher);
-                stack.count().hash(&mut hasher);
-            }
-            _ => 0u8.hash(&mut hasher),
-        }
-    }
-    Some(hasher.finish())
-}
-
-
 
 /// Read the bot's own inventory and emit an [`OutEvent::Inventory`] snapshot.
 /// The player inventory menu lays its 46 slots out as: craft result (0), craft
@@ -1442,7 +1515,11 @@ fn find_spawner_in_reach(bot: &Client) -> Option<BlockPos> {
     let world = bot.world().ok()?;
     let world = world.read();
     let state = world.get_block_state(pos)?;
-    matches!(BlockKind::from(state), BlockKind::Spawner | BlockKind::TrialSpawner).then_some(pos)
+    matches!(
+        BlockKind::from(state),
+        BlockKind::Spawner | BlockKind::TrialSpawner
+    )
+    .then_some(pos)
 }
 
 /// Extracts a monetary amount from `text`, preferring a `$`-prefixed number and
@@ -1454,9 +1531,7 @@ fn extract_money(text: &str) -> Option<f64> {
     let dollar = DOLLAR.get_or_init(|| Regex::new(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)").unwrap());
     let number = NUMBER.get_or_init(|| Regex::new(r"([0-9][0-9,]*(?:\.[0-9]+)?)").unwrap());
 
-    let cap = dollar
-        .captures(text)
-        .or_else(|| number.captures(text))?;
+    let cap = dollar.captures(text).or_else(|| number.captures(text))?;
     let raw = cap.get(1)?.as_str().replace(',', "");
     raw.parse::<f64>().ok()
 }
@@ -1506,9 +1581,33 @@ fn parse_sell_amount(text: &str) -> Option<f64> {
 /// arguments, used to stop argument collection when replaying a suggested
 /// command (English + German).
 const TPACCEPT_STOP_WORDS: &[&str] = &[
-    "to", "the", "this", "that", "and", "or", "type", "click", "accept", "request",
-    "um", "zu", "die", "der", "den", "das", "und", "oder", "dich", "dir", "anfrage",
-    "annehmen", "akzeptieren", "tippe", "schreibe", "hier", "klicke",
+    "to",
+    "the",
+    "this",
+    "that",
+    "and",
+    "or",
+    "type",
+    "click",
+    "accept",
+    "request",
+    "um",
+    "zu",
+    "die",
+    "der",
+    "den",
+    "das",
+    "und",
+    "oder",
+    "dich",
+    "dir",
+    "anfrage",
+    "annehmen",
+    "akzeptieren",
+    "tippe",
+    "schreibe",
+    "hier",
+    "klicke",
 ];
 
 /// Returns true if `lower` (an already-lowercased message) describes a
@@ -1566,7 +1665,9 @@ fn extract_tpaccept_command(message: &str) -> Option<String> {
             .trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
             .to_string();
         let valid = (1..=16).contains(&cleaned.len())
-            && cleaned.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            && cleaned
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_');
         if !valid || TPACCEPT_STOP_WORDS.contains(&cleaned.to_lowercase().as_str()) {
             break;
         }
@@ -1587,82 +1688,32 @@ fn tpaccept_target_name(command: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// How long auto-sell should wait before the next attempt after `failures`
-/// consecutive fruitless cycles, or `None` while still inside the grace period
-/// (retry immediately at the configured interval).
-///
-/// Split out as a pure function so the long-term behaviour is testable: this is
-/// the part that decides whether a temporary problem quietly recovers or turns
-/// into "auto-sell just stopped working after a while".
-fn autosell_backoff(failures: u32, interval: Duration) -> Option<Duration> {
-    if failures <= AUTOSELL_FAILURE_GRACE {
-        return None;
-    }
-    let steps = (failures - AUTOSELL_FAILURE_GRACE - 1).min(8);
-    Some(
-        AUTOSELL_BACKOFF_BASE
-            .checked_mul(1u32 << steps)
-            .unwrap_or(AUTOSELL_BACKOFF_MAX)
-            .min(AUTOSELL_BACKOFF_MAX)
-            .max(interval),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        autosell_backoff, parse_balance, parse_sell_amount, parse_tpa_accept_command,
-        tpaccept_target_name, AUTOSELL_BACKOFF_MAX, AUTOSELL_FAILURE_GRACE,
+        is_inventory_busy_message, is_teleport_command, parse_balance, parse_sell_amount,
+        parse_tpa_accept_command, tpaccept_target_name,
     };
-    use std::time::Duration;
 
-    /// A short hiccup must never slow selling down.
     #[test]
-    fn autosell_tolerates_short_failure_streaks() {
-        let interval = Duration::from_secs(1);
-        for failures in 1..=AUTOSELL_FAILURE_GRACE {
-            assert_eq!(autosell_backoff(failures, interval), None);
-        }
+    fn lifecycle_commands_are_detected() {
+        assert!(is_teleport_command("/home farm"));
+        assert!(is_teleport_command(" /SERVER survival "));
+        assert!(is_teleport_command("/tpaccept Steve tpa"));
+        assert!(!is_teleport_command("/balance"));
+        assert!(!is_teleport_command("hello"));
     }
 
-    /// A persistent problem must back off instead of spamming the server.
     #[test]
-    fn autosell_backs_off_after_the_grace_period() {
-        let interval = Duration::from_secs(1);
-        let first = autosell_backoff(AUTOSELL_FAILURE_GRACE + 1, interval).unwrap();
-        let second = autosell_backoff(AUTOSELL_FAILURE_GRACE + 2, interval).unwrap();
-        assert!(second > first, "backoff must grow: {first:?} -> {second:?}");
+    fn inventory_loading_reply_is_detected() {
+        assert!(is_inventory_busy_message(
+            "Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird."
+        ));
+        assert!(is_inventory_busy_message(
+            "Your inventory is currently being loaded"
+        ));
+        assert!(!is_inventory_busy_message("Dein Inventar ist leer"));
     }
-
-    /// The long-term guarantee: however long a failure streak lasts, auto-sell
-    /// keeps retrying at least once a minute and never gives up for good.
-    #[test]
-    fn autosell_backoff_is_capped_and_never_gives_up() {
-        let interval = Duration::from_secs(1);
-        for failures in (AUTOSELL_FAILURE_GRACE + 1)..2000 {
-            let backoff = autosell_backoff(failures, interval)
-                .expect("a failing cycle must always schedule a retry");
-            assert!(
-                backoff <= AUTOSELL_BACKOFF_MAX,
-                "backoff {backoff:?} exceeded the cap at {failures} failures"
-            );
-        }
-        // Saturated: still exactly the cap, not something that overflowed to a
-        // tiny or absurd value.
-        assert_eq!(
-            autosell_backoff(u32::MAX, interval),
-            Some(AUTOSELL_BACKOFF_MAX)
-        );
-    }
-
-    /// A slow interval must not be undercut by a fast backoff.
-    #[test]
-    fn autosell_backoff_never_undercuts_the_interval() {
-        let interval = Duration::from_secs(120);
-        let backoff = autosell_backoff(AUTOSELL_FAILURE_GRACE + 1, interval).unwrap();
-        assert!(backoff >= interval, "{backoff:?} < {interval:?}");
-    }
-
 
     #[test]
     fn balance_dollar_with_commas() {
@@ -1685,7 +1736,9 @@ mod tests {
         );
         assert_eq!(parse_sell_amount("Verkauft für $1,250"), Some(1250.0));
         assert_eq!(
-            parse_sell_amount("CHAT <HUGE> +$14,492.50 (Basis: $8,525.00, Bonus: +$5,967.50 durch 1.7x)"),
+            parse_sell_amount(
+                "CHAT <HUGE> +$14,492.50 (Basis: $8,525.00, Bonus: +$5,967.50 durch 1.7x)"
+            ),
             Some(14492.50)
         );
     }
@@ -1734,7 +1787,9 @@ mod tests {
     #[test]
     fn request_line_without_hint_is_ignored() {
         assert_eq!(
-            parse_tpa_accept_command("[HugoSMP] Desmodus hat dir eine Teleportations-Anfrage gesendet!"),
+            parse_tpa_accept_command(
+                "[HugoSMP] Desmodus hat dir eine Teleportations-Anfrage gesendet!"
+            ),
             None
         );
     }

@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use azalea::entity::metadata::Health;
 use azalea::prelude::*;
+use azalea::protocol::packets::game::ClientboundGamePacket;
 use azalea::ClientInformation;
 use parking_lot::Mutex;
 
@@ -246,7 +247,12 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
                 ..Default::default()
             });
         }
-        Event::Login => emit(&OutEvent::Login),
+        Event::Login => {
+            // Login is emitted again for proxy/dimension world changes, before
+            // the new world is ready. Pause all automation until Spawn.
+            shared().lock().behavior.on_login(&bot);
+            emit(&OutEvent::Login);
+        }
         Event::Spawn => {
             SPAWNED.store(true, Ordering::SeqCst);
             // A respawn or server switch clears sneak server-side; re-press it.
@@ -259,6 +265,16 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
             shared().lock().behavior.on_chat(&bot, &message);
             emit(&OutEvent::Chat { sender, message });
         }
+        Event::Packet(packet) => {
+            if matches!(&*packet, ClientboundGamePacket::PlayerPosition(_)) {
+                shared().lock().behavior.on_position_sync(&bot);
+            }
+        }
+        Event::Death(_) => {
+            // The current container/world interaction is invalid immediately;
+            // the following Spawn event will re-enable automation.
+            shared().lock().behavior.on_login(&bot);
+        }
         Event::Tick => {
             // Drain queued commands first, then run behavior timers.
             let pending: Vec<Command> = {
@@ -267,7 +283,7 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
             };
             for cmd in pending {
                 match cmd {
-                    Command::Chat { text } => bot.chat(text),
+                    Command::Chat { text } => shared().lock().behavior.enqueue_chat(&bot, text),
                     Command::Configure(cfg) => shared().lock().behavior.update_config(cfg),
                     Command::RunTask { text } => shared().lock().behavior.enqueue_task(text),
                     Command::QueryBalance { command } => {
