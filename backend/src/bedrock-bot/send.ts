@@ -3,9 +3,9 @@
 //! helpers), and exact packet schemas vary by protocol version. Since this code
 //! cannot be exercised against a live Bedrock server in development, every send
 //! is wrapped defensively: a schema mismatch emits a single warning and, for
-//! optional cosmetic actions (swing/sneak/move), self-disables that action
+//! optional sneak actions, self-disables that action
 //! rather than repeatedly throwing. Chat and command sending — the backbone of
-//! the AFK/console feature set — additionally falls back from the "correct"
+//! console and automation — additionally falls back from the "correct"
 //! command_request packet to plain chat text, which many servers also accept.
 
 import { emit, type OutEvent } from "./protocol.js";
@@ -107,19 +107,6 @@ export class BotSender {
     }
   }
 
-  /** Swing the arm to look active (best-effort anti-idle). */
-  swing(): void {
-    if (this.disabled.has("swing") || this.runtimeEntityId == null) return;
-    try {
-      this.client.queue("animate", {
-        action_id: "swing_arm",
-        runtime_entity_id: this.runtimeEntityId,
-      });
-    } catch {
-      this.disabled.add("swing");
-    }
-  }
-
   /** Start or stop sneaking/crouching (best-effort). */
   setSneak(sneaking: boolean): void {
     if (this.disabled.has("sneak") || this.runtimeEntityId == null) return;
@@ -133,29 +120,6 @@ export class BotSender {
       });
     } catch {
       this.disabled.add("sneak");
-    }
-  }
-
-  /**
-   * Nudge the view yaw to register as "moving" on servers that kick for being
-   * perfectly still. Best-effort; disabled on first failure. `yaw` in degrees.
-   */
-  rotate(yaw: number): void {
-    if (this.disabled.has("rotate") || this.runtimeEntityId == null) return;
-    try {
-      this.client.queue("move_player", {
-        runtime_id: this.runtimeEntityId,
-        position: { x: 0, y: 0, z: 0 },
-        pitch: 0,
-        yaw,
-        head_yaw: yaw,
-        mode: "normal",
-        on_ground: true,
-        ridden_runtime_id: 0,
-        tick: 0,
-      });
-    } catch {
-      this.disabled.add("rotate");
     }
   }
 

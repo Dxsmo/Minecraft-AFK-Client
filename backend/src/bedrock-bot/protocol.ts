@@ -28,11 +28,8 @@ export interface Config {
   /** Directory used to persist the Microsoft auth token cache for this account. */
   cache_dir: string;
 
-  afk_enabled: boolean;
-  movement_enabled: boolean;
   /** When true, continuously sneak/crouch. */
   crouch_enabled?: boolean;
-  afk_interval_seconds: number;
   auto_command_enabled: boolean;
   auto_command_text: string;
   auto_command_interval_minutes: number;
@@ -51,10 +48,7 @@ export interface Config {
 
 /** Behavior-only subset of Config, re-sent later to update settings live. */
 export interface BehaviorConfig {
-  afk_enabled: boolean;
-  movement_enabled: boolean;
   crouch_enabled?: boolean;
-  afk_interval_seconds: number;
   auto_command_enabled: boolean;
   auto_command_text: string;
   auto_command_interval_minutes: number;

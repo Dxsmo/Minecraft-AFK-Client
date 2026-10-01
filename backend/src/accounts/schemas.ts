@@ -51,10 +51,7 @@ export const createAccountSchema = z
     // and its on-disk token cache. Required for every account. Never exposed
     // back to the frontend.
     credentialsSecret: z.string().trim().email().max(320),
-    afkEnabled: z.boolean().default(true),
-    movementEnabled: z.boolean().default(false),
     crouchEnabled: z.boolean().default(false),
-    afkIntervalSeconds: z.coerce.number().int().min(5).max(3600).default(30),
     autoReconnect: z.boolean().default(true),
     notes: z.string().max(50).default(""),
     autoCommandEnabled: z.boolean().default(false),
@@ -101,10 +98,7 @@ export const updateAccountSchema = z.object({
   minecraftVersion: z.string().max(16).optional(),
   serverHost: z.string().min(1).max(255).optional(),
   serverPort: z.coerce.number().int().min(1).max(65535).optional(),
-  afkEnabled: z.boolean().optional(),
-  movementEnabled: z.boolean().optional(),
   crouchEnabled: z.boolean().optional(),
-  afkIntervalSeconds: z.coerce.number().int().min(5).max(3600).optional(),
   autoReconnect: z.boolean().optional(),
   notes: z.string().max(50).optional(),
   autoCommandEnabled: z.boolean().optional(),
@@ -140,7 +134,7 @@ export const updateAccountSchema = z.object({
 
 /**
  * Settings only an ADMIN may change. Normal users get a reduced feature set —
- * no AFK/movement behavior, balance polling or auto-TPA —
+ * no balance polling or auto-TPA —
  * so these keys are stripped from a non-admin update before it reaches the DB.
  * Hiding them in the UI alone would not be a real authorization boundary.
  *
@@ -148,9 +142,6 @@ export const updateAccountSchema = z.object({
  * user, since those drive features they can still trigger themselves.
  */
 export const ADMIN_ONLY_ACCOUNT_FIELDS = [
-  "afkEnabled",
-  "afkIntervalSeconds",
-  "movementEnabled",
   "tpAutoEnabled",
   "tpAutoAllowlist",
   "balanceEnabled",

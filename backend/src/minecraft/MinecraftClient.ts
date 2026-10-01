@@ -136,10 +136,7 @@ export class MinecraftClient extends EventEmitter {
     if (this.subprocess && this.status === "ONLINE") {
       this.sendToBot({
         type: "configure",
-        afk_enabled: config.afkEnabled,
-        movement_enabled: config.movementEnabled,
         crouch_enabled: config.crouchEnabled,
-        afk_interval_seconds: config.afkIntervalSeconds,
         auto_command_enabled: config.autoCommandEnabled,
         auto_command_text: config.autoCommandText,
         auto_command_interval_minutes: config.autoCommandIntervalMinutes,
@@ -433,10 +430,7 @@ export class MinecraftClient extends EventEmitter {
       email: this.config.credentialsSecret,
       password: this.config.credentialsPassword,
       cache_dir: cacheDir,
-      afk_enabled: this.config.afkEnabled,
-      movement_enabled: this.config.movementEnabled,
       crouch_enabled: this.config.crouchEnabled,
-      afk_interval_seconds: this.config.afkIntervalSeconds,
       auto_command_enabled: this.config.autoCommandEnabled,
       auto_command_text: this.config.autoCommandText,
       auto_command_interval_minutes: this.config.autoCommandIntervalMinutes,

@@ -102,7 +102,7 @@ struct State;
 /// would otherwise spawn a full worker pool per bot (≈4 threads each), which
 /// adds up fast when running dozens of accounts on a Raspberry Pi. A
 /// current-thread runtime keeps each bot to a handful of threads while behaving
-/// identically for an AFK workload.
+/// identically for this lightweight bot workload.
 fn main() -> AppExit {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -240,7 +240,7 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
     match event {
         Event::Init => {
             // A small view distance keeps memory/CPU low, which matters on a
-            // Raspberry Pi and doesn't affect AFK behavior.
+            // Raspberry Pi and doesn't affect account automation.
             let _ = bot.set_client_information(ClientInformation {
                 view_distance: 4,
                 ..Default::default()

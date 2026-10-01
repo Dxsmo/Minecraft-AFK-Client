@@ -20,13 +20,10 @@ export function AccountSettingsPanel({
   isAdmin: boolean;
   onUpdated: () => void;
 }) {
-  const [afkEnabled, setAfkEnabled] = useState(account.afkEnabled);
-  const [movementEnabled, setMovementEnabled] = useState(account.movementEnabled);
   const [crouchEnabled, setCrouchEnabled] = useState(account.crouchEnabled);
   const [displayName, setDisplayName] = useState(account.displayName ?? "");
   const [serverHost, setServerHost] = useState(account.serverHost);
   const [serverPort, setServerPort] = useState(account.serverPort);
-  const [afkIntervalSeconds, setAfkIntervalSeconds] = useState(account.afkIntervalSeconds);
   const [autoReconnect, setAutoReconnect] = useState(account.autoReconnect);
   const [autoCommandEnabled, setAutoCommandEnabled] = useState(account.autoCommandEnabled);
   // Auto home only ever runs "/home <name>", so the UI edits the bare name and
@@ -81,8 +78,6 @@ export function AccountSettingsPanel({
     setError(null);
     setMessage(null);
     try {
-      // Admin-only keys are omitted entirely for normal users — the server
-      // strips them too, this just avoids sending values they can't set.
       await api.patch(`/minecraft/accounts/${account.id}`, {
         displayName,
         crouchEnabled,
@@ -106,9 +101,6 @@ export function AccountSettingsPanel({
         spawnerClearTimes,
         ...(isAdmin
           ? {
-              afkEnabled,
-              movementEnabled,
-              afkIntervalSeconds,
               balanceEnabled,
               balanceCommand,
               tpAutoEnabled,
@@ -196,8 +188,8 @@ export function AccountSettingsPanel({
     });
   }
 
-  // Normal users get a reduced feature set: no AFK/movement tuning, balance,
-  // or auto-TPA (mirrored server-side in the accounts API).
+  // Normal users get a reduced feature set: no balance or auto-TPA
+  // (mirrored server-side in the accounts API).
   const categories: { id: string; label: string; icon: CatIcon; meta?: string; on?: boolean }[] = [
     { id: "general", label: "General", icon: "user", meta: displayName.trim() || account.name },
     { id: "connection", label: "Connection", icon: "server", meta: `${serverHost}:${serverPort}` },
@@ -205,7 +197,7 @@ export function AccountSettingsPanel({
       id: "behavior",
       label: "Behavior",
       icon: "activity",
-      on: isAdmin ? afkEnabled || movementEnabled || crouchEnabled : crouchEnabled,
+      on: crouchEnabled,
     },
     { id: "autohome", label: "Auto home", icon: "terminal", on: autoCommandEnabled || dailyCommandEnabled || autoCommandSpanEnabled },
     ...(isAdmin ? [{ id: "balance", label: "Balance", icon: "coin" as CatIcon, on: balanceEnabled }] : []),
@@ -361,17 +353,8 @@ export function AccountSettingsPanel({
 
             {activeCat === "behavior" && (
               <>
-                {isAdmin && <Toggle label="AFK behavior" checked={afkEnabled} onChange={setAfkEnabled} />}
-                {isAdmin && (
-                  <Toggle label="Movement behavior" checked={movementEnabled} onChange={setMovementEnabled} />
-                )}
                 <Toggle label="Crouch" description="Continuously sneak while connected." checked={crouchEnabled} onChange={setCrouchEnabled} />
                 <Toggle label="Auto-reconnect" checked={autoReconnect} onChange={setAutoReconnect} />
-                {isAdmin && (
-                  <Field label="AFK interval">
-                    <NumberInput value={afkIntervalSeconds} onChange={setAfkIntervalSeconds} min={5} max={3600} suffix="s" />
-                  </Field>
-                )}
               </>
             )}
 

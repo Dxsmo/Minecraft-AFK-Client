@@ -16,8 +16,6 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
   const [serverPort, setServerPort] = useState(25565);
   const [portTouched, setPortTouched] = useState(false);
   const [minecraftVersion, setMinecraftVersion] = useState(AUTO_DETECT_VERSION);
-  const [afkEnabled, setAfkEnabled] = useState(true);
-  const [movementEnabled, setMovementEnabled] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -57,8 +55,6 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
         serverHost,
         serverPort,
         minecraftVersion,
-        afkEnabled,
-        movementEnabled,
         autoReconnect,
       });
       // Kick off the bot so the device-code sign-in flow starts right away.
@@ -178,8 +174,6 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
               </Field>
 
               <div className="flex flex-wrap gap-x-5 gap-y-2 pt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
-                <Toggle checked={afkEnabled} onChange={setAfkEnabled} label="AFK" />
-                <Toggle checked={movementEnabled} onChange={setMovementEnabled} label="Movement" />
                 <Toggle checked={autoReconnect} onChange={setAutoReconnect} label="Auto-reconnect" />
               </div>
 

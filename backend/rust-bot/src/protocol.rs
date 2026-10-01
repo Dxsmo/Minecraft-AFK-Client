@@ -22,12 +22,9 @@ pub struct Config {
     /// specific account, so re-authentication is only needed once.
     pub cache_dir: String,
 
-    pub afk_enabled: bool,
-    pub movement_enabled: bool,
-    /// When true, continuously sneak/crouch (re-applied every tick).
+    /// When true, continuously sneak/crouch.
     #[serde(default)]
     pub crouch_enabled: bool,
-    pub afk_interval_seconds: u64,
     pub auto_command_enabled: bool,
     pub auto_command_text: String,
     pub auto_command_interval_minutes: u64,
@@ -92,11 +89,8 @@ fn default_auto_command_span_max_seconds() -> u64 {
 /// live without needing to reconnect.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BehaviorConfig {
-    pub afk_enabled: bool,
-    pub movement_enabled: bool,
     #[serde(default)]
     pub crouch_enabled: bool,
-    pub afk_interval_seconds: u64,
     pub auto_command_enabled: bool,
     pub auto_command_text: String,
     pub auto_command_interval_minutes: u64,
@@ -131,7 +125,7 @@ pub enum Command {
     /// Send a raw chat message or slash command (Node.js normalizes the `/`
     /// prefix before sending here).
     Chat { text: String },
-    /// Update AFK/movement/auto-command behavior settings live.
+    /// Update account automation settings live.
     Configure(BehaviorConfig),
     /// Run a chat command as a *foreground one-shot task*: any continuous task
     /// (auto-sell) is paused until it has been sent, then resumed. Used by the

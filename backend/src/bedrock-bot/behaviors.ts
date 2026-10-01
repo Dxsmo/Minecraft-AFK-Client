@@ -2,7 +2,7 @@
 //! task-interrupt system, mirroring the Azalea bot's behavior model so the
 //! Node backend gets the same events regardless of edition.
 //!
-//! Continuous work (auto-sell, anti-idle swing, auto-command) yields to
+//! Continuous work (auto-sell and auto-command) yields to
 //! one-shot foreground tasks (daily command / balance query / inventory move):
 //! while a foreground task is running, auto-sell does not start, and it resumes
 //! on the next tick once the foreground task has completed. Foreground tasks run
@@ -19,8 +19,6 @@ const SELL_EARNING_WINDOW_MS = 4000;
 const TPACCEPT_DEDUP_MS = 5000;
 /** Emit a heartbeat at most this often. */
 const HEARTBEAT_INTERVAL_MS = 15000;
-/** Rotate the view this often when movement is enabled. */
-const MOVEMENT_INTERVAL_MS = 5000;
 
 type ForegroundTask =
   | { kind: "command"; text: string }
@@ -51,8 +49,6 @@ export class BehaviorState {
 
   private spawned = false;
   private lastHeartbeatAt = 0;
-  private lastAfkAt = 0;
-  private lastMoveAt = 0;
   private lastAutoCommandAt = Date.now();
   private nextRandomAutoCommandAt: number | null = null;
   private lastAutosellAt = Date.now();
@@ -72,10 +68,7 @@ export class BehaviorState {
   constructor(config: Config, sender: BotSender) {
     this.sender = sender;
     this.cfg = {
-      afk_enabled: config.afk_enabled,
-      movement_enabled: config.movement_enabled,
       crouch_enabled: config.crouch_enabled ?? false,
-      afk_interval_seconds: config.afk_interval_seconds,
       auto_command_enabled: config.auto_command_enabled,
       auto_command_text: config.auto_command_text,
       auto_command_interval_minutes: config.auto_command_interval_minutes,
@@ -131,6 +124,7 @@ export class BehaviorState {
 
   onTick(): void {
     const now = Date.now();
+    let actionSentThisTick = false;
 
     if (now - this.lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
       this.lastHeartbeatAt = now;
@@ -148,28 +142,36 @@ export class BehaviorState {
     // Run at most one foreground task per tick while none is blocking.
     if (!this.foregroundBusy()) {
       const task = this.queue.shift();
-      if (task) this.runForeground(task, now);
+      if (task) {
+        this.runForeground(task, now);
+        actionSentThisTick = true;
+      }
     }
 
     // Keep crouching applied (cheap; the sender de-dupes via its own state).
     if (this.cfg.crouch_enabled && !this.sneaking) this.applyCrouch(true);
 
     // Continuous auto-sell yields to any foreground task.
-    if (this.cfg.autosell_enabled && !this.foregroundBusy()) {
+    if (this.cfg.autosell_enabled && !this.foregroundBusy() && !actionSentThisTick) {
       const interval = Math.max(0.5, this.cfg.autosell_interval_seconds ?? 60) * 1000;
       if (now - this.lastAutosellAt >= interval) {
         this.lastAutosellAt = now;
         const command = (this.cfg.autosell_command ?? "/sell").trim() || "/sell";
         this.sellWindowUntil = now + SELL_EARNING_WINDOW_MS;
         this.sender.command(command);
+        actionSentThisTick = true;
         emit({ type: "behavior_log", message: `Auto-sell: ran ${command}` });
       }
     }
 
-    // Auto-command at its own interval, independent of AFK/movement. The
+    // Auto-command at its own interval. The
     // "Zeitspanne" (random-range) toggle is independent of the fixed-interval
     // toggle, so it must run even if the "Interval" toggle itself is off.
-    if ((this.cfg.auto_command_enabled || this.cfg.auto_command_span_enabled) && this.cfg.auto_command_text.trim()) {
+    if (
+      !actionSentThisTick
+      && (this.cfg.auto_command_enabled || this.cfg.auto_command_span_enabled)
+      && this.cfg.auto_command_text.trim()
+    ) {
       if (this.cfg.auto_command_span_enabled) {
         if (this.nextRandomAutoCommandAt == null) {
           this.nextRandomAutoCommandAt = now + this.randomAutoCommandDelayMs();
@@ -189,20 +191,6 @@ export class BehaviorState {
       }
     }
 
-    // Anti-idle swing.
-    if (this.cfg.afk_enabled) {
-      const interval = Math.max(5, this.cfg.afk_interval_seconds) * 1000;
-      if (now - this.lastAfkAt >= interval) {
-        this.lastAfkAt = now;
-        this.sender.swing();
-      }
-    }
-
-    // Movement: periodically rotate the view.
-    if (this.cfg.movement_enabled && now - this.lastMoveAt >= MOVEMENT_INTERVAL_MS) {
-      this.lastMoveAt = now;
-      this.sender.rotate(Math.floor(Math.random() * 360) - 180);
-    }
   }
 
   private runForeground(task: ForegroundTask, now: number): void {

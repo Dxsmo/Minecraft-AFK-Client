@@ -6,8 +6,8 @@
 //! owns the reconnect policy — this process just exits when the connection ends.
 //!
 //! NOTE: bedrock-protocol is a low-level packet client and exact packet schemas
-//! vary by protocol version. This bot implements the full AFK/console/auto-*
-//! feature set reliably; deeper container features (inventory item moves,
+//! vary by protocol version. This bot implements the console/automation feature
+//! set reliably; deeper container features (inventory item moves,
 //! clean-spawner) are best-effort and unverified against a live Bedrock server.
 
 import { mkdirSync } from "node:fs";

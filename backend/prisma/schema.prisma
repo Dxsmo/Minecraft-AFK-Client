@@ -52,12 +52,12 @@ model User {
   createdAt    DateTime   @default(now())
   lastLoginAt  DateTime?
 
-  sessions        Session[]
-  assignments     UserMinecraftAccount[]
-  auditLogs       AuditLog[]
-  createdAccounts MinecraftAccount[]     @relation("CreatedAccounts")
-  createdSniperAccounts SniperAccount[]  @relation("CreatedSniperAccounts")
-  createdIpBans   BannedIp[]             @relation("CreatedIpBans")
+  sessions              Session[]
+  assignments           UserMinecraftAccount[]
+  auditLogs             AuditLog[]
+  createdAccounts       MinecraftAccount[]     @relation("CreatedAccounts")
+  createdSniperAccounts SniperAccount[]        @relation("CreatedSniperAccounts")
+  createdIpBans         BannedIp[]             @relation("CreatedIpBans")
 }
 
 model Session {
@@ -75,75 +75,72 @@ model Session {
 }
 
 model MinecraftAccount {
-  id                 String   @id @default(cuid())
-  name               String   @unique
+  id                         String       @id @default(cuid())
+  name                       String       @unique
   // Reserved for future Bedrock support. Azalea speaks the Java protocol only,
   // so this is always "JAVA" today and is intentionally NOT exposed in the
   // create/update API or UI (see docs/LIMITATIONS.md). A future Bedrock bot
   // binary would branch on this in ClientManager without touching the Java path.
-  edition            String   @default("JAVA")
+  edition                    String       @default("JAVA")
   // Optional website-only display label. Unlike `name` (which doubles as the
   // offline join username and therefore must be a valid Minecraft name), this
   // is purely cosmetic and may contain spaces etc. Empty means "fall back to
   // name". Editable at any time without touching the join identity.
-  displayName        String   @default("")
+  displayName                String       @default("")
   // Empty string means "auto-detect" — MinecraftClient lets mineflayer ping
   // the server and negotiate whichever protocol version it actually
   // reports, rather than forcing a possibly-mismatched hardcoded version.
-  minecraftVersion   String   @default("")
-  serverHost         String
-  serverPort         Int      @default(25565)
-  authType           AuthType @default(OFFLINE)
+  minecraftVersion           String       @default("")
+  serverHost                 String
+  serverPort                 Int          @default(25565)
+  authType                   AuthType     @default(OFFLINE)
   // Credentials are stored encrypted-at-rest is out of scope for SQLite text column here,
   // but this field is NEVER exposed via the API to any client (see accounts service).
   // For MICROSOFT accounts, credentialsSecret holds the email and credentialsPassword
   // holds the account password. Both are set ONLY at account creation time and are
   // immutable afterwards (the update API does not accept these fields at all) — to
   // change them, the account must be deleted and recreated.
-  credentialsSecret   String?
-  credentialsPassword String?
-  afkEnabled         Boolean  @default(true)
-  movementEnabled    Boolean  @default(false)
-  // When enabled, the bot continuously sneaks/crouches (re-applied every tick).
-  crouchEnabled      Boolean  @default(false)
-  afkIntervalSeconds Int      @default(30)
-  autoReconnect      Boolean  @default(true)
+  credentialsSecret          String?
+  credentialsPassword        String?
+  // When enabled, the bot continuously sneaks/crouches.
+  crouchEnabled              Boolean      @default(false)
+  autoReconnect              Boolean      @default(true)
   // Free-form short note shown in the dashboard/settings (e.g. "farming cobble").
-  notes              String   @default("")
+  notes                      String       @default("")
   // Automatically types a configured chat message/command at a fixed interval,
-  // independent of the AFK/movement behaviors.
-  autoCommandEnabled         Boolean @default(false)
-  autoCommandText            String  @default("")
-  autoCommandIntervalMinutes Int     @default(5)
+  // independent of crouching and other account automation.
+  autoCommandEnabled         Boolean      @default(false)
+  autoCommandText            String       @default("")
+  autoCommandIntervalMinutes Int          @default(5)
   // Optional random interval mode for auto-command. When enabled, the command
   // is sent repeatedly with a freshly random delay between min/max after each run.
-  autoCommandSpanEnabled     Boolean @default(false)
-  autoCommandSpanMinSeconds  Int     @default(600)
-  autoCommandSpanMaxSeconds  Int     @default(1800)
+  autoCommandSpanEnabled     Boolean      @default(false)
+  autoCommandSpanMinSeconds  Int          @default(600)
+  autoCommandSpanMaxSeconds  Int          @default(1800)
   // Auto-accept incoming /tpa teleport requests (never /tpahere).
-  tpAutoEnabled              Boolean @default(false)
+  tpAutoEnabled              Boolean      @default(false)
   // JSON-encoded array of Minecraft names; when non-empty, only /tpa requests
   // from these players are auto-accepted. Empty ("[]") means accept from anyone.
-  tpAutoAllowlist            String  @default("[]")
+  tpAutoAllowlist            String       @default("[]")
   // Periodically run the sell command and shift all items into the sell menu.
-  autoSellEnabled            Boolean @default(false)
-  autoSellIntervalSeconds    Float   @default(60)
-  autoSellCommand            String  @default("/sell")
+  autoSellEnabled            Boolean      @default(false)
+  autoSellIntervalSeconds    Float        @default(60)
+  autoSellCommand            String       @default("/sell")
   // Daily scheduler for the existing auto-command text: when enabled, the
   // configured autoCommandText is run once at each time of day listed in
   // dailyCommandTimes (JSON-encoded array of "HH:MM", server local time).
-  dailyCommandEnabled        Boolean @default(false)
-  dailyCommandTimes          String  @default("[]")
+  dailyCommandEnabled        Boolean      @default(false)
+  dailyCommandTimes          String       @default("[]")
   // Periodically query and display the player's balance (parsed from chat).
-  balanceEnabled             Boolean @default(false)
-  balanceCommand             String  @default("/balance")
+  balanceEnabled             Boolean      @default(false)
+  balanceCommand             String       @default("/balance")
   // Last known balance and when it was read, so the dashboard can show a value
   // immediately after a restart before the next poll runs.
   lastBalance                Float?
   lastBalanceAt              DateTime?
   // JSON-encoded array of discovered /homes names for this account, refreshed
   // after every successful server join.
-  homesJson           String  @default("[]")
+  homesJson                  String       @default("[]")
   // Spawner handling. `spawnerType` selects which mob spawner this account is
   // parked at ("" = unconfigured), which in turn determines the item types the
   // spawner produces. `spawnerActions` maps each of those item ids to what
@@ -152,28 +149,28 @@ model MinecraftAccount {
   // Dropping is always performed before selling, and both stop once fewer than
   // two stacks of the item remain. When `spawnerClearEnabled` is set, the clear
   // routine also runs automatically at each "HH:MM" in `spawnerClearTimes`.
-  spawnerType         String  @default("")
-  spawnerActions      String  @default("{}")
-  spawnerClearEnabled Boolean @default(false)
-  spawnerClearTimes   String  @default("[]")
-  status             ClientStatus @default(OFFLINE)
+  spawnerType                String       @default("")
+  spawnerActions             String       @default("{}")
+  spawnerClearEnabled        Boolean      @default(false)
+  spawnerClearTimes          String       @default("[]")
+  status                     ClientStatus @default(OFFLINE)
   // Persistent dashboard ordering key (smaller = earlier in list).
-  dashboardOrder     Int      @default(0)
+  dashboardOrder             Int          @default(0)
   // Persisted "should be running" intent: set when the user starts a client and
   // cleared when they stop it. On process/host restart the manager re-connects
   // every account whose autoStart is true, so previously-active bots come back
   // up automatically while stopped ones stay offline.
-  autoStart          Boolean  @default(false)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  autoStart                  Boolean      @default(false)
+  createdAt                  DateTime     @default(now())
+  updatedAt                  DateTime     @updatedAt
 
   // The website user who created this account. Nullable so accounts survive
   // the deletion of their creator (the reference is simply cleared).
   createdById String?
   createdBy   User?   @relation("CreatedAccounts", fields: [createdById], references: [id], onDelete: SetNull)
 
-  assignments UserMinecraftAccount[]
-  consoleLogs ConsoleLog[]
+  assignments  UserMinecraftAccount[]
+  consoleLogs  ConsoleLog[]
   sellEarnings SellEarning[]
 }
 
@@ -185,39 +182,39 @@ model ItemWorthScan {
   id String @id @default("global")
 
   // IDLE | RUNNING | PAUSED | COMPLETED | CANCELLED
-  status String @default("IDLE")
+  status       String  @default("IDLE")
   // Index of the next item to query, into the generated ITEM_REGISTRY array.
-  cursor Int    @default(0)
-  total  Int    @default(0)
+  cursor       Int     @default(0)
+  total        Int     @default(0)
   // Monotonic counter; incremented when a scan starts. Lets the UI tell a
   // first-ever scan (no comparison possible) from a repeat scan.
-  scanNumber   Int @default(0)
+  scanNumber   Int     @default(0)
   // Items whose price differed from the previous scan, for the current run.
-  changedCount Int @default(0)
+  changedCount Int     @default(0)
   // Items no selected bot answered for in the current run.
-  missedCount  Int @default(0)
+  missedCount  Int     @default(0)
   // False when the scan was parked because it gave up (miss limit hit, or the
   // loop crashed) rather than because every selected bot went offline. Only a
   // resumable pause is picked up again automatically.
   resumable    Boolean @default(true)
 
   // Seconds between two queries, counted globally across all selected bots.
-  delaySeconds Int    @default(5)
+  delaySeconds   Int     @default(5)
   // JSON array of MinecraftAccount ids taking part in this scan.
-  accountIdsJson String @default("[]")
+  accountIdsJson String  @default("[]")
   // The archived run the current scan writes its prices into.
   runId          String?
 
-  lastItemId String?
-  lastError  String?
+  lastItemId      String?
+  lastError       String?
   // JSON snapshot of the chat lines received during the last unanswered query.
   // Diagnostic only: /worth reply wording is server-specific, so when nothing
   // is understood the admin needs to see what actually came back.
   lastSamplesJson String?
-  startedAt  DateTime?
-  finishedAt DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 }
 
 // The most recently scanned worth of a single item, plus the value the previous
@@ -230,7 +227,7 @@ model ItemWorthValue {
   itemId   String @unique
   itemName String
 
-  value Float?
+  value         Float?
   // Distinguishes "previous scan recorded no price" from "never scanned before".
   hasPrevious   Boolean @default(false)
   previousValue Float?
@@ -246,17 +243,17 @@ model ItemWorthValue {
 // rolling 5m/1h/24h earnings shown under the console. Kept separate from other
 // income so only genuine /sell earnings are counted.
 model SellEarning {
-  id                String   @id @default(cuid())
+  id                 String           @id @default(cuid())
   minecraftAccountId String
-  account           MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
-  amount            Float
-  createdAt         DateTime @default(now())
+  account            MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+  amount             Float
+  createdAt          DateTime         @default(now())
 
   @@index([minecraftAccountId, createdAt])
 }
 
 model UserMinecraftAccount {
-  id                 String @id @default(cuid())
+  id                 String   @id @default(cuid())
   userId             String
   minecraftAccountId String
   createdAt          DateTime @default(now())
@@ -303,33 +300,33 @@ model AuditLog {
 // same NDJSON-over-stdio subprocess pattern (see SniperClient/SniperManager).
 // Admin-only feature end to end (API, websocket, UI nav item).
 model SniperAccount {
-  id              String       @id @default(cuid())
+  id                  String       @id @default(cuid())
   // Cosmetic label shown in the list; the email is what's actually used to sign in.
-  label           String       @default("")
-  email           String       @unique
-  desiredName     String       @default("")
+  label               String       @default("")
+  email               String       @unique
+  desiredName         String       @default("")
   // 1-60 seconds between rename attempts, enforced in the zod schema.
-  cooldownSeconds Int          @default(5)
+  cooldownSeconds     Int          @default(5)
   // When true, the sniper detects HTTP 429 (rate limited) responses from
   // Mojang and backs off (honoring a Retry-After header if present, else an
   // increasing delay) instead of retrying at the normal cooldown.
-  rateLimitProtection Boolean  @default(false)
+  rateLimitProtection Boolean      @default(false)
   // Optional newline-separated list of proxy URLs (http/https/socks5). When
   // set, the sniper runs one independent request strand per proxy so attempts
   // are spread across multiple outbound IPs (each with its own per-IP limit).
-  proxies         String       @default("")
+  proxies             String       @default("")
   // Persisted "should be running" intent, mirrors MinecraftAccount.autoStart.
-  enabled         Boolean      @default(false)
-  status          ClientStatus @default(OFFLINE)
+  enabled             Boolean      @default(false)
+  status              ClientStatus @default(OFFLINE)
   // The account's current in-game name, updated whenever a rename succeeds or
   // the account authenticates (best-effort; may lag behind reality otherwise).
-  currentName     String?
-  lastAttemptAt   DateTime?
-  lastResult      String?
-  lastSuccess     Boolean      @default(false)
-  dashboardOrder  Int          @default(0)
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  currentName         String?
+  lastAttemptAt       DateTime?
+  lastResult          String?
+  lastSuccess         Boolean      @default(false)
+  dashboardOrder      Int          @default(0)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
 
   createdById String?
   createdBy   User?   @relation("CreatedSniperAccounts", fields: [createdById], references: [id], onDelete: SetNull)
@@ -393,10 +390,10 @@ model ItemWorthRunValue {
   runId String
   run   ItemWorthRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
-  itemId   String
-  itemName String
+  itemId        String
+  itemName      String
   // null when the server reported no configured price.
-  value    Float?
+  value         Float?
   // What the previous run had, so an archived run is readable on its own.
   previousValue Float?
 

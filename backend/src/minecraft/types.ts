@@ -45,10 +45,7 @@ export interface ClientRuntimeConfig {
   credentialsSecret: string | null;
   /** Microsoft account password, only relevant when authType === "MICROSOFT". Never exposed to the frontend. */
   credentialsPassword: string | null;
-  afkEnabled: boolean;
-  movementEnabled: boolean;
   crouchEnabled: boolean;
-  afkIntervalSeconds: number;
   autoReconnect: boolean;
   autoCommandEnabled: boolean;
   autoCommandText: string;

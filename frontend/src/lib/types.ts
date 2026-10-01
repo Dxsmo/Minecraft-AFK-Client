@@ -78,10 +78,7 @@ export interface MinecraftAccount {
   serverPort: number;
   edition: Edition;
   authType: AuthType;
-  afkEnabled: boolean;
-  movementEnabled: boolean;
   crouchEnabled: boolean;
-  afkIntervalSeconds: number;
   autoReconnect: boolean;
   notes: string;
   autoCommandEnabled: boolean;

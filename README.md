@@ -1,8 +1,8 @@
 # Minecraft AFK Client Management Service
 
 A self-hosted, production-oriented web service to manage multiple Minecraft
-AFK bot accounts: start/stop/restart them independently, watch a live
-per-account console, run commands, configure AFK/movement behavior, and
+Minecraft bot accounts: start/stop/restart them independently, watch a live
+per-account console, run commands, configure account automation, and
 control access with a proper user/role system. Built to run comfortably on
 a Raspberry Pi 5 (8 GB) and be exposed to the internet behind Cloudflare.
 
@@ -24,7 +24,7 @@ Minecraft Client Manager (ClientManager)
         │
         ▼
 MinecraftClient instances ──spawn──▶ azalea-bot (Rust subprocess, NDJSON over stdio)
-        │                                    │  AFK / Movement / Auto-command
+        │                                    │  Crouch / Auto-command / Auto-sell
         ▼                                    ▼
 Minecraft Server(s) ◀────────────────────────┘
 ```
@@ -186,22 +186,18 @@ additional users access afterwards in the account's **Settings** panel):
   sign-in link + code; open it, approve once, and the token is cached on
   disk (`data/bot-cache/<account>/`) so subsequent starts are silent. No
   password is ever entered or stored.
-- AFK / Movement behavior toggles + AFK interval (admin-only)
+- Continuous crouching and auto-reconnect
 - Auto home: an optional `/home <name>` teleport run automatically on a fixed
   interval, a random time span, and/or at fixed times of day — configured per
   account in **Settings**. Only the home name is editable; the `/home ` prefix
   is fixed and enforced server-side.
 - Auto-sell: one cycle per interval — send the sell command, wait for the
-  server's menu, shift-click every inventory stack into it, close the menu.
-  One command, one pass, one close: the server sells each stack the moment it
-  is shifted in, so there is deliberately no confirm click and no multi-pass
-  bookkeeping. A cycle costs the server's response time plus a short settle
-  delay, which keeps intervals of a second (or less) comfortable.
-  The sell command is skipped entirely while the inventory is empty, and a run
-  of genuinely failed cycles backs off (never longer than a minute, and never
-  permanently) instead of repeating the command — this is what keeps a broken
-  sell menu from flooding chat. The backoff curve is covered by unit tests in
-  `backend/rust-bot/src/behaviors.rs`.
+  server's menu, move inventory stacks with paced shift-clicks, wait for the
+  server to confirm an inventory decrease, then close the menu. Server-side
+  auto-closing is accepted as success when the inventory actually changed.
+  While the inventory is empty it is monitored continuously, so newly arriving
+  items trigger a fresh attempt immediately. Failed cycles keep retrying with a
+  capped backoff, and any inventory change clears stale failure state.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once
@@ -302,29 +298,28 @@ stdio, one JSON object per line (see `backend/rust-bot/src/protocol.rs` and
   `behavior_log`, `fatal_error`. Azalea's own logging is sent to stderr
   (`RUST_LOG=error`) so it never corrupts the protocol.
 
-### AFK / Movement behavior system
+### Account automation system
 
 Behaviors live in the Rust bot (`backend/rust-bot/src/behaviors.rs`) and are
 driven from Azalea's game tick:
 
-- **AFK** – periodic random look-around + jump to avoid inactivity kicks
-- **Movement** – occasional short random walk
+- **Crouch** – continuously hold sneak without periodic release/re-press cycles
 - **Auto home** – periodic `/home <name>` teleport
 - **Auto-sell** – sell-menu cycle (open → fill → confirm → close) with backoff
 - **Clean Spawner** – drop/sell the targeted spawner's contents per item type
 
 They read a shared config that `{"type":"configure"}` updates live, so
-toggling behaviors or changing intervals in the UI takes effect without
+toggling automation or changing intervals in the UI takes effect without
 reconnecting.
 
-Menu buttons (sell confirm, spawner sell) are located by item **name/lore
-keyword** with a positional fallback, because GUI layouts differ per server and
-resource pack.
+The spawner sell button is located by item **name/lore keywords** because GUI
+layouts differ per server and resource pack. A temporarily missing button is
+retried several times before the run closes the menu and reports the failure.
 
 ### Feature visibility
 
-Normal users get a reduced feature set: no AFK/movement tuning, balance polling,
-auto-TPA, live inventory or home shortcuts. This is enforced
+Normal users get a reduced feature set: no balance polling, auto-TPA, live
+inventory or home shortcuts. This is enforced
 in the API (admin-only routes plus stripped admin-only fields on `PATCH`), not
 just hidden in the UI. Admins keep the full feature set for every account.
 

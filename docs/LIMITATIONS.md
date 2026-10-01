@@ -28,13 +28,13 @@ dashboard) is edition-agnostic.
   `ClientManager` sets `edition` in the runtime config.
 - **Bedrock bot** — `backend/src/bedrock-bot/` (protocol/send/behaviors/index)
   mirrors the Rust bot: lifecycle, reconnect handoff, chat, health, auto home,
-  auto-sell (command-based), AFK swing, crouch, tpa auto-accept, balance/sell
+  auto-sell (command-based), crouch, tpa auto-accept, balance/sell
   chat parsing, and a best-effort inventory snapshot.
 
 ### What works vs. what is limited on Bedrock
 
 - **Works (same as Java):** connect/login (offline + Microsoft device-code),
-  chat/console, commands, auto home, interval auto-sell, AFK swing, crouch,
+  chat/console, commands, auto home, interval auto-sell, crouch,
   tpa auto-accept, health telemetry, balance/sell chat parsing.
 - **Best-effort / unverified:** live inventory snapshot and drag-and-drop item
   moves (uses `ItemStackRequest`; item names fall back to `bedrock:<id>` because
@@ -103,4 +103,3 @@ official **item textures**: this project bundles no Minecraft texture assets
 renders the item id and stack count on a deterministic per-item colour instead of
 an icon. Dropping in a texture atlas later (or wiring up a resource-pack loader)
 would be a purely cosmetic, additive change to `InventoryPanel.tsx`.
-
