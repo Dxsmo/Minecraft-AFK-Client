@@ -40,13 +40,16 @@ const AUTOSELL_SETTLE_DELAY: Duration = Duration::from_millis(150);
 /// is closed and the cycle abandoned after this, so the bot can never get stuck
 /// in an open GUI.
 const AUTOSELL_RUN_TIMEOUT: Duration = Duration::from_secs(15);
-/// Pace inventory clicks so the server can acknowledge each one before the
-/// next stack is moved. Sending all clicks and closing in one tick caused busy
-/// servers to discard the tail of a sell cycle.
-const AUTOSELL_CLICK_DELAY: Duration = Duration::from_millis(75);
-/// Give the server time to publish its authoritative inventory update after the
-/// last click before deciding whether the cycle made progress.
-const AUTOSELL_CONFIRM_DELAY: Duration = Duration::from_millis(400);
+/// Move a small batch per game tick. A single click per 75 ms needed several
+/// seconds for a full inventory; an unlimited burst made busy servers discard
+/// the tail. Four ordered clicks per tick drains up to 80 stacks/second while
+/// retaining transaction pacing.
+const AUTOSELL_CLICKS_PER_TICK: usize = 4;
+const AUTOSELL_CLICK_DELAY: Duration = Duration::from_millis(40);
+/// Short acknowledgement windows around the close packet. The old 400+400 ms
+/// waits dominated a one-second interval even after all clicks were complete.
+const AUTOSELL_CONFIRM_DELAY: Duration = Duration::from_millis(150);
+const AUTOSELL_CLOSE_SETTLE_DELAY: Duration = Duration::from_millis(100);
 /// Wait after a full spawn before sending automation commands. `Spawn` means
 /// the chunk is usable, but proxy networks may still be restoring the player
 /// inventory for a brief moment (the attached HugoSMP log showed exactly this).
@@ -1088,17 +1091,24 @@ impl BehaviorState {
 
                 let Some(slots) = inv.slots() else { return };
                 let Ok(menu) = bot.menu() else { return };
-                let next = menu.player_slots_range().find(|&slot| {
-                    slot >= next_slot && slots.get(slot).is_some_and(ItemStack::is_present)
-                });
-                if let Some(slot) = next {
-                    inv.shift_click(slot);
+                let batch: Vec<usize> = menu
+                    .player_slots_range()
+                    .filter(|&slot| {
+                        slot >= next_slot
+                            && slots.get(slot).is_some_and(ItemStack::is_present)
+                    })
+                    .take(AUTOSELL_CLICKS_PER_TICK)
+                    .collect();
+                if let Some(&last_slot) = batch.last() {
+                    for slot in &batch {
+                        inv.shift_click(*slot);
+                    }
                     self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
                     self.autosell_phase = AutoSellPhase::Selling {
                         next_at: now + AUTOSELL_CLICK_DELAY,
                         deadline,
-                        next_slot: slot + 1,
-                        clicks: clicks + 1,
+                        next_slot: last_slot + 1,
+                        clicks: clicks + batch.len(),
                     };
                     return;
                 }
@@ -1123,7 +1133,7 @@ impl BehaviorState {
                     }
                     self.close_open_menu(bot);
                     self.autosell_phase = AutoSellPhase::Confirming {
-                        check_at: now + AUTOSELL_CONFIRM_DELAY,
+                        check_at: now + AUTOSELL_CLOSE_SETTLE_DELAY,
                         clicks,
                         menu_closed: true,
                     };
