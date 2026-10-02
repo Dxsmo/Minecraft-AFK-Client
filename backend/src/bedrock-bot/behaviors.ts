@@ -209,7 +209,7 @@ export class BehaviorState {
 
     // Continuous auto-sell yields to any foreground task.
     if (this.cfg.autosell_enabled && !this.foregroundBusy() && !actionSentThisTick) {
-      const interval = Math.max(0.05, this.cfg.autosell_interval_seconds ?? 60) * 1000;
+      const interval = Math.max(0.25, this.cfg.autosell_interval_seconds ?? 60) * 1000;
       if (now >= this.nextAutosellAt) {
         this.nextAutosellAt = now + interval;
         const command = (this.cfg.autosell_command ?? "/sell").trim() || "/sell";

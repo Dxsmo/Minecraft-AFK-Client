@@ -576,7 +576,7 @@ export function AccountSettingsPanel({
                   />
                 </div>
                 <Field label="Interval">
-                  <NumberInput value={autoSellIntervalSeconds} onChange={setAutoSellIntervalSeconds} min={0.05} max={3600} step={0.05} suffix="s" />
+                  <NumberInput value={autoSellIntervalSeconds} onChange={setAutoSellIntervalSeconds} min={0.25} max={3600} step={0.05} suffix="s" />
                 </Field>
               </>
             )}

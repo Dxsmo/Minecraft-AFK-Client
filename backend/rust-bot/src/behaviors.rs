@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 use azalea::container::ContainerHandleRef;
 use azalea::registry::builtin::BlockKind;
 use azalea::{BlockPos, Client};
+use azalea_inventory::ItemStack;
 use azalea_inventory::components::{CustomName, Lore};
 use azalea_inventory::operations::{PickupClick, ThrowClick};
-use azalea_inventory::ItemStack;
 use rand::Rng;
 use regex::Regex;
 
@@ -25,13 +25,24 @@ use crate::protocol::{BehaviorConfig, Config, InventorySlot, OutEvent};
 /// A missing menu must recover quickly, but commands are never overlapped while
 /// one request is still inside this window.
 const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_millis(750);
-/// Avoid flooding `/sell` twenty times per second while genuinely empty. Fresh
-/// arrivals bypass this immediately via the inventory-change check below.
+/// Even when the UI is configured below one server tick, never hammer the
+/// command parser with dozens of `/sell` requests per second. A sell cycle
+/// moves the whole inventory at once, so four requests per second still has
+/// substantially more throughput than any normal item farm while leaving the
+/// server room to open and close each menu cleanly.
+const AUTOSELL_MIN_COMMAND_INTERVAL: Duration = Duration::from_millis(250);
+/// Finish an empty probe quickly. A newly arrived item is picked up by the
+/// outstanding request or triggers the next request after this timeout; we
+/// never overlap a second `/sell` command with the first one.
 const AUTOSELL_EMPTY_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 /// All player slots are shift-clicked immediately when the populated container
 /// becomes visible. Keep it open for one game tick so the queued click packets
 /// precede the close packet on the wire.
 const AUTOSELL_CLOSE_DELAY: Duration = Duration::from_millis(50);
+/// A menu that appears while auto-sell is idle is a delayed response from an
+/// earlier timed-out request (or a close that has not settled locally). Close
+/// it and give the close packet two game ticks before issuing another command.
+const AUTOSELL_ORPHAN_RECOVERY_DELAY: Duration = Duration::from_millis(100);
 /// Wait after a full spawn before sending automation commands. `Spawn` means
 /// the chunk is usable, but proxy networks may still be restoring the player
 /// inventory for a brief moment (the attached HugoSMP log showed exactly this).
@@ -106,10 +117,15 @@ enum AutoSellPhase {
         since: Instant,
         /// Used only to shorten an empty probe; it never suppresses `/sell`.
         started_empty: bool,
+        /// The open-container packet can arrive one tick before its content
+        /// packet. Never shift/close against that half-loaded snapshot.
+        menu_seen_at: Option<Instant>,
     },
     /// Every occupied player slot has already been shift-clicked. Close the
     /// menu on the following game tick and immediately release the next cycle.
-    Closing { close_at: Instant },
+    Closing {
+        close_at: Instant,
+    },
 }
 
 /// A one-shot, foreground task. While one is queued or running, the continuous
@@ -483,11 +499,20 @@ impl BehaviorState {
         // queued chat command may touch the inventory-loading phase.
         let automation_ready = self.spawned && now >= self.automation_ready_at;
 
+        // A late sell-menu response used to leave auto-sell in `Idle` with a
+        // non-zero container id. Both the foreground queue and auto-sell then
+        // waited for each other forever, and only a full account restart reset
+        // the inventory state. Recover that orphan before dispatching either
+        // kind of work. Command-owned and active spawner menus are excluded.
+        let recovered_orphan_menu =
+            automation_ready && self.recover_orphaned_autosell_menu(bot, now);
+
         // Auto-command: type a configured chat message/command at a fixed
         // interval. "Zeitspanne"
         // (random-range) mode is its own independent toggle, so it must run
         // even if the fixed-interval "Interval" toggle is off.
         if automation_ready
+            && !recovered_orphan_menu
             && (self.config.auto_command_enabled || self.config.auto_command_span_enabled)
         {
             let text = self.config.auto_command_text.trim().to_string();
@@ -500,6 +525,7 @@ impl BehaviorState {
                     if now >= self.next_random_auto_command_at.expect("set above")
                         && matches!(self.autosell_phase, AutoSellPhase::Idle)
                         && !self.foreground_busy()
+                        && self.command_menu_close_at.is_none()
                         && (is_teleport_command(&text) || inventory_is_mutable(bot))
                     {
                         if is_teleport_command(&text) {
@@ -520,6 +546,7 @@ impl BehaviorState {
                     if now.duration_since(self.last_auto_command_at) >= interval
                         && matches!(self.autosell_phase, AutoSellPhase::Idle)
                         && !self.foreground_busy()
+                        && self.command_menu_close_at.is_none()
                         && (is_teleport_command(&text) || inventory_is_mutable(bot))
                     {
                         self.last_auto_command_at = now;
@@ -539,7 +566,7 @@ impl BehaviorState {
             self.next_random_auto_command_at = None;
         }
 
-        if automation_ready && !command_sent_this_tick {
+        if automation_ready && !command_sent_this_tick && !recovered_orphan_menu {
             let foreground_ran = self.tick_foreground(bot, now);
             if !foreground_ran {
                 self.tick_autosell(bot, now);
@@ -601,7 +628,10 @@ impl BehaviorState {
 
         // Start the next queued task, but only when nothing is active and
         // auto-sell isn't mid-cycle — this is what enforces mutual exclusion.
-        if self.active_task.is_none() && matches!(self.autosell_phase, AutoSellPhase::Idle) {
+        if self.active_task.is_none()
+            && matches!(self.autosell_phase, AutoSellPhase::Idle)
+            && self.command_menu_close_at.is_none()
+        {
             if let Some(task) = self.task_queue.pop_front() {
                 ran = true;
                 match task {
@@ -682,7 +712,8 @@ impl BehaviorState {
                             inv.click(ThrowClick::All { slot });
                             self.inventory_resync_at = Some(now + INVENTORY_RESYNC_DELAY);
                         } else {
-                            self.task_queue.push_front(ForegroundTask::DropItem { slot });
+                            self.task_queue
+                                .push_front(ForegroundTask::DropItem { slot });
                             return true;
                         }
                     }
@@ -939,14 +970,16 @@ impl BehaviorState {
             return;
         }
 
-        let interval = Duration::from_secs_f64(self.config.autosell_interval_seconds.max(0.05));
+        let configured_interval =
+            Duration::from_secs_f64(self.config.autosell_interval_seconds.max(0.05));
+        let interval = configured_interval.max(AUTOSELL_MIN_COMMAND_INTERVAL);
 
         match self.autosell_phase {
             AutoSellPhase::Idle => {
                 // Don't start a new cycle while a foreground one-shot task is
                 // queued or running - this is the "pause" half of the interrupt
                 // system. An in-progress cycle below is always allowed to finish.
-                if self.foreground_busy() {
+                if self.foreground_busy() || self.command_menu_close_at.is_some() {
                     return;
                 }
 
@@ -956,10 +989,13 @@ impl BehaviorState {
                     return;
                 }
 
-                // Never shift-click into, or close, a menu auto-sell did not
-                // open. Wait until the other interaction is finished.
+                // Orphaned sell menus are normally removed before reaching
+                // this function. Keep this guard as a final safety net for a
+                // container that opened between the recovery pass and now.
                 if let Ok(inv) = bot.get_inventory() {
                     if inv.id() != 0 {
+                        inv.close();
+                        self.next_autosell_at = now + AUTOSELL_ORPHAN_RECOVERY_DELAY;
                         return;
                     }
                 }
@@ -972,17 +1008,27 @@ impl BehaviorState {
                 self.autosell_phase = AutoSellPhase::WaitingForMenu {
                     since: now,
                     started_empty: player_item_count(bot) == 0,
+                    menu_seen_at: None,
                 };
             }
 
             AutoSellPhase::WaitingForMenu {
                 since,
                 started_empty,
+                menu_seen_at,
             } => {
                 // A real sell container is open once the menu id is non-zero AND
                 // the menu has slots in front of the player's own section.
                 if let Ok(inv) = bot.get_inventory() {
                     if inv.id() != 0 {
+                        if menu_seen_at.is_none() {
+                            self.autosell_phase = AutoSellPhase::WaitingForMenu {
+                                since,
+                                started_empty,
+                                menu_seen_at: Some(now),
+                            };
+                            return;
+                        }
                         if let Some(slots) = inv.slots() {
                             if let Some(container_len) = container_len(bot) {
                                 if container_len > 0 && slots.len() > container_len {
@@ -994,17 +1040,22 @@ impl BehaviorState {
                                     let player_slots: Vec<usize> = menu
                                         .player_slots_range()
                                         .filter(|&slot| {
-                                            slots
-                                                .get(slot)
-                                                .is_some_and(ItemStack::is_present)
+                                            slots.get(slot).is_some_and(ItemStack::is_present)
                                         })
                                         .collect();
+                                    // A non-empty inventory cannot legitimately
+                                    // become empty merely by opening `/sell`.
+                                    // If it does, this is still the menu shell
+                                    // from before ContainerSetContent; keep
+                                    // waiting instead of closing an empty view.
+                                    if !started_empty && player_slots.is_empty() {
+                                        return;
+                                    }
                                     for slot in &player_slots {
                                         inv.shift_click(*slot);
                                     }
                                     if !player_slots.is_empty() {
-                                        self.sell_earning_window =
-                                            Some(now + SELL_EARNING_WINDOW);
+                                        self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
                                         self.last_autosell_failure_log = None;
                                     }
                                     self.autosell_phase = AutoSellPhase::Closing {
@@ -1017,29 +1068,18 @@ impl BehaviorState {
                     }
                 }
 
-                // If drops arrive during an empty probe, restart immediately.
-                // This removes the old "empty interval + another full interval"
-                // delay without ever overlapping two open menu cycles.
-                if started_empty && player_item_count(bot) > 0 {
-                    self.autosell_phase = AutoSellPhase::Idle;
-                    self.next_autosell_at = now;
-                    return;
-                }
-
-                let timeout = if started_empty {
-                    interval
-                        .max(AUTOSELL_EMPTY_PROBE_TIMEOUT)
-                        .min(AUTOSELL_MENU_TIMEOUT)
-                } else {
-                    AUTOSELL_MENU_TIMEOUT
-                };
+                let timeout = autosell_menu_timeout(started_empty);
                 if now.duration_since(since) >= timeout {
                     self.close_open_menu(bot);
                     self.autosell_phase = AutoSellPhase::Idle;
                     if started_empty {
-                        // Empty is a normal no-op. The next attempt is due now,
-                        // so the configured cadence continues without a skip.
-                        self.next_autosell_at = now;
+                        // Empty is a normal no-op. Preserve the configured
+                        // cadence while it remains empty, but if drops arrived
+                        // during the probe retry immediately after the old
+                        // request has been fully retired.
+                        if player_item_count(bot) > 0 {
+                            self.next_autosell_at = now;
+                        }
                     } else {
                         self.log_autosell_failure(now, "Verkaufsmenü ging nicht auf");
                     }
@@ -1069,6 +1109,32 @@ impl BehaviorState {
                 message: format!("AutoSell: {reason} - versuche es weiter"),
             });
         }
+    }
+
+    /// Close a menu that exists while no subsystem owns it. This covers a
+    /// delayed sell GUI arriving after `AUTOSELL_MENU_TIMEOUT` and a close
+    /// acknowledgement that raced with the next tick. Without this recovery,
+    /// `inventory_is_mutable` remains false indefinitely and every queue stalls.
+    fn recover_orphaned_autosell_menu(&mut self, bot: &Client, now: Instant) -> bool {
+        if !self.config.autosell_enabled
+            || !matches!(self.autosell_phase, AutoSellPhase::Idle)
+            || self.active_task.is_some()
+            || self.command_menu_close_at.is_some()
+        {
+            return false;
+        }
+
+        let Ok(inv) = bot.get_inventory() else {
+            return false;
+        };
+        if inv.id() == 0 {
+            return false;
+        }
+
+        inv.close();
+        self.next_autosell_at = now + AUTOSELL_ORPHAN_RECOVERY_DELAY;
+        self.log_autosell_failure(now, "verspätetes/offenes Verkaufsmenü zurückgesetzt");
+        true
     }
 
     /// Close any container the bot currently has open (best-effort no-op if none).
@@ -1178,6 +1244,17 @@ impl BehaviorState {
 /// refuse inventory edits while one is open).
 fn inventory_is_mutable(bot: &Client) -> bool {
     matches!(bot.get_inventory(), Ok(inv) if inv.id() == 0)
+}
+
+/// Empty probes have a short, fixed lifetime so they neither hold up fresh
+/// drops for a whole configured interval nor abandon an outstanding request
+/// early just because a new item arrived.
+fn autosell_menu_timeout(started_empty: bool) -> Duration {
+    if started_empty {
+        AUTOSELL_EMPTY_PROBE_TIMEOUT
+    } else {
+        AUTOSELL_MENU_TIMEOUT
+    }
 }
 
 /// Commands that commonly move the player or transfer it through a proxy.
@@ -1602,9 +1679,16 @@ fn tpaccept_target_name(command: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
+        AUTOSELL_EMPTY_PROBE_TIMEOUT, AUTOSELL_MENU_TIMEOUT, autosell_menu_timeout,
         is_inventory_busy_message, is_teleport_command, parse_balance, parse_sell_amount,
         parse_tpa_accept_command, tpaccept_target_name,
     };
+
+    #[test]
+    fn empty_probe_uses_short_timeout_without_changing_normal_timeout() {
+        assert_eq!(autosell_menu_timeout(true), AUTOSELL_EMPTY_PROBE_TIMEOUT);
+        assert_eq!(autosell_menu_timeout(false), AUTOSELL_MENU_TIMEOUT);
+    }
 
     #[test]
     fn lifecycle_commands_are_detected() {
