@@ -410,7 +410,7 @@ export class ItemWorthScanner {
     const scan = await prisma.itemWorthScan.findUnique({ where: { id: SCAN_ID } });
     if (!scan || (scan.status !== "PAUSED" && scan.status !== "RUNNING")) return;
     // A scan that gave up stays parked until an admin starts a new one. Status
-    // events fire on every health/balance update, not just on transitions, so
+    // events fire on every health update, not just on transitions, so
     // without this guard the give-up state would be undone within seconds.
     if (!scan.resumable) return;
 

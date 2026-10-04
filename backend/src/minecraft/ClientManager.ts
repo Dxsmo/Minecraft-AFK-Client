@@ -39,8 +39,6 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     autoSellCommand: account.autoSellCommand,
     dailyCommandEnabled: account.dailyCommandEnabled,
     dailyCommandTimes: parseDailyTimes(account.dailyCommandTimes),
-    balanceEnabled: account.balanceEnabled,
-    balanceCommand: account.balanceCommand,
     homes: parseHomes(account.homesJson),
     spawnerType: account.spawnerType,
     spawnerDropItems: spawner.dropItems,
@@ -144,13 +142,6 @@ export class ClientManager {
           logger.error({ err }, "Chat listener threw");
         }
       }
-    });
-    client.on("balance", ({ minecraftAccountId, balance }: { minecraftAccountId: string; balance: number }) => {
-      prisma.minecraftAccount
-        .update({ where: { id: minecraftAccountId }, data: { lastBalance: balance, lastBalanceAt: new Date() } })
-        .catch((err) => {
-          if (err?.code !== "P2025") logger.error({ err }, "Failed to persist balance");
-        });
     });
     client.on("earning", ({ minecraftAccountId, amount }: { minecraftAccountId: string; amount: number }) => {
       prisma.sellEarning

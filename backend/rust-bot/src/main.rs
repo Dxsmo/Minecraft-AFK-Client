@@ -13,8 +13,8 @@
 //! connection ends (or fails). Node observes the exit and reschedules.
 
 mod behaviors;
-mod mspassword;
 mod msauth;
+mod mspassword;
 mod protocol;
 
 use std::io::{BufRead, Write};
@@ -265,14 +265,16 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
             shared().lock().behavior.on_chat(&bot, &message);
             emit(&OutEvent::Chat { sender, message });
         }
-        Event::Packet(packet) => {
-            if matches!(&*packet, ClientboundGamePacket::PlayerPosition(_)) {
+        Event::Packet(packet) => match &*packet {
+            ClientboundGamePacket::Respawn(_) => shared().lock().behavior.on_respawn(&bot),
+            ClientboundGamePacket::PlayerPosition(_) => {
                 shared().lock().behavior.on_position_sync(&bot);
             }
-        }
+            _ => {}
+        },
         Event::Death(_) => {
             // The current container/world interaction is invalid immediately;
-            // the following Spawn event will re-enable automation.
+            // the respawn position or following Spawn will re-enable automation.
             shared().lock().behavior.on_login(&bot);
         }
         Event::Tick => {
@@ -286,19 +288,12 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
                     Command::Chat { text } => shared().lock().behavior.enqueue_chat(&bot, text),
                     Command::Configure(cfg) => shared().lock().behavior.update_config(cfg),
                     Command::RunTask { text } => shared().lock().behavior.enqueue_task(text),
-                    Command::QueryBalance { command } => {
-                        shared().lock().behavior.enqueue_balance(command)
-                    }
                     Command::CleanSpawner => shared().lock().behavior.enqueue_clean_spawner(),
-                    Command::RequestInventory => {
-                        shared().lock().behavior.emit_inventory(&bot)
-                    }
+                    Command::RequestInventory => shared().lock().behavior.emit_inventory(&bot),
                     Command::MoveItem { from, to } => {
                         shared().lock().behavior.enqueue_move_item(from, to)
                     }
-                    Command::DropItem { slot } => {
-                        shared().lock().behavior.enqueue_drop_item(slot)
-                    }
+                    Command::DropItem { slot } => shared().lock().behavior.enqueue_drop_item(slot),
                     Command::Disconnect => {
                         emit(&OutEvent::Disconnect {
                             reason: Some("Requested by controller".into()),

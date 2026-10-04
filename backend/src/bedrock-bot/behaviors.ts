@@ -3,7 +3,7 @@
 //! Node backend gets the same events regardless of edition.
 //!
 //! Continuous work (auto-sell and auto-command) yields to
-//! one-shot foreground tasks (daily command / balance query / inventory move):
+//! one-shot foreground tasks (daily command / inventory move):
 //! while a foreground task is running, auto-sell does not start, and it resumes
 //! on the next tick once the foreground task has completed. Foreground tasks run
 //! one at a time, so no two Minecraft actions race each other.
@@ -11,10 +11,6 @@
 import { emit, type BehaviorConfig, type Config, type InventorySlot, type OutEvent } from "./protocol.js";
 import { BotSender } from "./send.js";
 
-/** Milliseconds a balance query waits for the server to reply before giving up. */
-const BALANCE_REPLY_TIMEOUT_MS = 8000;
-/** Window after a sell command during which chat income is attributed to selling. */
-const SELL_EARNING_WINDOW_MS = 4000;
 /** Ignore a duplicate /tpaccept for the same player within this window. */
 const TPACCEPT_DEDUP_MS = 5000;
 /** Emit a heartbeat at most this often. */
@@ -27,7 +23,6 @@ const INVENTORY_BUSY_DELAY_MS = 250;
 
 type ForegroundTask =
   | { kind: "command"; text: string }
-  | { kind: "balance"; command: string }
   | { kind: "move"; from: number; to: number }
   | { kind: "drop"; slot: number }
   | { kind: "clean_spawner" };
@@ -39,14 +34,6 @@ type InvState = {
   armor: (InventorySlot | null)[];
   containerOpen: boolean;
 };
-
-/** Pull the first plausible currency amount out of a chat line, or null. */
-export function parseCurrency(text: string): number | null {
-  const m = text.match(/\$?\s?(\d{1,3}(?:[,\s]\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)/);
-  if (!m) return null;
-  const n = Number.parseFloat(m[1].replace(/[,\s]/g, ""));
-  return Number.isFinite(n) ? n : null;
-}
 
 function isTeleportCommand(text: string): boolean {
   const command = text.trim().match(/^\/([^\s]+)/)?.[1]?.toLowerCase();
@@ -79,13 +66,10 @@ export class BehaviorState {
   private automationReadyAt = Number.POSITIVE_INFINITY;
 
   private queue: ForegroundTask[] = [];
-  /** Set while a balance query is awaiting a reply (pauses auto-sell). */
-  private balanceDeadline: number | null = null;
-
-  private sellWindowUntil = 0;
   private lastTpAccept: { name: string; at: number } | null = null;
 
   private sneaking = false;
+  private crouchResyncPending = false;
   private lastHealth: { health: number; food: number } | null = null;
 
   private inv: InvState = { main: [], hotbar: [], offhand: null, armor: [], containerOpen: false };
@@ -129,13 +113,13 @@ export class BehaviorState {
     this.spawned = true;
     this.automationReadyAt = now + SPAWN_STABILIZE_MS;
     this.nextAutosellAt = this.automationReadyAt;
-    if (this.cfg.crouch_enabled) this.applyCrouch(true);
+    this.crouchResyncPending = true;
   }
 
   markJoining(): void {
     this.spawned = false;
+    this.crouchResyncPending = true;
     this.automationReadyAt = Number.POSITIVE_INFINITY;
-    this.balanceDeadline = null;
     this.inv.containerOpen = false;
   }
 
@@ -144,6 +128,7 @@ export class BehaviorState {
     this.inv.containerOpen = false;
     this.automationReadyAt = Date.now() + TELEPORT_STABILIZE_MS;
     this.nextAutosellAt = this.automationReadyAt;
+    this.crouchResyncPending = true;
   }
 
   // --- Foreground task enqueue (called from stdin command handling) ---
@@ -158,10 +143,6 @@ export class BehaviorState {
     if (isTeleportCommand(trimmed)) this.queue.unshift(task);
     else this.queue.push(task);
   }
-  enqueueBalance(command: string): void {
-    const pending = this.balanceDeadline != null || this.queue.some((t) => t.kind === "balance");
-    if (!pending) this.queue.push({ kind: "balance", command });
-  }
   enqueueMoveItem(from: number, to: number): void {
     this.queue.push({ kind: "move", from, to });
   }
@@ -170,10 +151,6 @@ export class BehaviorState {
   }
   enqueueCleanSpawner(): void {
     this.queue.push({ kind: "clean_spawner" });
-  }
-
-  private foregroundBusy(): boolean {
-    return this.balanceDeadline != null;
   }
 
   // --- Periodic tick, driven by index.ts ---
@@ -189,31 +166,26 @@ export class BehaviorState {
 
     if (!this.spawned || now < this.automationReadyAt) return;
 
-    // Balance reply timeout: stop pausing auto-sell if the server never answered.
-    if (this.balanceDeadline != null && now >= this.balanceDeadline) {
-      this.balanceDeadline = null;
-      emit({ type: "warning", message: "Balance: no reply from the server (timed out)" });
+    // World switches/teleports may clear server input while our local value
+    // remains true. Re-send start_sneak after the destination has settled.
+    if (this.cfg.crouch_enabled && (!this.sneaking || this.crouchResyncPending)) {
+      this.applyCrouch(true);
+      this.crouchResyncPending = false;
     }
 
-    // Run at most one foreground task per tick while none is blocking.
-    if (!this.foregroundBusy()) {
-      const task = this.queue.shift();
-      if (task) {
-        this.runForeground(task, now);
-        actionSentThisTick = true;
-      }
+    // Run at most one foreground task per tick.
+    const task = this.queue.shift();
+    if (task) {
+      this.runForeground(task, now);
+      actionSentThisTick = true;
     }
-
-    // Keep crouching applied (cheap; the sender de-dupes via its own state).
-    if (this.cfg.crouch_enabled && !this.sneaking) this.applyCrouch(true);
 
     // Continuous auto-sell yields to any foreground task.
-    if (this.cfg.autosell_enabled && !this.foregroundBusy() && !actionSentThisTick) {
+    if (this.cfg.autosell_enabled && !actionSentThisTick) {
       const interval = Math.max(0.25, this.cfg.autosell_interval_seconds ?? 60) * 1000;
       if (now >= this.nextAutosellAt) {
         this.nextAutosellAt = now + interval;
         const command = (this.cfg.autosell_command ?? "/sell").trim() || "/sell";
-        this.sellWindowUntil = now + SELL_EARNING_WINDOW_MS;
         this.sender.command(command);
         actionSentThisTick = true;
         emit({ type: "behavior_log", message: `Auto-sell: ran ${command}` });
@@ -266,10 +238,6 @@ export class BehaviorState {
         );
         emit({ type: "behavior_log", message: `Scheduled command dispatched: ${task.text}` });
         break;
-      case "balance":
-        this.balanceDeadline = now + BALANCE_REPLY_TIMEOUT_MS;
-        this.sender.command(task.command);
-        break;
       case "move":
         this.doMoveItem(task.from, task.to);
         break;
@@ -289,7 +257,7 @@ export class BehaviorState {
     }
   }
 
-  // --- Inbound chat, parsed for tpa / balance / sell ---
+  // --- Inbound chat, parsed for tpa ---
 
   onChat(sender: string | null, message: string): void {
     const now = Date.now();
@@ -297,23 +265,6 @@ export class BehaviorState {
     if (isInventoryBusyMessage(message)) {
       this.postponeAutomation(now + INVENTORY_BUSY_DELAY_MS);
       return;
-    }
-
-    // Balance reply.
-    if (this.balanceDeadline != null) {
-      const amount = parseCurrency(message);
-      if (amount != null && /bal|balance|money|coins|\$/i.test(message)) {
-        this.balanceDeadline = null;
-        emit({ type: "balance", balance: amount, raw: message } satisfies OutEvent);
-      }
-    }
-
-    // Sell earning within the post-sell window.
-    if (now <= this.sellWindowUntil && /sold|sell|received|earned|\+\s?\$/i.test(message)) {
-      const amount = parseCurrency(message);
-      if (amount != null && amount > 0) {
-        emit({ type: "sell_earning", amount, raw: message } satisfies OutEvent);
-      }
     }
 
     // Auto-accept /tpa requests.

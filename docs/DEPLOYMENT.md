@@ -30,12 +30,27 @@ docker compose version
 
 ## 3. Getting the code onto the Pi
 
+Prefer Git so generated development files are never transferred:
+
 ```bash
 git clone <your-fork-or-repo-url> /opt/afk-service
 cd /opt/afk-service
 cp .env.example .env
 nano .env   # fill in real SESSION_SECRET, INITIAL_ADMIN_PASSWORD, SITE_ADDRESS, PUBLIC_ORIGIN
 ```
+
+Do **not** copy the complete development directory with Finder or `scp -r`.
+Local `node_modules`, `dist`, `backend/rust-bot/target`, databases and IDE files
+can be several gigabytes and are not needed by Docker. If Git cannot be used,
+sync only non-ignored source files from the repository root:
+
+```bash
+rsync -az --delete --filter=':- .gitignore' --exclude='.git/' ./ \
+  <pi-user>@<pi-host>:/opt/afk-service/
+```
+
+Files excluded by `.gitignore` (including the Pi's `.env` and database data)
+are protected from this rsync deletion.
 
 Generate a strong session secret:
 
@@ -209,6 +224,28 @@ docker compose up -d
 docker compose logs -f backend   # confirm prisma migrate deploy applied cleanly
 ```
 
+The migration `20261004190000_reset_sell_earnings_once` clears the old sell
+earnings once, resetting the 5-minute, 1-hour and 24-hour counters for every
+account. New confirmed sales then accumulate normally. Prisma records the
+migration, so subsequent updates and backend restarts do not reset the counters.
+
+The Dockerfiles use persistent BuildKit caches for Cargo's registry/git data,
+compiled Rust dependencies and npm downloads. The first backend build on each
+Pi is still a cold build, but later source changes should only rebuild the
+project crate instead of recompiling all of Azalea. Keep the cache by avoiding
+`docker compose build --no-cache` and `docker builder prune` during normal
+updates. Changing `Cargo.lock`, the pinned Azalea revision, the Rust nightly
+date or the CPU architecture will legitimately invalidate a larger part of the
+cache.
+
+If only one half changed, build only that service:
+
+```bash
+docker compose build backend   # backend/Rust changes
+docker compose build web       # frontend-only changes
+docker compose up -d
+```
+
 Always back up the database before updating (`scripts/backup-db.sh`), in
 case a schema migration needs to be rolled back.
 
@@ -217,7 +254,8 @@ case a schema migration needs to be rolled back.
 | Symptom | Likely cause / fix |
 |---|---|
 | `docker compose up` fails building `backend` (argon2) | Native module build tools missing — the provided `Dockerfile` installs `python3 make g++` in the build stage; if building outside Docker, install those manually. |
-| `docker compose build` is slow or fails compiling the Rust bot | The `backend` image compiles the Azalea bot from source (Rust nightly stage). The first build downloads/compiles Azalea's dependencies and takes a few minutes; it needs outbound access to `github.com` (Azalea is pinned to a git commit — see README "Azalea version pin") and crates.io. Subsequent builds are cached. |
+| The first backend build is slow | The image compiles Azalea natively for the Pi. This cold build is expected once per Docker builder. Later builds reuse persistent Cargo caches. Do not use `--no-cache` or routinely run `docker builder prune`. |
+| Every backend build recompiles Azalea | Confirm BuildKit is enabled (`docker buildx version`) and that the builder cache was not pruned. `docker compose --progress=plain build backend` shows whether Cargo dependencies are `Fresh`. |
 | Login always returns 401 | Check `SESSION_COOKIE_SECURE` — if `true` but you're testing over plain HTTP, the cookie won't be sent back. Use `false` only for local HTTP dev. |
 | `403 Invalid or missing CSRF token` | The frontend must read the non-HttpOnly `afk_csrf` cookie and send it as `x-csrf-token` on mutating requests — this is already handled by `frontend/src/lib/api.ts`; if calling the API directly (e.g. via curl), you must do the same. |
 | Bot immediately disconnects with `RECONNECTING` looping | Check `serverHost`/`serverPort`/`minecraftVersion` match the target server; view the account's console for the exact kick/error reason. |

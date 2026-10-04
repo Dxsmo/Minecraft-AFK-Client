@@ -64,8 +64,6 @@ export interface LiveStatus {
   connectedSince?: string;
   msaSignIn?: MsaSignInPrompt;
   authenticated?: boolean;
-  balance?: number;
-  balanceUpdatedAt?: string;
   homes?: string[];
 }
 
@@ -94,10 +92,6 @@ export interface MinecraftAccount {
   autoSellCommand: string;
   dailyCommandEnabled: boolean;
   dailyCommandTimes: string[];
-  balanceEnabled: boolean;
-  balanceCommand: string;
-  lastBalance: number | null;
-  lastBalanceAt: string | null;
   homes: string[];
   spawnerType: string;
   spawnerActions: Record<string, SpawnerAction>;

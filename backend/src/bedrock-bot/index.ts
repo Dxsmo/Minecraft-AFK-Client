@@ -162,6 +162,9 @@ async function main(): Promise<void> {
     }
   });
 
+  // Proxies can switch dimension/world without another high-level spawn.
+  c.on("change_dimension", () => behavior.markTeleported());
+
   c.on("move_player", (packet: unknown) => {
     try {
       const p = packet as { runtime_id?: unknown; mode?: unknown };
@@ -250,9 +253,6 @@ function handleCommand(
       break;
     case "run_task":
       behavior.enqueueTask(cmd.text);
-      break;
-    case "query_balance":
-      behavior.enqueueBalance(cmd.command);
       break;
     case "clean_spawner":
       behavior.enqueueCleanSpawner();

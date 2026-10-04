@@ -7,17 +7,16 @@
 //! Tick-driven timing keeps behaviors simple, deterministic and cheap.
 
 use std::collections::VecDeque;
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use azalea::container::ContainerHandleRef;
+use azalea::movement::LastSentInput;
 use azalea::registry::builtin::BlockKind;
 use azalea::{BlockPos, Client};
-use azalea_inventory::ItemStack;
 use azalea_inventory::components::{CustomName, Lore};
 use azalea_inventory::operations::{PickupClick, ThrowClick};
+use azalea_inventory::ItemStack;
 use rand::Rng;
-use regex::Regex;
 
 use crate::emit;
 use crate::protocol::{BehaviorConfig, Config, InventorySlot, OutEvent};
@@ -71,12 +70,6 @@ const TPACCEPT_DEDUP: Duration = Duration::from_secs(4);
 /// How often the bot emits a heartbeat so the Node supervisor can tell a live
 /// (but silent) bot apart from a hung one and recycle the latter.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
-/// How long to wait for the server to answer a balance query before giving up.
-const BALANCE_TIMEOUT: Duration = Duration::from_secs(5);
-/// After an auto-sell command runs, sell-confirmation messages arriving within
-/// this window are attributed to auto-sell earnings. Unrelated income (e.g.
-/// `/pay`) outside this window is never counted.
-const SELL_EARNING_WINDOW: Duration = Duration::from_secs(5);
 /// How long to wait for a right-clicked spawner to open its container before
 /// giving up on the clean-spawner cycle.
 const SPAWNER_MENU_TIMEOUT: Duration = Duration::from_millis(2000);
@@ -137,8 +130,6 @@ enum AutoSellPhase {
 enum ForegroundTask {
     /// Send a single chat line (e.g. a scheduled daily command).
     Chat { text: String, teleporting: bool },
-    /// Send a balance query, then wait for the reply (parsed in `on_chat`).
-    Balance(String),
     /// Right-click a nearby spawner and drop the items in its container.
     CleanSpawner,
     /// Move an item between two of the bot's own inventory slots.
@@ -149,8 +140,6 @@ enum ForegroundTask {
 
 /// A foreground task that is mid-execution and spans multiple ticks.
 enum ActiveTask {
-    /// Waiting for the server to answer a balance query.
-    Balance { deadline: Instant },
     /// Driving the spawner clear-out: waiting for the container, then dropping
     /// the configured item types, then selling the rest via the spawner's own
     /// sell button.
@@ -206,18 +195,19 @@ pub struct BehaviorState {
     next_autosell_at: Instant,
     autosell_phase: AutoSellPhase,
     last_autosell_failure_log: Option<Instant>,
-    /// Automation is disabled before the first Spawn and between Login/Spawn
-    /// during world/server changes. This prevents commands while the server is
+    /// Automation is disabled before the first Spawn and during Login/Respawn
+    /// world/server changes. This prevents commands while the server is
     /// saving or loading the inventory.
     spawned: bool,
+    /// Azalea does not emit another Spawn for every Respawn packet. In that
+    /// case the following position synchronization completes the world switch.
+    awaiting_respawn_position: bool,
     /// Shared quiescence gate for spawn, teleports and asynchronous commands.
     automation_ready_at: Instant,
     /// A non-teleport foreground chat command may open its own menu (for
     /// example `/homes`). Close only that command-owned menu after its guard;
     /// auto-sell itself never closes an unrelated pre-existing GUI.
     command_menu_close_at: Option<Instant>,
-    /// When set, sell-confirmation messages until this time count as earnings.
-    sell_earning_window: Option<Instant>,
     /// Foreground one-shot tasks awaiting execution (see [`ForegroundTask`]).
     task_queue: VecDeque<ForegroundTask>,
     /// The foreground task currently mid-execution, if any.
@@ -233,9 +223,8 @@ pub struct BehaviorState {
     /// corrects a rejected click) instead of relying only on a fixed delay.
     last_inventory_sig: Option<u64>,
     last_heartbeat_at: Instant,
-    /// Set only after a real respawn/world switch, when the server has already
-    /// cleared sneak and Azalea needs a local transition to re-send it.
-    crouch_repress_pending: bool,
+    /// Re-send held crouch after a world/position transition has settled.
+    crouch_resync_pending: bool,
 }
 
 impl BehaviorState {
@@ -265,16 +254,16 @@ impl BehaviorState {
             autosell_phase: AutoSellPhase::Idle,
             last_autosell_failure_log: None,
             spawned: false,
+            awaiting_respawn_position: false,
             automation_ready_at: now,
             command_menu_close_at: None,
-            sell_earning_window: None,
             task_queue: VecDeque::new(),
             active_task: None,
             last_tpaccept: None,
             inventory_resync_at: None,
             last_inventory_sig: None,
             last_heartbeat_at: now,
-            crouch_repress_pending: false,
+            crouch_resync_pending: false,
         }
     }
 
@@ -318,25 +307,6 @@ impl BehaviorState {
             self.task_queue.push_front(task);
         } else {
             self.task_queue.push_back(task);
-        }
-    }
-
-    /// Enqueue a balance query as a foreground one-shot task. Coalesces with any
-    /// pending/active balance query so repeated requests don't stack up.
-    pub fn enqueue_balance(&mut self, command: String) {
-        let command = command.trim().to_string();
-        let command = if command.is_empty() {
-            "/balance".to_string()
-        } else {
-            command
-        };
-        let already_pending = matches!(self.active_task, Some(ActiveTask::Balance { .. }))
-            || self
-                .task_queue
-                .iter()
-                .any(|t| matches!(t, ForegroundTask::Balance(_)));
-        if !already_pending {
-            self.task_queue.push_back(ForegroundTask::Balance(command));
         }
     }
 
@@ -391,7 +361,6 @@ impl BehaviorState {
     fn interrupt_for_transition(&mut self, bot: &Client) {
         self.close_open_menu(bot);
         self.autosell_phase = AutoSellPhase::Idle;
-        self.sell_earning_window = None;
         self.active_task = None;
         self.command_menu_close_at = None;
     }
@@ -411,12 +380,23 @@ impl BehaviorState {
     pub fn on_login(&mut self, bot: &Client) {
         self.interrupt_for_transition(bot);
         self.spawned = false;
+        self.awaiting_respawn_position = false;
+        self.crouch_resync_pending = true;
+    }
+
+    pub fn on_respawn(&mut self, bot: &Client) {
+        self.on_login(bot);
+        self.awaiting_respawn_position = true;
     }
 
     /// Called for a server position synchronization. After the initial spawn
     /// these packets cover /home, TPA and same-world teleports that do not emit
     /// another Login/Spawn pair.
     pub fn on_position_sync(&mut self, bot: &Client) {
+        if self.awaiting_respawn_position {
+            self.spawned = true;
+            self.awaiting_respawn_position = false;
+        }
         if !self.spawned {
             return;
         }
@@ -427,63 +407,51 @@ impl BehaviorState {
         // full guard duration after it has already completed.
         self.automation_ready_at = now + TELEPORT_STABILIZE_DELAY;
         self.next_autosell_at = self.automation_ready_at;
+        self.crouch_resync_pending = true;
     }
 
-    /// Called whenever the player (re)spawns into a world: initial join, after
-    /// a death, and after a server/world switch. Respawns clear sneak server-side,
-    /// so create one local transition there only. Normal gameplay never releases
-    /// crouch periodically.
+    /// Initial join, respawn and proxy/world switches reset the server's input.
     pub fn on_spawn(&mut self, bot: &Client) {
         let now = Instant::now();
         self.interrupt_for_transition(bot);
         self.spawned = true;
+        self.awaiting_respawn_position = false;
         self.automation_ready_at = now + SPAWN_STABILIZE_DELAY;
         self.next_autosell_at = self.automation_ready_at;
         self.last_autosell_failure_log = None;
+        self.crouch_resync_pending = true;
+    }
 
-        if self.config.crouch_enabled {
-            if bot.crouching() {
-                // The server already cleared sneak as part of the respawn/world
-                // switch. Reset Azalea's stale local value, then press next tick.
-                let _ = bot.set_crouching(false);
-                self.crouch_repress_pending = true;
-            } else {
-                let _ = bot.set_crouching(true);
-                self.crouch_repress_pending = false;
-            }
-        } else {
-            self.crouch_repress_pending = false;
+    /// Invalidate Azalea's input cache without ever releasing the sneak key.
+    /// A false/true toggle between ticks can be coalesced and send no packet.
+    fn resync_crouch(bot: &Client) -> bool {
+        if bot.set_crouching(true).is_err() {
+            return false;
         }
+        let mut ecs = bot.ecs.write();
+        let Ok(mut entity) = ecs.get_entity_mut(bot.entity) else {
+            return false;
+        };
+        entity.remove::<LastSentInput>();
+        true
     }
 
     pub fn on_tick(&mut self, bot: &Client) {
         let now = Instant::now();
         let mut command_sent_this_tick = false;
 
-        // Crouch: continuously hold sneak while enabled.
-        //
-        // `set_crouching` only writes a local field; the sneak flag reaches the
-        // server inside ServerboundPlayerInput, which azalea sends *only when
-        // the input differs from the last one it sent*. So calling
-        // `set_crouching(true)` while it is already true sends nothing at all.
-        //
-        // That matters because a death/respawn or a server switch clears the
-        // sneak state server-side while the client still believes it is
-        // crouching. Nothing differs locally, no packet goes out, and the bot
-        // silently stands up for good.
-        //
-        // A real transition is only needed after a spawn event. Never toggle
-        // crouch on a timer: doing that made the bot visibly stand up every
-        // three seconds.
+        // Only restore input once the destination is ready. Keep the pending
+        // flag on failures so missing components during transfer are retried.
         if self.config.crouch_enabled {
-            if self.crouch_repress_pending {
-                let _ = bot.set_crouching(true);
-                self.crouch_repress_pending = false;
-            } else if !bot.crouching() {
+            if self.spawned && self.crouch_resync_pending && now >= self.automation_ready_at {
+                if Self::resync_crouch(bot) {
+                    self.crouch_resync_pending = false;
+                }
+            } else if self.spawned && !bot.crouching() {
                 let _ = bot.set_crouching(true);
             }
         } else {
-            self.crouch_repress_pending = false;
+            self.crouch_resync_pending = false;
             if bot.crouching() {
                 let _ = bot.set_crouching(false);
             }
@@ -605,20 +573,12 @@ impl BehaviorState {
     /// Drives the foreground one-shot task queue (the task-interrupt system).
     /// A queued task only starts once auto-sell is idle, so menu/inventory
     /// interactions never overlap; instant tasks (a chat command) complete in
-    /// the same tick, while multi-tick tasks (a balance query) become the
+    /// the same tick, while multi-tick tasks (a spawner clear) become the
     /// `active_task` until they finish or time out.
     fn tick_foreground(&mut self, bot: &Client, now: Instant) -> bool {
         let mut ran = self.active_task.is_some();
         // Advance an in-progress multi-tick task.
         match &self.active_task {
-            Some(ActiveTask::Balance { deadline }) => {
-                if now >= *deadline {
-                    emit(&OutEvent::BehaviorLog {
-                        message: "Balance: no reply from the server (timed out)".into(),
-                    });
-                    self.active_task = None;
-                }
-            }
             Some(ActiveTask::CleanSpawner(progress)) => {
                 let progress = *progress;
                 self.advance_clean_spawner(bot, now, progress);
@@ -648,17 +608,6 @@ impl BehaviorState {
                         self.guard_after_chat(now, teleporting);
                         emit(&OutEvent::BehaviorLog {
                             message: format!("Scheduled command sent: {text}"),
-                        });
-                    }
-                    ForegroundTask::Balance(command) => {
-                        if !inventory_is_mutable(bot) {
-                            self.task_queue.push_front(ForegroundTask::Balance(command));
-                            return true;
-                        }
-                        bot.chat(command.clone());
-                        self.guard_after_chat(now, false);
-                        self.active_task = Some(ActiveTask::Balance {
-                            deadline: now + BALANCE_TIMEOUT,
                         });
                     }
                     ForegroundTask::CleanSpawner if !inventory_is_mutable(bot) => {
@@ -881,8 +830,6 @@ impl BehaviorState {
                 inv.click(PickupClick::Left {
                     slot: Some(sell_slot),
                 });
-                // Sale confirmations right after the click count as earnings.
-                self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
                 p.sold += 1;
             }
             SpawnerStage::WaitMenu => unreachable!("normalized above"),
@@ -1004,7 +951,6 @@ impl BehaviorState {
                 let command = if command.is_empty() { "/sell" } else { command };
                 self.next_autosell_at = now + interval;
                 bot.chat(command.to_string());
-                self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
                 self.autosell_phase = AutoSellPhase::WaitingForMenu {
                     since: now,
                     started_empty: player_item_count(bot) == 0,
@@ -1055,7 +1001,6 @@ impl BehaviorState {
                                         inv.shift_click(*slot);
                                     }
                                     if !player_slots.is_empty() {
-                                        self.sell_earning_window = Some(now + SELL_EARNING_WINDOW);
                                         self.last_autosell_failure_log = None;
                                     }
                                     self.autosell_phase = AutoSellPhase::Closing {
@@ -1158,32 +1103,6 @@ impl BehaviorState {
     /// such hint is present.
     pub fn on_chat(&mut self, bot: &Client, message: &str) {
         let now = Instant::now();
-        // Balance reply: while a balance query is in flight, the next chat line
-        // carrying a money amount is the answer.
-        if matches!(self.active_task, Some(ActiveTask::Balance { .. })) {
-            if let Some(balance) = parse_balance(message) {
-                self.active_task = None;
-                emit(&OutEvent::Balance {
-                    balance,
-                    raw: message.to_string(),
-                });
-            }
-        }
-
-        // Auto-sell earnings: attribute sell-confirmation amounts arriving in the
-        // short window after a sell command. Nothing outside that window (e.g.
-        // `/pay` income) is ever counted.
-        if let Some(until) = self.sell_earning_window {
-            if now <= until {
-                if let Some(amount) = parse_sell_amount(message) {
-                    emit(&OutEvent::SellEarning {
-                        amount,
-                        raw: message.to_string(),
-                    });
-                }
-            }
-        }
-
         // Proxy networks reject commands while they are persisting/restoring
         // the inventory. Treat that reply as a lifecycle signal: tear down the
         // current menu, wait briefly, then resume at normal configured cadence.
@@ -1510,61 +1429,6 @@ fn find_spawner_in_reach(bot: &Client) -> Option<BlockPos> {
     .then_some(pos)
 }
 
-/// Extracts a monetary amount from `text`, preferring a `$`-prefixed number and
-/// otherwise falling back to the first plausible number. Thousands separators
-/// (commas) are stripped; an optional decimal part is kept.
-fn extract_money(text: &str) -> Option<f64> {
-    static DOLLAR: OnceLock<Regex> = OnceLock::new();
-    static NUMBER: OnceLock<Regex> = OnceLock::new();
-    let dollar = DOLLAR.get_or_init(|| Regex::new(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)").unwrap());
-    let number = NUMBER.get_or_init(|| Regex::new(r"([0-9][0-9,]*(?:\.[0-9]+)?)").unwrap());
-
-    let cap = dollar.captures(text).or_else(|| number.captures(text))?;
-    let raw = cap.get(1)?.as_str().replace(',', "");
-    raw.parse::<f64>().ok()
-}
-
-/// Parses the player's balance from a server reply to a balance query. Requires
-/// a currency hint so unrelated numeric chatter isn't misread as a balance.
-fn parse_balance(text: &str) -> Option<f64> {
-    let lower = text.to_lowercase();
-    let looks_like_balance = text.contains('$')
-        || lower.contains("balance")
-        || lower.contains("money")
-        || lower.contains("coins")
-        || lower.contains("guthaben")
-        || lower.contains("kontostand");
-    if !looks_like_balance {
-        return None;
-    }
-    extract_money(text)
-}
-
-/// Parses money earned from an auto-sell confirmation line. Requires a sell-verb
-/// keyword and excludes transfer income (`/pay`) so only genuine sell earnings
-/// are counted.
-fn parse_sell_amount(text: &str) -> Option<f64> {
-    let lower = text.to_lowercase();
-    let is_sale = lower.contains("sold")
-        || lower.contains("sale")
-        || lower.contains("selling")
-        || lower.contains("verkauft")
-        || lower.contains("verkauf")
-        // Servers often format sell payouts as a plain "+$X" line with base/bonus
-        // details and no explicit "sold" keyword.
-        || lower.contains("+$")
-        || lower.contains("+ $")
-        || lower.contains("bonus");
-    let is_transfer = lower.contains("pay")
-        || lower.contains("paid")
-        || lower.contains("bezahlt")
-        || lower.contains("erhalten von");
-    if !is_sale || is_transfer {
-        return None;
-    }
-    extract_money(text)
-}
-
 /// Words that commonly follow `/tpaccept` as prose rather than as real command
 /// arguments, used to stop argument collection when replaying a suggested
 /// command (English + German).
@@ -1678,11 +1542,149 @@ fn tpaccept_target_name(command: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    use azalea::ecs::prelude::*;
+    use azalea::entity::Jumping;
+    use azalea::movement::{send_player_input_packet, LastSentInput};
+    use azalea::packet::game::SendGamePacketEvent;
+    use azalea::protocol::packets::game::{ServerboundGamePacket, ServerboundPlayerInput};
+    use azalea::{Client, ClientMovementState};
+    use parking_lot::{Mutex, RwLock};
+
     use super::{
-        AUTOSELL_EMPTY_PROBE_TIMEOUT, AUTOSELL_MENU_TIMEOUT, autosell_menu_timeout,
-        is_inventory_busy_message, is_teleport_command, parse_balance, parse_sell_amount,
-        parse_tpa_accept_command, tpaccept_target_name,
+        autosell_menu_timeout, is_inventory_busy_message, is_teleport_command,
+        parse_tpa_accept_command, tpaccept_target_name, BehaviorState,
+        AUTOSELL_EMPTY_PROBE_TIMEOUT, AUTOSELL_MENU_TIMEOUT,
     };
+
+    fn crouch_client(enabled: bool) -> (Client, BehaviorState, Arc<Mutex<Vec<bool>>>) {
+        let mut world = World::new();
+        // Simulate stale input carried over from the previous server/world.
+        let entity = world
+            .spawn((
+                ClientMovementState {
+                    trying_to_crouch: true,
+                    ..Default::default()
+                },
+                Jumping::default(),
+                LastSentInput(ServerboundPlayerInput {
+                    shift: true,
+                    ..Default::default()
+                }),
+            ))
+            .id();
+        let packets = Arc::new(Mutex::new(Vec::new()));
+        let captured = packets.clone();
+        world.add_observer(move |event: On<SendGamePacketEvent>| {
+            if let ServerboundGamePacket::PlayerInput(input) = &event.packet {
+                captured.lock().push(input.shift);
+            }
+        });
+        let client = Client {
+            entity,
+            ecs: Arc::new(RwLock::new(world)),
+        };
+        let config = serde_json::from_value(serde_json::json!({
+            "host": "localhost", "port": 25565, "auth_type": "offline",
+            "username": "Bot", "cache_dir": "", "crouch_enabled": enabled,
+            "auto_command_enabled": false, "auto_command_text": "",
+            "auto_command_interval_minutes": 5
+        }))
+        .unwrap();
+        (client, BehaviorState::new(&config), packets)
+    }
+
+    fn send_input(client: &Client) {
+        let mut schedule = Schedule::default();
+        schedule.add_systems(send_player_input_packet);
+        schedule.run(&mut client.ecs.write());
+    }
+
+    #[test]
+    fn lobby_and_return_resend_sneak_without_releasing_it() {
+        let (client, mut state, packets) = crouch_client(true);
+        send_input(&client);
+        assert!(packets.lock().is_empty());
+        for _ in 0..2 {
+            state.on_login(&client);
+            state.on_tick(&client);
+            send_input(&client);
+            state.on_spawn(&client);
+            state.automation_ready_at = Instant::now();
+            state.on_tick(&client);
+            send_input(&client);
+            assert!(client.crouching());
+            assert!(!state.crouch_resync_pending);
+        }
+        state.on_tick(&client);
+        send_input(&client);
+        assert_eq!(*packets.lock(), vec![true, true]);
+    }
+
+    #[test]
+    fn teleport_without_spawn_resends_held_sneak() {
+        let (client, mut state, packets) = crouch_client(true);
+        state.spawned = true;
+        state.on_position_sync(&client);
+        state.automation_ready_at = Instant::now();
+        state.on_tick(&client);
+        send_input(&client);
+        assert_eq!(*packets.lock(), vec![true]);
+    }
+
+    #[test]
+    fn respawn_and_position_restore_sneak_without_azalea_spawn_event() {
+        let (client, mut state, packets) = crouch_client(true);
+        state.spawned = true;
+        for _ in 0..2 {
+            state.on_respawn(&client);
+            state.on_tick(&client);
+            assert!(!state.spawned);
+            assert!(state.awaiting_respawn_position);
+            state.on_position_sync(&client);
+            assert!(state.spawned);
+            state.automation_ready_at = Instant::now();
+            state.on_tick(&client);
+            send_input(&client);
+        }
+        assert_eq!(*packets.lock(), vec![true, true]);
+    }
+
+    #[test]
+    fn missing_movement_state_retries_resync_until_world_is_ready() {
+        let (client, mut state, packets) = crouch_client(true);
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .remove::<ClientMovementState>();
+        state.on_spawn(&client);
+        state.automation_ready_at = Instant::now();
+        state.on_tick(&client);
+        assert!(state.crouch_resync_pending);
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .insert(ClientMovementState::default());
+        state.on_tick(&client);
+        send_input(&client);
+        assert_eq!(*packets.lock(), vec![true]);
+        assert!(!state.crouch_resync_pending);
+    }
+
+    #[test]
+    fn disabled_crouch_stays_released_after_world_change() {
+        let (client, mut state, packets) = crouch_client(false);
+        state.on_spawn(&client);
+        state.automation_ready_at = Instant::now();
+        state.on_tick(&client);
+        send_input(&client);
+        assert!(!client.crouching());
+        assert_eq!(*packets.lock(), vec![false]);
+    }
 
     #[test]
     fn empty_probe_uses_short_timeout_without_changing_normal_timeout() {
@@ -1708,41 +1710,6 @@ mod tests {
             "Your inventory is currently being loaded"
         ));
         assert!(!is_inventory_busy_message("Dein Inventar ist leer"));
-    }
-
-    #[test]
-    fn balance_dollar_with_commas() {
-        assert_eq!(parse_balance("Balance: $12,450"), Some(12450.0));
-        assert_eq!(parse_balance("Your balance is $1,234.56"), Some(1234.56));
-        assert_eq!(parse_balance("You have 8000 coins"), Some(8000.0));
-    }
-
-    #[test]
-    fn balance_ignores_non_currency_lines() {
-        assert_eq!(parse_balance("Player joined at 12:00"), None);
-        assert_eq!(parse_balance("You have 5 new messages"), None);
-    }
-
-    #[test]
-    fn sell_amount_counts_sales_only() {
-        assert_eq!(
-            parse_sell_amount("You sold 64 cobblestone for $500"),
-            Some(500.0)
-        );
-        assert_eq!(parse_sell_amount("Verkauft für $1,250"), Some(1250.0));
-        assert_eq!(
-            parse_sell_amount(
-                "CHAT <HUGE> +$14,492.50 (Basis: $8,525.00, Bonus: +$5,967.50 durch 1.7x)"
-            ),
-            Some(14492.50)
-        );
-    }
-
-    #[test]
-    fn sell_amount_excludes_transfers() {
-        assert_eq!(parse_sell_amount("Desmodus paid you $9000"), None);
-        assert_eq!(parse_sell_amount("You received $100 from Steve"), None);
-        assert_eq!(parse_sell_amount("Welcome to the server!"), None);
     }
 
     #[test]

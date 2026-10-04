@@ -302,7 +302,7 @@ describe("ItemWorthScanner", () => {
       const paused = await waitForStatus(["PAUSED"]);
       expect(paused.resumable).toBe(false);
 
-      // Status events fire on every health/balance tick, not just transitions.
+      // Status events fire on every health tick, not just transitions.
       // They must not revive a scan that deliberately gave up.
       fake.setOnline(A, true);
       fake.setOnline(A, true);

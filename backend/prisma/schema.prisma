@@ -131,11 +131,10 @@ model MinecraftAccount {
   // dailyCommandTimes (JSON-encoded array of "HH:MM", server local time).
   dailyCommandEnabled        Boolean      @default(false)
   dailyCommandTimes          String       @default("[]")
-  // Periodically query and display the player's balance (parsed from chat).
+  // Legacy balance columns retained for database compatibility; no longer used.
   balanceEnabled             Boolean      @default(false)
   balanceCommand             String       @default("/balance")
-  // Last known balance and when it was read, so the dashboard can show a value
-  // immediately after a restart before the next poll runs.
+  // Legacy stored balance, no longer exposed or refreshed.
   lastBalance                Float?
   lastBalanceAt              DateTime?
   // JSON-encoded array of discovered /homes names for this account, refreshed
@@ -239,7 +238,7 @@ model ItemWorthValue {
   @@index([changedAt])
 }
 
-// One row per money amount earned from an auto-sell action, used to compute the
+// One row per confirmed sell payout, used to compute the
 // rolling 5m/1h/24h earnings shown under the console. Kept separate from other
 // income so only genuine /sell earnings are counted.
 model SellEarning {

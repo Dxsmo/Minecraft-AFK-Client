@@ -46,8 +46,6 @@ export function AccountSettingsPanel({
   const [dailyCommandEnabled, setDailyCommandEnabled] = useState(account.dailyCommandEnabled);
   const [dailyCommandTimes, setDailyCommandTimes] = useState<string[]>(account.dailyCommandTimes ?? []);
   const [dailyTimeDraft, setDailyTimeDraft] = useState("08:00");
-  const [balanceEnabled, setBalanceEnabled] = useState(account.balanceEnabled);
-  const [balanceCommand, setBalanceCommand] = useState(account.balanceCommand);
   const [tpAutoEnabled, setTpAutoEnabled] = useState(account.tpAutoEnabled);
   const [tpAutoAllowlist, setTpAutoAllowlist] = useState<string[]>(account.tpAutoAllowlist ?? []);
   const [allowlistDraft, setAllowlistDraft] = useState("");
@@ -84,14 +82,6 @@ export function AccountSettingsPanel({
         autoReconnect,
         serverHost,
         serverPort,
-        autoCommandEnabled,
-        autoCommandText: commandFromHomeName(autoHomeName),
-        autoCommandIntervalMinutes,
-        autoCommandSpanEnabled,
-        autoCommandSpanMinSeconds: toSpanSeconds(autoCommandSpanMinValue, autoCommandSpanMinUnit),
-        autoCommandSpanMaxSeconds: toSpanSeconds(autoCommandSpanMaxValue, autoCommandSpanMaxUnit),
-        dailyCommandEnabled,
-        dailyCommandTimes,
         autoSellEnabled,
         autoSellIntervalSeconds,
         autoSellCommand,
@@ -101,8 +91,14 @@ export function AccountSettingsPanel({
         spawnerClearTimes,
         ...(isAdmin
           ? {
-              balanceEnabled,
-              balanceCommand,
+              autoCommandEnabled,
+              autoCommandText: commandFromHomeName(autoHomeName),
+              autoCommandIntervalMinutes,
+              autoCommandSpanEnabled,
+              autoCommandSpanMinSeconds: toSpanSeconds(autoCommandSpanMinValue, autoCommandSpanMinUnit),
+              autoCommandSpanMaxSeconds: toSpanSeconds(autoCommandSpanMaxValue, autoCommandSpanMaxUnit),
+              dailyCommandEnabled,
+              dailyCommandTimes,
               tpAutoEnabled,
               tpAutoAllowlist,
             }
@@ -188,7 +184,7 @@ export function AccountSettingsPanel({
     });
   }
 
-  // Normal users get a reduced feature set: no balance or auto-TPA
+  // Normal users get a reduced feature set: no auto home or auto-TPA
   // (mirrored server-side in the accounts API).
   const categories: { id: string; label: string; icon: CatIcon; meta?: string; on?: boolean }[] = [
     { id: "general", label: "General", icon: "user", meta: displayName.trim() || account.name },
@@ -199,8 +195,7 @@ export function AccountSettingsPanel({
       icon: "activity",
       on: crouchEnabled,
     },
-    { id: "autohome", label: "Auto home", icon: "terminal", on: autoCommandEnabled || dailyCommandEnabled || autoCommandSpanEnabled },
-    ...(isAdmin ? [{ id: "balance", label: "Balance", icon: "coin" as CatIcon, on: balanceEnabled }] : []),
+    ...(isAdmin ? [{ id: "autohome", label: "Auto home", icon: "terminal" as CatIcon, on: autoCommandEnabled || dailyCommandEnabled || autoCommandSpanEnabled }] : []),
     ...(isAdmin ? [{ id: "autotpa", label: "Auto-TPA", icon: "portal" as CatIcon, on: tpAutoEnabled }] : []),
     { id: "autosell", label: "Auto-sell", icon: "tag", on: autoSellEnabled },
     {
@@ -358,7 +353,7 @@ export function AccountSettingsPanel({
               </>
             )}
 
-            {activeCat === "autohome" && (
+            {isAdmin && activeCat === "autohome" && (
               <>
                 <div>
                   <label className="label">Home</label>
@@ -479,26 +474,6 @@ export function AccountSettingsPanel({
                       </div>
                     </div>
                   )}
-                </div>
-              </>
-            )}
-
-            {activeCat === "balance" && (
-              <>
-                <Toggle
-                  label="Show balance"
-                  description="Queries the balance every 5 minutes and shows it above health/hunger."
-                  checked={balanceEnabled}
-                  onChange={setBalanceEnabled}
-                />
-                <div>
-                  <label className="label">Balance command</label>
-                  <input
-                    value={balanceCommand}
-                    onChange={(e) => setBalanceCommand(e.target.value)}
-                    placeholder="/balance"
-                    className="input"
-                  />
                 </div>
               </>
             )}
@@ -774,7 +749,6 @@ type CatIcon =
   | "server"
   | "activity"
   | "terminal"
-  | "coin"
   | "portal"
   | "tag"
   | "users"
@@ -821,14 +795,6 @@ function CatGlyph({ name }: { name: CatIcon }) {
         <svg {...common}>
           <polyline points="4 17 10 11 4 5" />
           <line x1="12" y1="19" x2="20" y2="19" />
-        </svg>
-      );
-    case "coin":
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M9.5 9.5a2.5 2.5 0 0 1 5 0c0 2-2.5 1.5-2.5 3.5" />
-          <line x1="12" y1="16.5" x2="12" y2="16.5" />
         </svg>
       );
     case "portal":

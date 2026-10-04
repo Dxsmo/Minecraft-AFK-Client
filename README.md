@@ -390,7 +390,9 @@ This starts two containers:
   multiple stages: a Rust nightly stage compiles the `azalea-bot` binary, a
   Node stage compiles the TypeScript, and the slim runtime stage bundles
   both. The first `docker compose build` therefore takes a few minutes while
-  the Rust dependencies compile; subsequent builds are cached.
+  the Rust dependencies compile. Persistent BuildKit cache mounts retain the
+  Cargo registry, git dependencies and compiled dependency artifacts, so later
+  bot-source changes do not rebuild all of Azalea.
 - **web** – Caddy, serving the built React SPA and reverse-proxying
   `/api/*` and `/ws/*` to `backend`, listening on `80`/`443`
 

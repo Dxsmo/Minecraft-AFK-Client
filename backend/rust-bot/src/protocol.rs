@@ -132,10 +132,6 @@ pub enum Command {
     /// Node-side daily-command scheduler so a scheduled command never collides
     /// with an in-progress auto-sell cycle.
     RunTask { text: String },
-    /// Query the player's balance as a foreground one-shot task: pauses
-    /// auto-sell, sends the given balance command, and waits for the server's
-    /// reply (parsed into an [`OutEvent::Balance`]).
-    QueryBalance { command: String },
     /// Clean a nearby spawner as a foreground one-shot task: right-click a
     /// spawner within reach (without walking to it), drop the items in the
     /// container it opens, and close it. Pauses auto-sell for the duration.
@@ -193,12 +189,6 @@ pub enum OutEvent {
     /// The bot's current health (0..=20) and food/hunger level (0..=20),
     /// emitted whenever either value changes.
     Health { health: f32, food: u32 },
-    /// The player's balance, parsed from the server's reply to a balance query.
-    Balance { balance: f64, raw: String },
-    /// Money earned from an auto-sell action, parsed from the server's sell
-    /// confirmation message. Attributed only within a short window after the
-    /// sell command runs, so unrelated income (e.g. `/pay`) is not counted.
-    SellEarning { amount: f64, raw: String },
     /// A live snapshot of the bot's own inventory. Slots use the player-menu
     /// layout: `main` is the 27 storage slots, `hotbar` the 9 hotbar slots,
     /// `offhand` the off-hand slot, and `armor` the 4 armor slots. Each entry is

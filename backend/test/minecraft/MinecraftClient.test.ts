@@ -199,6 +199,36 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(events).toContain("SERVER_MESSAGE:Server restarting");
   });
 
+  it("counts each confirmed sale once regardless of auto-sell timing or edition", async () => {
+    const client = makeClient({ autoSellEnabled: false });
+    const earnings = vi.fn();
+    client.on("earning", earnings);
+    client.connect();
+    const sale = "+$1.071 (Basis: $630, Bonus: +$441 durch 1.7x)";
+    lastChild().send({ type: "chat", sender: "HugoSMP", message: sale });
+    // Old bot binaries can still emit this event; it must not double count.
+    lastChild().send({ type: "sell_earning", amount: 1.071, raw: sale });
+    lastChild().send({ type: "chat", sender: null, message: "You received $100 from Steve" });
+    lastChild().send({ type: "chat", sender: "HugoSMP", message: sale });
+    await tick();
+    expect(earnings.mock.calls).toEqual([
+      [{ minecraftAccountId: "acc-1", amount: 1071 }],
+      [{ minecraftAccountId: "acc-1", amount: 1071 }],
+    ]);
+  });
+
+  it("does not run legacy balance polling or expose old bot balance events", async () => {
+    const client = makeClient({ balanceEnabled: true, balanceCommand: "/balance" } as any);
+    client.connect();
+    lastChild().send({ type: "spawn" });
+    lastChild().send({ type: "balance", balance: 9000 });
+    await tick();
+    (client as any).runScheduledTasks();
+    const commands = lastChild().stdin.write.mock.calls.map(([line]) => JSON.parse(line));
+    expect(commands.some((cmd) => cmd.type === "query_balance")).toBe(false);
+    expect(client.getStatus()).not.toHaveProperty("balance");
+  });
+
   it("surfaces the Microsoft device code as a status prompt", async () => {
     const client = makeClient({ authType: "MICROSOFT", credentialsSecret: "bot@example.com" });
     client.connect();

@@ -67,7 +67,6 @@ export type Command =
   | { type: "chat"; text: string }
   | ({ type: "configure" } & BehaviorConfig)
   | { type: "run_task"; text: string }
-  | { type: "query_balance"; command: string }
   | { type: "clean_spawner" }
   | { type: "request_inventory" }
   | { type: "move_item"; from: number; to: number }
@@ -93,8 +92,6 @@ export type OutEvent =
   | { type: "fatal_error"; error: string }
   | { type: "behavior_log"; message: string }
   | { type: "health"; health: number; food: number }
-  | { type: "balance"; balance: number; raw: string }
-  | { type: "sell_earning"; amount: number; raw: string }
   | {
       type: "inventory";
       main: (InventorySlot | null)[];

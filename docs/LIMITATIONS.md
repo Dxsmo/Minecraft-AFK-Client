@@ -27,15 +27,15 @@ dashboard) is edition-agnostic.
   Java → the compiled `azalea-bot` binary; Bedrock → `node dist/bedrock-bot/index.js`.
   `ClientManager` sets `edition` in the runtime config.
 - **Bedrock bot** — `backend/src/bedrock-bot/` (protocol/send/behaviors/index)
-  mirrors the Rust bot: lifecycle, reconnect handoff, chat, health, auto home,
-  auto-sell (command-based), crouch, tpa auto-accept, balance/sell
+  mirrors the Rust bot: lifecycle, reconnect handoff, chat, health, admin-only auto home,
+  auto-sell (command-based), crouch, tpa auto-accept, centralized sell
   chat parsing, and a best-effort inventory snapshot.
 
 ### What works vs. what is limited on Bedrock
 
 - **Works (same as Java):** connect/login (offline + Microsoft device-code),
-  chat/console, commands, auto home, interval auto-sell, crouch,
-  tpa auto-accept, health telemetry, balance/sell chat parsing.
+  chat/console, commands, admin-only auto home, interval auto-sell, crouch,
+  tpa auto-accept, health telemetry, sell chat parsing.
 - **Best-effort / unverified:** live inventory snapshot and drag-and-drop item
   moves (uses `ItemStackRequest`; item names fall back to `bedrock:<id>` because
   there is no bundled Bedrock item palette).
@@ -80,7 +80,7 @@ The live, real bot state that *is* available is already surfaced elsewhere in
 the UI and stays in sync with the server:
 
 - Live console (chat + server messages + events) via WebSocket.
-- Live status: connection state, health, food, balance, reconnects.
+- Live status: connection state, health, food, reconnects.
 - Live inventory tab (see feature #10) renders the bot's **actual** inventory
   contents (slots, stack sizes, hotbar) read from the open menu — this is the
   closest faithful "view" a headless client can provide.

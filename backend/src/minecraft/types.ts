@@ -65,10 +65,6 @@ export interface ClientRuntimeConfig {
   dailyCommandEnabled: boolean;
   /** Times of day ("HH:MM", server local time) to run the auto-command once each. */
   dailyCommandTimes: string[];
-  /** Periodically query and display the player's balance. */
-  balanceEnabled: boolean;
-  /** Command used to query the balance (e.g. "/balance"). */
-  balanceCommand: string;
   /** Persisted /homes names from previous joins. */
   homes: string[];
   /** Configured spawner type id ("" = unconfigured, uses the legacy clear-all). */
@@ -106,10 +102,6 @@ export interface ClientStatusSnapshot {
   msaSignIn?: MsaSignInPrompt;
   /** True once the Microsoft profile has been resolved (device-code sign-in completed). */
   authenticated?: boolean;
-  /** Last known player balance, when balance polling is enabled. */
-  balance?: number;
-  /** ISO timestamp of the last balance update. */
-  balanceUpdatedAt?: string;
   /** Last discovered /homes names for this account. */
   homes?: string[];
 }

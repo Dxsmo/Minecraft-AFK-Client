@@ -98,7 +98,6 @@ export function AccountDetailPage() {
   const liveStatus = status?.status ?? account.status;
   const displayName = account.displayName?.trim() || status?.name || account.name;
   const msaSignIn = status?.msaSignIn;
-  const balance = status?.balance ?? account.lastBalance ?? undefined;
   const homes = status?.status === "ONLINE" ? status.homes ?? [] : account.homes ?? [];
 
   return (
@@ -181,9 +180,6 @@ export function AccountDetailPage() {
 
       {/* Live telemetry strip — always visible across tabs. */}
       <div className="flex flex-wrap items-center gap-2">
-        {isAdmin && balance !== null && balance !== undefined && (
-          <StatPill label="Balance" value={`$${balance.toLocaleString("en-US")}`} accent />
-        )}
         {status?.health !== undefined && <StatPill label="Health" value={`${status.health}/20`} />}
         {status?.food !== undefined && <StatPill label="Food" value={`${status.food}/20`} />}
         {status?.position && (
@@ -293,7 +289,7 @@ export function AccountDetailPage() {
               </div>
             </div>
           )}
-          {account.autoSellEnabled && id && <EarningsBox accountId={id} />}
+          {id && <EarningsBox accountId={id} />}
         </div>
       )}
 
@@ -388,7 +384,7 @@ interface Earnings {
   last24h: number;
 }
 
-/** Rolling auto-sell earnings box, polled every 15s. Shown under the console. */
+/** Rolling sell earnings box, polled every 15s. Shown under the console. */
 function EarningsBox({ accountId }: { accountId: string }) {
   const [earnings, setEarnings] = useState<Earnings | null>(null);
 
@@ -410,12 +406,12 @@ function EarningsBox({ accountId }: { accountId: string }) {
     };
   }, [accountId]);
 
-  const fmt = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
+  const fmt = (n: number) => `$${n.toLocaleString("de-DE", { maximumFractionDigits: 2 })}`;
 
   return (
     <div className="card p-3.5 text-sm">
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
-        Auto-sell earnings
+        Sell earnings
       </h3>
       <div className="grid grid-cols-3 gap-2 text-center">
         <EarningStat label="5 min" value={earnings ? fmt(earnings.last5m) : "—"} />

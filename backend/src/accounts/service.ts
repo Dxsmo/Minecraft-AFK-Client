@@ -102,10 +102,6 @@ const publicAccountSelect = {
   autoSellCommand: true,
   dailyCommandEnabled: true,
   dailyCommandTimes: true,
-  balanceEnabled: true,
-  balanceCommand: true,
-  lastBalance: true,
-  lastBalanceAt: true,
   homesJson: true,
   spawnerType: true,
   spawnerActions: true,
@@ -268,7 +264,7 @@ export async function getFullAccount(id: string) {
 }
 
 /**
- * Rolling auto-sell earnings for an account over the last 5 minutes, hour and
+ * Rolling confirmed sell earnings for an account over the last 5 minutes, hour and
  * 24 hours. Prunes rows older than 24h first so the table can't grow unbounded.
  */
 export async function getEarningsSummary(id: string) {
@@ -279,7 +275,7 @@ export async function getEarningsSummary(id: string) {
   });
 
   const rows = await prisma.sellEarning.findMany({
-    where: { minecraftAccountId: id, createdAt: { gte: cutoff24h } },
+    where: { minecraftAccountId: id, createdAt: { gte: cutoff24h, lte: new Date(now) } },
     select: { amount: true, createdAt: true },
   });
 
@@ -290,9 +286,10 @@ export async function getEarningsSummary(id: string) {
   let last24h = 0;
   for (const row of rows) {
     const t = row.createdAt.getTime();
-    last24h += row.amount;
-    if (t >= since1h) last1h += row.amount;
-    if (t >= since5m) last5m += row.amount;
+    const cents = Math.round(row.amount * 100);
+    last24h += cents;
+    if (t >= since1h) last1h += cents;
+    if (t >= since5m) last5m += cents;
   }
-  return { last5m, last1h, last24h };
+  return { last5m: last5m / 100, last1h: last1h / 100, last24h: last24h / 100 };
 }

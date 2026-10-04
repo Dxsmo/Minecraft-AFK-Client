@@ -31,4 +31,7 @@ opt-level = 3
 
 [profile.release]
 opt-level = 3
-lto = true
+# LTO makes every small bot change relink the complete Azalea graph, which is
+# disproportionately expensive on a Raspberry Pi. Keep normal release
+# optimization, but let Cargo reuse already compiled dependency objects.
+lto = false

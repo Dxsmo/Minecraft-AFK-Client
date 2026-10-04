@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { parseSellEarning } from "./sellEarnings.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -34,7 +35,7 @@ const SUBPROCESS_ONLINE_SILENCE_MS = 45_000;
 /// How often the online-hang watchdog checks for subprocess silence.
 const ONLINE_WATCHDOG_INTERVAL_MS = 15_000;
 
-/// How often the daily-command / balance schedulers wake up. A 30s cadence is
+/// How often the daily-command / spawner schedulers wake up. A 30s cadence is
 /// fine for minute-granular daily times (deduped per day) and keeps overhead
 /// negligible.
 const SCHEDULER_TICK_MS = 30_000;
@@ -50,8 +51,6 @@ const SCHEDULER_TICK_MS = 30_000;
 function stripMinecraftFormatting(text: string): string {
   return text.replace(/§[0-9a-u]/gi, "").replace(/§/g, "");
 }
-/// How often to poll the player's balance while balance polling is enabled.
-const BALANCE_POLL_INTERVAL_MS = 5 * 60_000;
 /// How often to re-query saved /homes while online, so the shortcut buttons
 /// stay in sync even if a home is added/removed outside the web console.
 const HOMES_POLL_INTERVAL_MS = 5 * 60_000;
@@ -89,8 +88,6 @@ export class MinecraftClient extends EventEmitter {
 
   private health = 20;
   private food = 20;
-  private balance: number | undefined;
-  private balanceUpdatedAt: Date | undefined;
   /** Most recent live inventory snapshot from the bot, if any. */
   private inventory: InventorySnapshot | undefined;
   /** Last discovered /homes list for this account. */
@@ -107,12 +104,10 @@ export class MinecraftClient extends EventEmitter {
   /** Epoch ms of the last /homes query, for the 5-minute refresh cadence. */
   private lastHomesQueryAt = 0;
 
-  /** Drives the daily-command + balance-poll schedulers (see runScheduledTasks). */
+  /** Drives the daily-command + spawner schedulers (see runScheduledTasks). */
   private schedulerTimer: NodeJS.Timeout | null = null;
   /** Maps a daily "HH:MM" to the YYYY-MM-DD it last fired, to run it once per day. */
   private firedDaily = new Map<string, string>();
-  /** Epoch ms of the last balance query, for the 5-minute poll cadence. */
-  private lastBalanceQueryAt = 0;
 
   constructor(private config: ClientRuntimeConfig) {
     super();
@@ -169,8 +164,6 @@ export class MinecraftClient extends EventEmitter {
       reconnectAttempt: this.reconnectAttempt,
       msaSignIn: this.msaSignIn,
       authenticated: this.authenticated,
-      balance: this.balance,
-      balanceUpdatedAt: this.balanceUpdatedAt?.toISOString(),
       homes: this.homes,
     };
   }
@@ -272,9 +265,9 @@ export class MinecraftClient extends EventEmitter {
   }
 
   /**
-   * Runs the time-of-day daily-command scheduler and the periodic balance poll.
-   * Both dispatch through the Rust bot's foreground task queue (RunTask /
-   * QueryBalance), so they automatically pause any in-progress auto-sell cycle
+   * Runs the time-of-day daily-command and spawner-clear schedulers.
+   * Both dispatch through the bot's foreground task queue,
+   * so they automatically pause any in-progress auto-sell cycle
    * and resume it afterwards — no scheduling logic lives in the bot itself.
    */
   private runScheduledTasks(): void {
@@ -305,16 +298,6 @@ export class MinecraftClient extends EventEmitter {
         this.firedDaily.set(key, today);
         this.sendToBot({ type: "clean_spawner" });
         this.emitConsole("SYSTEM", `Scheduled spawner clear for ${hhmm} dispatched`);
-      }
-    }
-
-    // Balance poll: query at most every BALANCE_POLL_INTERVAL_MS.
-    if (this.config.balanceEnabled) {
-      const elapsed = Date.now() - this.lastBalanceQueryAt;
-      if (elapsed >= BALANCE_POLL_INTERVAL_MS) {
-        this.lastBalanceQueryAt = Date.now();
-        const command = this.config.balanceCommand.trim() || "/balance";
-        this.sendToBot({ type: "query_balance", command });
       }
     }
 
@@ -504,6 +487,10 @@ export class MinecraftClient extends EventEmitter {
       case "chat": {
         const { sender, message } = event as { sender: string | null; message: string };
         const clean = stripMinecraftFormatting(message);
+        const amount = parseSellEarning(clean);
+        if (amount !== null) {
+          this.emit("earning", { minecraftAccountId: this.config.id, amount });
+        }
         this.tryUpdateHomesFromChat(clean);
         this.emit("chat", { minecraftAccountId: this.config.id, message: clean });
         if (sender) this.emitConsole("CHAT", `<${stripMinecraftFormatting(sender)}> ${clean}`);
@@ -526,24 +513,6 @@ export class MinecraftClient extends EventEmitter {
       case "heartbeat":
         // Liveness only; lastActivityAt is already refreshed for every line.
         break;
-
-      case "balance": {
-        const { balance } = event as { balance: number };
-        this.balance = balance;
-        this.balanceUpdatedAt = new Date();
-        this.emitConsole("SYSTEM", `Balance: ${balance.toLocaleString("en-US")}`);
-        this.emit("balance", { minecraftAccountId: this.config.id, balance });
-        this.emitStatus();
-        break;
-      }
-
-      case "sell_earning": {
-        const { amount } = event as { amount: number };
-        if (Number.isFinite(amount) && amount > 0) {
-          this.emit("earning", { minecraftAccountId: this.config.id, amount });
-        }
-        break;
-      }
 
       case "inventory": {
         const e = event as {

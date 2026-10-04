@@ -24,7 +24,18 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /rust-bot
 COPY rust-bot/Cargo.toml rust-bot/Cargo.lock ./
 COPY rust-bot/src ./src
-RUN cargo build --release
+# Keep Cargo downloads, checked-out git dependencies and compiled dependency
+# artifacts outside the invalidated image layer. Without these cache mounts,
+# changing one line in behaviors.rs makes a Raspberry Pi rebuild all of Azalea
+# and its dependency tree from scratch. The final binaries are copied out of
+# the cache mount so they remain available to the later runtime stage.
+RUN --mount=type=cache,id=afk-cargo-registry,target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=afk-cargo-git,target=/root/.cargo/git,sharing=locked \
+    --mount=type=cache,id=afk-cargo-target,target=/rust-bot/target,sharing=locked \
+    cargo build --release \
+    && mkdir -p /rust-out \
+    && cp /rust-bot/target/release/azalea-bot /rust-out/azalea-bot \
+    && cp /rust-bot/target/release/namesniper-bot /rust-out/namesniper-bot
 
 # ---- Build stage: compile TypeScript + generate the Prisma client ----
 FROM node:20-bookworm-slim AS builder
@@ -37,7 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN --mount=type=cache,id=afk-backend-npm,target=/root/.npm,sharing=locked npm ci
 
 COPY prisma ./prisma
 RUN npx prisma generate
@@ -45,6 +56,9 @@ RUN npx prisma generate
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
+# The builder and runtime use the same Node/Debian base and architecture, so
+# native production modules can be compiled once here and copied forward.
+RUN npm prune --omit=dev
 
 # ---- Runtime stage: slim image with only production deps + azalea-bot binary ----
 FROM node:20-bookworm-slim AS runtime
@@ -54,22 +68,20 @@ ENV NODE_ENV=production
 # ca-certificates is required for the azalea-bot's HTTPS auth requests
 # (login.live.com / Xbox / Minecraft services) — without it reqwest panics
 # with "No CA certificates were loaded from the system".
-# cmake + toolchain are needed to compile raknet-native (Bedrock RakNet) and
-# argon2 during `npm ci`; they are purged again afterwards to keep the image slim.
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ cmake openssl ca-certificates \
+# Native modules were already compiled in the builder stage. The runtime only
+# needs certificates and OpenSSL; it does not need a compiler or cmake.
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev && npm cache clean --force \
-    && apt-get purge -y python3 make g++ cmake && apt-get autoremove -y
+COPY --from=builder /app/node_modules ./node_modules
 
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY prisma ./prisma
 
 # Compiled Azalea bot binary from the Rust build stage.
-COPY --from=rust-builder /rust-bot/target/release/azalea-bot /app/azalea-bot
-COPY --from=rust-builder /rust-bot/target/release/namesniper-bot /app/namesniper-bot
+COPY --from=rust-builder /rust-out/azalea-bot /app/azalea-bot
+COPY --from=rust-builder /rust-out/namesniper-bot /app/namesniper-bot
 RUN chmod +x /app/azalea-bot /app/namesniper-bot
 
 RUN mkdir -p /app/data

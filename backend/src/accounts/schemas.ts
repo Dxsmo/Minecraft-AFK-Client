@@ -75,8 +75,6 @@ export const createAccountSchema = z
       .max(48)
       .default([])
       .transform((times) => JSON.stringify(Array.from(new Set(times)).sort())),
-    balanceEnabled: z.boolean().default(false),
-    balanceCommand: z.string().max(64).default("/balance"),
     spawnerType: z.enum(["", ...SPAWNER_TYPE_IDS] as [string, ...string[]]).default(""),
     spawnerActions: spawnerActions.default({}).transform((v) => JSON.stringify(v)),
     spawnerClearEnabled: z.boolean().default(false),
@@ -122,8 +120,6 @@ export const updateAccountSchema = z.object({
     .max(48)
     .optional()
     .transform((times) => (times ? JSON.stringify(Array.from(new Set(times)).sort()) : undefined)),
-  balanceEnabled: z.boolean().optional(),
-  balanceCommand: z.string().max(64).optional(),
   spawnerType: z.enum(["", ...SPAWNER_TYPE_IDS] as [string, ...string[]]).optional(),
   spawnerActions: spawnerActions.optional().transform((v) => (v ? JSON.stringify(v) : undefined)),
   spawnerClearEnabled: z.boolean().optional(),
@@ -134,18 +130,24 @@ export const updateAccountSchema = z.object({
 
 /**
  * Settings only an ADMIN may change. Normal users get a reduced feature set —
- * no balance polling or auto-TPA —
+ * no auto home or auto-TPA —
  * so these keys are stripped from a non-admin update before it reaches the DB.
  * Hiding them in the UI alone would not be a real authorization boundary.
  *
- * Crouch, auto home, auto-sell and the spawner settings stay available to every
+ * Crouch, auto-sell and the spawner settings stay available to every
  * user, since those drive features they can still trigger themselves.
  */
 export const ADMIN_ONLY_ACCOUNT_FIELDS = [
   "tpAutoEnabled",
   "tpAutoAllowlist",
-  "balanceEnabled",
-  "balanceCommand",
+  "autoCommandEnabled",
+  "autoCommandText",
+  "autoCommandIntervalMinutes",
+  "autoCommandSpanEnabled",
+  "autoCommandSpanMinSeconds",
+  "autoCommandSpanMaxSeconds",
+  "dailyCommandEnabled",
+  "dailyCommandTimes",
 ] as const;
 
 /** Removes admin-only keys from an update payload made by a non-admin user. */

@@ -5,7 +5,7 @@ FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN --mount=type=cache,id=afk-frontend-npm,target=/root/.npm,sharing=locked npm ci
 
 COPY . .
 RUN npm run build
