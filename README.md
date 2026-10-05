@@ -187,14 +187,14 @@ additional users access afterwards in the account's **Settings** panel):
   disk (`data/bot-cache/<account>/`) so subsequent starts are silent. No
   password is ever entered or stored.
 - Continuous crouching and auto-reconnect
-- Auto-sell: one cycle per interval — send the sell command, wait for the
-  server's menu, move inventory stacks with paced shift-clicks, wait for the
-  server to confirm an inventory decrease, then close the menu. Server-side
-  auto-closing is accepted as success when the inventory actually changed.
-  Due cycles are not skipped based on a transient local "empty" snapshot; the
-  configured interval therefore remains exact even while items arrive quickly.
-  A genuinely empty sell menu is treated as a harmless no-op. Failed cycles
-  keep retrying with a capped backoff, and inventory changes clear stale state.
+- Auto-sell: send the sell command, wait up to five seconds for the menu and
+  its inventory data, shift occupied player slots, and close on the following
+  tick. Ready menus proceed immediately, even if a tick was delayed. Full
+  content packets distinguish genuinely empty menus from unloaded shells and
+  keep the inventory revision used by clicks synchronized. Initially empty
+  inventories get the same loading window, so a slow response is not discarded.
+  Missing/partial menus time out and retry; diagnostics distinguish a missing
+  menu from missing inventory data. Teleports/world changes cancel stale cycles.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once
