@@ -266,7 +266,7 @@ model ConsoleLog {
 
   minecraftAccount MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
 
-  @@index([minecraftAccountId, createdAt])
+  @@index([minecraftAccountId, createdAt, id])
 }
 
 // targetType/targetId form a generic polymorphic reference (e.g. "MinecraftAccount"/"<id>" or

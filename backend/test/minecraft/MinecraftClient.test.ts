@@ -250,6 +250,38 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(JSON.parse(written.trim())).toEqual({ type: "chat", text: "/gamemode creative" });
   });
 
+  it("reports failed command pipes and does not log an unsent user command", async () => {
+    const client = makeClient();
+    const events: { type: string }[] = [];
+    client.on("console", (event) => events.push(event));
+    client.connect();
+    lastChild().send({ type: "spawn" });
+    await tick();
+    lastChild().stdin.write.mockClear();
+    lastChild().stdin.destroyed = true;
+    expect(client.sendCommand("/home")).toBe(false);
+    expect(lastChild().stdin.write).not.toHaveBeenCalled();
+    lastChild().stdin.destroyed = false;
+    lastChild().stdin.write.mockImplementation(() => { throw new Error("broken pipe"); });
+    expect(client.sendCommand("/tpahere Steve")).toBe(false);
+    expect(events.some((event) => event.type === "USER_COMMAND")).toBe(false);
+  });
+
+  it("accepts queued pipe backpressure and distinguishes background commands", async () => {
+    const client = makeClient();
+    client.connect();
+    lastChild().send({ type: "spawn" });
+    await tick();
+    lastChild().stdin.write.mockClear();
+    lastChild().stdin.write.mockReturnValue(false);
+    expect(client.sendCommand("/home")).toBe(true);
+    expect(client.sendBackgroundCommand("/worth dirt")).toBe(true);
+    expect(lastChild().stdin.write.mock.calls.map(([line]) => JSON.parse(line))).toEqual([
+      { type: "chat", text: "/home" },
+      { type: "background_chat", text: "/worth dirt" },
+    ]);
+  });
+
   it("emits a CHAT console event for player chat and SERVER_MESSAGE for system chat", async () => {
     const client = makeClient();
     const events: string[] = [];

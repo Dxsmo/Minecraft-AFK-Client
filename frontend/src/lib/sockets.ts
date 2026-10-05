@@ -85,11 +85,6 @@ export function useAccountConsole(accountId: string | undefined) {
     };
   }, [accountId]);
 
-  function sendCommand(command: string) {
-    socketRef.current?.readyState === WebSocket.OPEN &&
-      socketRef.current.send(JSON.stringify({ type: "command", command }));
-  }
-
   async function loadOlderLogs() {
     if (!accountId || !olderCursorRef.current || loadingOlderRef.current) return;
     const requestAccount = accountId;
@@ -119,7 +114,7 @@ export function useAccountConsole(accountId: string | undefined) {
   }
 
   return {
-    logs, status, connected, sendCommand, loadOlderLogs, loadingOlderLogs, historyError,
+    logs, status, connected, loadOlderLogs, loadingOlderLogs, historyError,
     hasOlderLogs: hasOlderLogs && logs.length < MAX_ACCOUNT_CONSOLE_LOGS,
   };
 }

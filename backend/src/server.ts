@@ -7,7 +7,7 @@ import { clientManager } from "./minecraft/ClientManager.js";
 import { itemWorthScanner } from "./minecraft/ItemWorthScanner.js";
 import { sniperManager } from "./namesniper/SniperManager.js";
 import { disconnectDatabase } from "./database/prisma.js";
-import { purgeStoredPasswords } from "./accounts/service.js";
+import { pruneOldEarnings, purgeStoredPasswords } from "./accounts/service.js";
 import { loadBannedIps } from "./security/ipBans.js";
 
 const SESSION_PRUNE_INTERVAL_MS = 60 * 60 * 1000; // hourly
@@ -21,6 +21,7 @@ async function main() {
   // Every backend restart requires everyone to log in again (explicit
   // product requirement), rather than resuming previously-valid sessions.
   await clearAllSessions();
+  await pruneOldEarnings();
   await clientManager.loadAll();
   await itemWorthScanner.init();
   await sniperManager.loadAll();
@@ -29,6 +30,7 @@ async function main() {
   const app = await buildApp();
 
   const pruneInterval = setInterval(() => {
+    pruneOldEarnings().catch((err) => logger.error({ err }, "Failed to prune old earnings"));
     pruneExpiredSessions().catch((err) => logger.error({ err }, "Failed to prune sessions"));
   }, SESSION_PRUNE_INTERVAL_MS);
 

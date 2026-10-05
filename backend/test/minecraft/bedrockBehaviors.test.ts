@@ -84,6 +84,42 @@ describe("Bedrock crouch after world transitions", () => {
     }
   });
 
+  it("quietly probes known empty inventory and resumes when items arrive", () => {
+    const { sender, behavior } = setup();
+    behavior.updateConfig({ crouch_enabled: true, autosell_enabled: true, autosell_interval_seconds: 0.25 });
+    behavior.setPlayerInventory([], []);
+    behavior.markSpawned();
+    for (let i = 0; i < 119; i++) {
+      vi.advanceTimersByTime(250);
+      behavior.onTick();
+    }
+    expect(sender.command).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(250);
+    behavior.onTick();
+    expect(sender.command).toHaveBeenCalledExactlyOnceWith("/sell");
+    vi.advanceTimersByTime(250);
+    behavior.setPlayerInventory([{ id: "beef", count: 64 }], []);
+    behavior.onTick();
+    expect(sender.command).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives manual commands priority and bypasses automation guards in FIFO order", () => {
+    const { sender, behavior } = setup();
+    behavior.updateConfig({ crouch_enabled: true, autosell_enabled: true, autosell_interval_seconds: 0.25 });
+    behavior.enqueueBackgroundChat("/background");
+    for (const text of ["/tpahere Steve", "/home", "/homes"]) behavior.enqueueChat(text);
+    behavior.onTick();
+    expect(sender.send).not.toHaveBeenCalled();
+    behavior.markSpawned();
+    for (let i = 0; i < 3; i++) behavior.onTick();
+    expect(sender.send.mock.calls).toEqual([["/tpahere Steve"], ["/home"], ["/homes"]]);
+    expect(sender.command).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(800);
+    behavior.onTick();
+    expect(sender.send).toHaveBeenLastCalledWith("/background");
+    expect(sender.setSneak).toHaveBeenCalledWith(true);
+  });
+
   it("never accepts teleport requests automatically, even with legacy settings", () => {
     const { sender, behavior } = setup();
     behavior.updateConfig({ crouch_enabled: true, tpauto_enabled: true } as any);

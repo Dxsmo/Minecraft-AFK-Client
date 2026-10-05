@@ -1,0 +1,65 @@
+{
+  "browser": "154.0.8037.98",
+  "scenarios": [
+    {
+      "count": 2000,
+      "historyMs": 497.9,
+      "live": [
+        {
+          "commitMs": 45.5,
+          "repeatedDateFormats": 2001
+        },
+        {
+          "commitMs": 51.099999994039536,
+          "repeatedDateFormats": 2002
+        },
+        {
+          "commitMs": 52.19999998807907,
+          "repeatedDateFormats": 2003
+        },
+        {
+          "commitMs": 47,
+          "repeatedDateFormats": 2004
+        },
+        {
+          "commitMs": 46,
+          "repeatedDateFormats": 2005
+        }
+      ],
+      "httpCommands": [],
+      "draftAfterSend": "",
+      "draftAfterFailure": "",
+      "errors": []
+    },
+    {
+      "count": 20000,
+      "historyMs": 2034.2,
+      "live": [
+        {
+          "commitMs": 449.19999998807907,
+          "repeatedDateFormats": 20000
+        },
+        {
+          "commitMs": 508.90000000596046,
+          "repeatedDateFormats": 20000
+        },
+        {
+          "commitMs": 514.5999999940395,
+          "repeatedDateFormats": 20000
+        },
+        {
+          "commitMs": 481.7000000178814,
+          "repeatedDateFormats": 20000
+        },
+        {
+          "commitMs": 486.30000001192093,
+          "repeatedDateFormats": 20000
+        }
+      ],
+      "httpCommands": [],
+      "draftAfterSend": "",
+      "draftAfterFailure": "",
+      "errors": []
+    }
+  ]
+}

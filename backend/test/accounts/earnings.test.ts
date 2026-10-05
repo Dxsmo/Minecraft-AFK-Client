@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../../src/database/prisma.js";
-import { getEarningsSummary } from "../../src/accounts/service.js";
+import { getEarningsSummary, pruneOldEarnings } from "../../src/accounts/service.js";
 
 describe("rolling sell revenue", () => {
   beforeEach(async () => {
@@ -25,9 +25,19 @@ describe("rolling sell revenue", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     try {
       expect(await getEarningsSummary(account.id)).toEqual({ last5m: 1571.3, last1h: 1771.3, last24h: 2071.3 });
+      // GET is read-only: cleanup runs on its own schedule.
+      expect(await prisma.sellEarning.count({ where: { minecraftAccountId: account.id } })).toBe(7);
+      await pruneOldEarnings();
       expect(await prisma.sellEarning.count({ where: { minecraftAccountId: account.id } })).toBe(6);
     } finally {
       vi.restoreAllMocks();
     }
   });
+  it("returns zero for an empty account and excludes future sales", async () => {
+    const account = await prisma.minecraftAccount.create({ data: { name: "Empty", serverHost: "localhost" } });
+    expect(await getEarningsSummary(account.id)).toEqual({ last5m: 0, last1h: 0, last24h: 0 });
+    await prisma.sellEarning.create({ data: { minecraftAccountId: account.id, amount: 999, createdAt: new Date(Date.now() + 60_000) } });
+    expect(await getEarningsSummary(account.id)).toEqual({ last5m: 0, last1h: 0, last24h: 0 });
+  });
+
 });

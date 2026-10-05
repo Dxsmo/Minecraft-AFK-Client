@@ -170,8 +170,10 @@ export class MinecraftClient extends EventEmitter {
       this.emitConsole("ERROR", "Bot is not online, cannot send command");
       return false;
     }
-    this.sendToBot({ type: "chat", text: command });
-    return true;
+    const sent = this.sendToBot({ type: "chat", text: command });
+    if (sent) this.emitConsole("USER_COMMAND", command);
+    else this.emitConsole("ERROR", "Command konnte nicht an den Bot übermittelt werden");
+    return sent;
   }
 
   sendChat(message: string): void {
@@ -186,8 +188,7 @@ export class MinecraftClient extends EventEmitter {
    */
   sendBackgroundCommand(command: string): boolean {
     if (this.status !== "ONLINE" || !this.subprocess) return false;
-    this.sendToBot({ type: "chat", text: command });
-    return true;
+    return this.sendToBot({ type: "background_chat", text: command });
   }
 
   /**
@@ -543,11 +544,17 @@ export class MinecraftClient extends EventEmitter {
     }, 500);
   }
 
-  private sendToBot(payload: Record<string, unknown>): void {
+  private sendToBot(payload: Record<string, unknown>): boolean {
+    const input = this.subprocess?.stdin;
+    if (!input || input.destroyed || input.writableEnded) return false;
     try {
-      this.subprocess?.stdin?.write(JSON.stringify(payload) + "\n");
+      // false from write() means backpressure, not rejection: Node still queues
+      // those bytes. Only an unavailable pipe or an exception is a failure.
+      input.write(JSON.stringify(payload) + "\n");
+      return true;
     } catch (err) {
       this.log.debug({ err }, "Failed to write to bot stdin");
+      return false;
     }
   }
 

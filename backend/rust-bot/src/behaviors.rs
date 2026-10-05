@@ -24,6 +24,8 @@ use azalea_inventory::ItemStack;
 use crate::emit;
 use crate::protocol::{BehaviorConfig, Config, InventorySlot, OutEvent};
 
+/// Quietly recheck stale empty inventory snapshots without menu spam.
+const AUTOSELL_EMPTY_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 /// Allow slow servers/proxies to finish opening and synchronizing the menu.
 /// Healthy cycles still proceed immediately; this only bounds missing replies.
 const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_secs(5);
@@ -186,6 +188,8 @@ pub struct BehaviorState {
     /// Earliest time a new auto-sell cycle may start. The timestamp is advanced
     /// when a command is sent, so a slow cycle never overlaps the next one.
     next_autosell_at: Instant,
+    next_empty_probe_at: Instant,
+    manual_chat_queue: VecDeque<String>,
     autosell_phase: AutoSellPhase,
     last_autosell_failure_log: Option<Instant>,
     /// Automation is disabled before the first Spawn and during Login/Respawn
@@ -233,6 +237,8 @@ impl BehaviorState {
                 spawner_sell_items: config.spawner_sell_items.clone(),
             },
             next_autosell_at: now,
+            next_empty_probe_at: now + AUTOSELL_EMPTY_PROBE_INTERVAL,
+            manual_chat_queue: VecDeque::new(),
             autosell_phase: AutoSellPhase::Idle,
             last_autosell_failure_log: None,
             spawned: false,
@@ -261,22 +267,41 @@ impl BehaviorState {
         }
     }
 
-    /// Queue a user chat command through the same serialization
-    /// point as auto-sell. Teleport commands are urgent: they cancel an open
-    /// sell GUI first, then run before ordinary queued work.
-    pub fn enqueue_chat(&mut self, bot: &Client, text: String) {
-        let text = text.trim().to_string();
-        if text.is_empty() {
-            return;
+    /// Manual console commands have their own FIFO and can interrupt inventory
+    /// automation on the next tick; menu timeouts must never hold them hostage.
+    pub fn enqueue_chat(&mut self, _bot: &Client, text: String) {
+        let text = text.trim();
+        if !text.is_empty() {
+            self.manual_chat_queue.push_back(text.to_string());
         }
-        let teleporting = is_teleport_command(&text);
-        let task = ForegroundTask::Chat { text, teleporting };
-        if teleporting {
-            self.interrupt_for_transition(bot);
-            self.task_queue.push_front(task);
-        } else {
-            self.task_queue.push_back(task);
+    }
+
+    /// Background scans retain the serialized foreground queue and yield to
+    /// manual commands. They must not repeatedly cancel a sell/spawner cycle.
+    pub fn enqueue_background_chat(&mut self, text: String) {
+        let text = text.trim();
+        if !text.is_empty() {
+            self.task_queue.push_back(ForegroundTask::Chat {
+                text: text.to_string(),
+                teleporting: is_teleport_command(text),
+            });
         }
+    }
+
+    fn tick_manual_chat(&mut self, bot: &Client, now: Instant) -> bool {
+        if !self.spawned {
+            return false;
+        }
+        let Some(text) = self.manual_chat_queue.pop_front() else {
+            return false;
+        };
+        self.interrupt_for_transition(bot);
+        bot.chat(text.clone());
+        self.guard_after_chat(now, is_teleport_command(&text));
+        emit(&OutEvent::BehaviorLog {
+            message: format!("Command sent: {text}"),
+        });
+        true
     }
 
     /// Enqueue a clean-spawner run as a foreground one-shot task. Coalesces with
@@ -430,14 +455,16 @@ impl BehaviorState {
             }
         }
 
+        let manual_ran = self.tick_manual_chat(bot, now);
+
         if self.command_menu_close_at.is_some_and(|at| now >= at) {
             self.close_open_menu(bot);
             self.command_menu_close_at = None;
         }
 
         // Before Spawn, and for a short stabilization period after a spawn or
-        // teleport, only passive reporting may run. In particular no /sell or
-        // queued chat command may touch the inventory-loading phase.
+        // teleport, automatic actions wait for inventory loading. Explicit
+        // manual commands above remain responsive once the client has spawned.
         let automation_ready = self.spawned && now >= self.automation_ready_at;
 
         // A late sell-menu response used to leave auto-sell in `Idle` with a
@@ -446,9 +473,9 @@ impl BehaviorState {
         // the inventory state. Recover that orphan before dispatching either
         // kind of work. Command-owned and active spawner menus are excluded.
         let recovered_orphan_menu =
-            automation_ready && self.recover_orphaned_autosell_menu(bot, now);
+            automation_ready && !manual_ran && self.recover_orphaned_autosell_menu(bot, now);
 
-        if automation_ready && !recovered_orphan_menu {
+        if automation_ready && !manual_ran && !recovered_orphan_menu {
             let foreground_ran = self.tick_foreground(bot, now);
             if !foreground_ran {
                 self.tick_autosell(bot, now);
@@ -844,8 +871,8 @@ impl BehaviorState {
                     return;
                 }
 
-                // Never gate a due sell cycle on a local "empty" snapshot. It
-                // may be stale for a moment after close or while drops arrive.
+                // Fresh items wake a due cycle immediately. Quiet probes guard
+                // against a stale empty snapshot without hammering the server.
                 if now < self.next_autosell_at {
                     return;
                 }
@@ -861,13 +888,20 @@ impl BehaviorState {
                     }
                 }
 
+                let started_empty = player_item_count(bot) == 0;
+                if started_empty && now < self.next_empty_probe_at {
+                    return;
+                }
+                // A successful sale can empty the inventory too. Do not
+                // immediately reopen the menu once the last stack is gone.
+                self.next_empty_probe_at = now + AUTOSELL_EMPTY_PROBE_INTERVAL;
                 let command = self.config.autosell_command.trim();
                 let command = if command.is_empty() { "/sell" } else { command };
                 self.next_autosell_at = now + interval;
                 bot.chat(command.to_string());
                 self.autosell_phase = AutoSellPhase::WaitingForMenu {
                     since: now,
-                    started_empty: player_item_count(bot) == 0,
+                    started_empty,
                     content_received: None,
                 };
             }
@@ -933,7 +967,9 @@ impl BehaviorState {
                     } else {
                         self.next_autosell_at = self.next_autosell_at.max(retry_at);
                     }
-                    self.log_autosell_failure(now, &format!("{failure} (5s Timeout)"));
+                    if !started_empty || player_item_count(bot) > 0 {
+                        self.log_autosell_failure(now, &format!("{failure} (5s Timeout)"));
+                    }
                 }
             }
 
@@ -1386,7 +1422,70 @@ mod tests {
         state.config.autosell_enabled = true;
         state.config.autosell_interval_seconds = 0.25;
         state.spawned = true;
+        state.next_empty_probe_at = Instant::now();
         (client, state)
+    }
+
+    fn put_player_stack(client: &Client) {
+        *client
+            .ecs
+            .write()
+            .get_mut::<Inventory>(client.entity)
+            .unwrap()
+            .inventory_menu
+            .slot_mut(9)
+            .unwrap() = ItemStack::new(ItemKind::Beef, 64);
+    }
+
+    #[test]
+    fn empty_inventory_probes_are_quiet_and_new_items_resume_immediately() {
+        let (client, mut state) = sell_client();
+        let since = Instant::now();
+        tick_sell(&client, &mut state, since);
+        assert_eq!(take_commands(&client), vec!["/sell"]);
+        tick_sell(&client, &mut state, since + AUTOSELL_MENU_TIMEOUT);
+        assert!(state.last_autosell_failure_log.is_none());
+        for seconds in 6..30 {
+            tick_sell(&client, &mut state, since + Duration::from_secs(seconds));
+        }
+        assert!(take_commands(&client).is_empty());
+        tick_sell(&client, &mut state, since + Duration::from_secs(30));
+        assert_eq!(take_commands(&client), vec!["/sell"]);
+        tick_sell(&client, &mut state, since + Duration::from_secs(35));
+        assert!(state.last_autosell_failure_log.is_none());
+        put_player_stack(&client);
+        tick_sell(&client, &mut state, since + Duration::from_secs(36));
+        assert_eq!(take_commands(&client), vec!["/sell"]);
+        tick_sell(&client, &mut state, since + Duration::from_secs(42));
+        assert!(state.last_autosell_failure_log.is_some());
+    }
+
+    #[test]
+    fn manual_commands_interrupt_sell_and_bypass_guards_in_fifo_order() {
+        let (client, mut state) = sell_client();
+        state.enqueue_background_chat("/background".into());
+        for command in ["/tpahere Steve", "/home", "/homes"] {
+            state.enqueue_chat(&client, command.into());
+        }
+        state.spawned = false;
+        state.on_tick(&client);
+        assert!(take_commands(&client).is_empty());
+        state.spawned = true;
+        for command in ["/tpahere Steve", "/home", "/homes"] {
+            open_empty_sell_menu(&client);
+            state.autosell_phase = AutoSellPhase::WaitingForMenu {
+                since: Instant::now(),
+                started_empty: false,
+                content_received: None,
+            };
+            state.automation_ready_at = Instant::now() + Duration::from_secs(60);
+            state.on_tick(&client);
+            client.ecs.write().flush();
+            assert_eq!(take_commands(&client), vec![command]);
+            assert_eq!(client.get_inventory().unwrap().id(), 0);
+            assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
+        }
+        assert_eq!(state.task_queue.len(), 1);
     }
 
     fn open_empty_sell_menu(client: &Client) {
@@ -1494,6 +1593,9 @@ mod tests {
             assert_eq!(client.get_inventory().unwrap().id(), 0);
             assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
             tick_sell(&client, &mut state, since + Duration::from_millis(2200));
+            assert!(take_commands(&client).is_empty());
+            put_player_stack(&client);
+            tick_sell(&client, &mut state, since + Duration::from_millis(2250));
             assert_eq!(take_commands(&client), vec!["/sell"]);
         }
     }
@@ -1573,9 +1675,9 @@ mod tests {
         receive_content(&client, &mut state, 7, vec![ItemStack::Empty; 63]);
         tick_sell(&client, &mut state, since + Duration::from_millis(100));
         tick_sell(&client, &mut state, since + Duration::from_millis(150));
-        tick_sell(&client, &mut state, since + Duration::from_millis(300));
+        tick_sell(&client, &mut state, since + Duration::from_millis(30300));
         open_empty_sell_menu(&client);
-        tick_sell(&client, &mut state, since + Duration::from_millis(400));
+        tick_sell(&client, &mut state, since + Duration::from_millis(30400));
         assert!(matches!(
             state.autosell_phase,
             AutoSellPhase::WaitingForMenu {
@@ -1665,6 +1767,7 @@ mod tests {
             state.on_position_sync(&client);
             client.ecs.write().flush();
             assert_eq!(client.get_inventory().unwrap().id(), 0);
+            put_player_stack(&client);
             state.automation_ready_at = Instant::now();
             state.next_autosell_at = Instant::now();
             state.on_tick(&client);
@@ -1690,6 +1793,7 @@ mod tests {
             state.transition_recovery_at = Some(Instant::now() - Duration::from_secs(300));
             state.on_position_sync(&client);
             client.ecs.write().flush();
+            put_player_stack(&client);
             state.automation_ready_at = Instant::now();
             state.next_autosell_at = Instant::now();
             state.on_tick(&client);

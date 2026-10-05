@@ -46,6 +46,7 @@ export interface BehaviorConfig {
 /** Commands received on stdin (one JSON object per line), tagged by `type`. */
 export type Command =
   | { type: "chat"; text: string }
+  | { type: "background_chat"; text: string }
   | ({ type: "configure" } & BehaviorConfig)
   | { type: "clean_spawner" }
   | { type: "request_inventory" }

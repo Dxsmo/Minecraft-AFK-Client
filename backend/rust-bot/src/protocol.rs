@@ -85,6 +85,8 @@ pub enum Command {
     /// Send a raw chat message or slash command (Node.js normalizes the `/`
     /// prefix before sending here).
     Chat { text: String },
+    /// Low-priority background scan command.
+    BackgroundChat { text: String },
     /// Update account automation settings live.
     Configure(BehaviorConfig),
     /// Clean a nearby spawner as a foreground one-shot task: right-click a

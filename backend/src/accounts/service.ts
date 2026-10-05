@@ -199,33 +199,23 @@ export async function getFullAccount(id: string) {
   return prisma.minecraftAccount.findUnique({ where: { id } });
 }
 
-/**
- * Rolling confirmed sell earnings for an account over the last 5 minutes, hour and
- * 24 hours. Prunes rows older than 24h first so the table can't grow unbounded.
- */
+/** Remove expired earnings independently of whether an account page is open. */
+export async function pruneOldEarnings(now = Date.now()) {
+  return prisma.sellEarning.deleteMany({ where: { createdAt: { lt: new Date(now - 24 * 60 * 60_000) } } });
+}
+
+/** Aggregate in SQLite: return three numbers rather than every sale in 24h. */
 export async function getEarningsSummary(id: string) {
   const now = Date.now();
-  const cutoff24h = new Date(now - 24 * 60 * 60_000);
-  await prisma.sellEarning.deleteMany({
-    where: { minecraftAccountId: id, createdAt: { lt: cutoff24h } },
-  });
-
-  const rows = await prisma.sellEarning.findMany({
-    where: { minecraftAccountId: id, createdAt: { gte: cutoff24h, lte: new Date(now) } },
-    select: { amount: true, createdAt: true },
-  });
-
-  const since5m = now - 5 * 60_000;
-  const since1h = now - 60 * 60_000;
-  let last5m = 0;
-  let last1h = 0;
-  let last24h = 0;
-  for (const row of rows) {
-    const t = row.createdAt.getTime();
-    const cents = Math.round(row.amount * 100);
-    last24h += cents;
-    if (t >= since1h) last1h += cents;
-    if (t >= since5m) last5m += cents;
-  }
-  return { last5m: last5m / 100, last1h: last1h / 100, last24h: last24h / 100 };
+  const rows = await prisma.$queryRaw<Array<{ last5m: number | bigint; last1h: number | bigint; last24h: number | bigint }>>`
+    SELECT
+      COALESCE(SUM(CASE WHEN "createdAt" >= ${new Date(now - 5 * 60_000)} THEN ROUND("amount" * 100) ELSE 0 END), 0) AS "last5m",
+      COALESCE(SUM(CASE WHEN "createdAt" >= ${new Date(now - 60 * 60_000)} THEN ROUND("amount" * 100) ELSE 0 END), 0) AS "last1h",
+      COALESCE(SUM(ROUND("amount" * 100)), 0) AS "last24h"
+    FROM "SellEarning"
+    WHERE "minecraftAccountId" = ${id}
+      AND "createdAt" >= ${new Date(now - 24 * 60 * 60_000)} AND "createdAt" <= ${new Date(now)}
+  `;
+  const totals = rows[0];
+  return { last5m: Number(totals.last5m) / 100, last1h: Number(totals.last1h) / 100, last24h: Number(totals.last24h) / 100 };
 }

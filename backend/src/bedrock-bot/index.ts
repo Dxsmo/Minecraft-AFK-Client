@@ -249,6 +249,9 @@ function handleCommand(
     case "chat":
       behavior.enqueueChat(cmd.text);
       break;
+    case "background_chat":
+      behavior.enqueueBackgroundChat(cmd.text);
+      break;
     case "configure":
       behavior.updateConfig(cmd);
       break;

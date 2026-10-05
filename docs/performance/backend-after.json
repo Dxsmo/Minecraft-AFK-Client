@@ -1,0 +1,19 @@
+{
+  "fixture": {
+    "logs": 20000,
+    "sales": 100000
+  },
+  "earnings": {
+    "medianMs": 24.15,
+    "p95Ms": 25.46
+  },
+  "history2000": {
+    "medianMs": 5.44,
+    "p95Ms": 6.74
+  },
+  "logWriteAtCapacity": {
+    "medianMs": 2.37,
+    "p95Ms": 2.75
+  },
+  "retainedLogs": 20000
+}

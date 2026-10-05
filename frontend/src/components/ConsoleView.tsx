@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useRef } from "react";
 import type { ConsoleLogEntry } from "../lib/types";
 
 const TYPE_STYLES: Record<ConsoleLogEntry["type"], string> = {
@@ -19,11 +19,18 @@ const TYPE_LABEL: Record<ConsoleLogEntry["type"], string> = {
   WARNING: "WARN",
 };
 
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour12: false });
-}
+const timeFormatter = new Intl.DateTimeFormat(undefined, { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const ConsoleRow = memo(function ConsoleRow({ log }: { log: ConsoleLogEntry }) {
+  return (
+    <div className="flex gap-2 whitespace-pre-wrap break-words">
+      <span className="shrink-0 tabular-nums" style={{ color: "#52525b" }}>{timeFormatter.format(new Date(log.createdAt))}</span>
+      <span className="w-9 shrink-0 text-right text-[10px] font-semibold" style={{ color: TYPE_STYLES[log.type], opacity: 0.7 }}>{TYPE_LABEL[log.type]}</span>
+      <span style={{ color: TYPE_STYLES[log.type] }}>{log.message}</span>
+    </div>
+  );
+});
 
-export function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLogEntry[]; className?: string }) {
+export const ConsoleView = memo(function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLogEntry[]; className?: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Tracks whether the user is (roughly) scrolled to the bottom already, so we only
   // auto-follow new output when they haven't scrolled up to read history.
@@ -67,17 +74,7 @@ export function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLo
       {logs.length === 0 && (
         <p style={{ color: "#52525b" }}>No console output yet. Start the client to see live output.</p>
       )}
-      {logs.map((log) => (
-        <div key={log.id} className="flex gap-2 whitespace-pre-wrap break-words">
-          <span className="shrink-0 tabular-nums" style={{ color: "#52525b" }}>
-            {formatTime(log.createdAt)}
-          </span>
-          <span className="w-9 shrink-0 text-right text-[10px] font-semibold" style={{ color: TYPE_STYLES[log.type], opacity: 0.7 }}>
-            {TYPE_LABEL[log.type]}
-          </span>
-          <span style={{ color: TYPE_STYLES[log.type] }}>{log.message}</span>
-        </div>
-      ))}
+      {logs.map((log) => <ConsoleRow key={log.id} log={log} />)}
     </div>
   );
-}
+});

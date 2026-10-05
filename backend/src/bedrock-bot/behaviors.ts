@@ -18,6 +18,7 @@ const TELEPORT_STABILIZE_MS = 100;
 const TELEPORT_COMMAND_GUARD_MS = 750;
 const CHAT_COMMAND_GUARD_MS = 100;
 const INVENTORY_BUSY_DELAY_MS = 250;
+const EMPTY_INVENTORY_PROBE_MS = 30_000;
 
 type ForegroundTask =
   | { kind: "command"; text: string }
@@ -59,8 +60,11 @@ export class BehaviorState {
   private spawned = false;
   private lastHeartbeatAt = 0;
   private nextAutosellAt = Date.now();
+  private nextEmptyProbeAt = Date.now() + EMPTY_INVENTORY_PROBE_MS;
+  private inventoryKnown = false;
   private automationReadyAt = Number.POSITIVE_INFINITY;
 
+  private manualQueue: ForegroundTask[] = [];
   private queue: ForegroundTask[] = [];
 
   private sneaking = false;
@@ -122,9 +126,11 @@ export class BehaviorState {
   enqueueChat(text: string): void {
     const trimmed = text.trim();
     if (!trimmed) return;
-    const task: ForegroundTask = { kind: "command", text: trimmed };
-    if (isTeleportCommand(trimmed)) this.queue.unshift(task);
-    else this.queue.push(task);
+    this.manualQueue.push({ kind: "command", text: trimmed });
+  }
+  enqueueBackgroundChat(text: string): void {
+    const trimmed = text.trim();
+    if (trimmed) this.queue.push({ kind: "command", text: trimmed });
   }
   enqueueMoveItem(from: number, to: number): void {
     this.queue.push({ kind: "move", from, to });
@@ -147,14 +153,18 @@ export class BehaviorState {
       emit({ type: "heartbeat" });
     }
 
-    if (!this.spawned || now < this.automationReadyAt) return;
-
     // World switches/teleports may clear server input while our local value
     // remains true. Re-send start_sneak after the destination has settled.
-    if (this.cfg.crouch_enabled && (!this.sneaking || this.crouchResyncPending)) {
+    if (this.spawned && now >= this.automationReadyAt && this.cfg.crouch_enabled && (!this.sneaking || this.crouchResyncPending)) {
       this.applyCrouch(true);
       this.crouchResyncPending = false;
     }
+
+    if (this.spawned && this.manualQueue.length) {
+      this.runForeground(this.manualQueue.shift()!, now);
+      return;
+    }
+    if (!this.spawned || now < this.automationReadyAt) return;
 
     // Run at most one foreground task per tick.
     const task = this.queue.shift();
@@ -167,14 +177,14 @@ export class BehaviorState {
     if (this.cfg.autosell_enabled && !actionSentThisTick) {
       const interval = Math.max(0.25, this.cfg.autosell_interval_seconds ?? 60) * 1000;
       if (now >= this.nextAutosellAt) {
+        const empty = this.inventoryKnown && ![...this.inv.main, ...this.inv.hotbar].some((slot) => slot && slot.count > 0);
+        if (empty && now < this.nextEmptyProbeAt) return;
+        this.nextEmptyProbeAt = now + EMPTY_INVENTORY_PROBE_MS;
         this.nextAutosellAt = now + interval;
         const command = (this.cfg.autosell_command ?? "/sell").trim() || "/sell";
         this.sender.command(command);
-        actionSentThisTick = true;
-        emit({ type: "behavior_log", message: `Auto-sell: ran ${command}` });
       }
     }
-
   }
 
   private runForeground(task: ForegroundTask, now: number): void {
@@ -184,7 +194,7 @@ export class BehaviorState {
         this.postponeAutomation(
           now + (isTeleportCommand(task.text) ? TELEPORT_COMMAND_GUARD_MS : CHAT_COMMAND_GUARD_MS),
         );
-        emit({ type: "behavior_log", message: `Scheduled command dispatched: ${task.text}` });
+        emit({ type: "behavior_log", message: `Command dispatched: ${task.text}` });
         break;
       case "move":
         this.doMoveItem(task.from, task.to);
@@ -240,6 +250,7 @@ export class BehaviorState {
 
   /** Replace the player inventory storage/hotbar from an inventory_content packet. */
   setPlayerInventory(main: (InventorySlot | null)[], hotbar: (InventorySlot | null)[]): void {
+    this.inventoryKnown = true;
     this.inv.main = main;
     this.inv.hotbar = hotbar;
   }

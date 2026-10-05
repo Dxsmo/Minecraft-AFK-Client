@@ -17,17 +17,18 @@ export async function persistConsoleLog(
     data: { minecraftAccountId, type, message },
   });
 
-  const count = await prisma.consoleLog.count({ where: { minecraftAccountId } });
-  if (count > MAX_LOGS_PER_ACCOUNT) {
-    const excess = count - MAX_LOGS_PER_ACCOUNT;
-    const oldest = await prisma.consoleLog.findMany({
-      where: { minecraftAccountId },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      take: excess,
-      select: { id: true },
-    });
-    await prisma.consoleLog.deleteMany({ where: { id: { in: oldest.map((o) => o.id) } } });
-  }
+  // One indexed, atomic prune replaces count + select + delete. The row at
+  // offset 19,999 is the oldest one we keep; tuple ordering also handles ties.
+  await prisma.$executeRaw`
+    DELETE FROM "ConsoleLog"
+    WHERE "minecraftAccountId" = ${minecraftAccountId}
+      AND ("createdAt", "id") < (
+        SELECT "createdAt", "id" FROM "ConsoleLog"
+        WHERE "minecraftAccountId" = ${minecraftAccountId}
+        ORDER BY "createdAt" DESC, "id" DESC
+        LIMIT 1 OFFSET ${MAX_LOGS_PER_ACCOUNT - 1}
+      )
+  `;
 }
 
 export async function getConsoleLogs(minecraftAccountId: string, limit = CONSOLE_HISTORY_PAGE_SIZE, before?: string) {

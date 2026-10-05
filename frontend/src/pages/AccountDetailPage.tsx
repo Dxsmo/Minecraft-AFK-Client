@@ -17,8 +17,12 @@ export function AccountDetailPage() {
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [command, setCommand] = useState("");
+  const [sendingCommand, setSendingCommand] = useState(false);
+  const [commandError, setCommandError] = useState<string | null>(null);
+  const accountIdRef = useRef(id);
+  accountIdRef.current = id;
   const [tab, setTab] = useState<"console" | "inventory" | "settings">("console");
-  const { logs, status, sendCommand, loadOlderLogs, loadingOlderLogs, hasOlderLogs, historyError } = useAccountConsole(id);
+  const { logs, status, loadOlderLogs, loadingOlderLogs, hasOlderLogs, historyError } = useAccountConsole(id);
   const inputRef = useRef<HTMLInputElement>(null);
   const isAdmin = user?.role === "ADMIN";
   const isCreator = !!account && !!user && account.createdBy?.id === user.id;
@@ -34,6 +38,9 @@ export function AccountDetailPage() {
   }
 
   useEffect(() => {
+    setSendingCommand(false);
+    setCommandError(null);
+    setCommand("");
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -83,12 +90,26 @@ export function AccountDetailPage() {
     }
   }
 
-  function handleSendCommand(e: React.FormEvent) {
+  async function handleSendCommand(e: React.FormEvent) {
     e.preventDefault();
-    if (!command.trim()) return;
-    sendCommand(command.trim());
-    setCommand("");
-    inputRef.current?.focus();
+    const text = command.trim();
+    if (!id || !text || sendingCommand) return;
+    const requestAccount = id;
+    setSendingCommand(true);
+    setCommandError(null);
+    try {
+      await api.post(`/minecraft/accounts/${id}/command`, { command: text });
+      if (accountIdRef.current === requestAccount) {
+        setCommand((draft) => draft.trim() === text ? "" : draft);
+        inputRef.current?.focus();
+      }
+    } catch (err) {
+      if (accountIdRef.current === requestAccount) setCommandError(
+        err instanceof ApiError ? `Command konnte nicht gesendet werden: ${err.message}` : "Command konnte nicht gesendet werden. Bitte erneut versuchen.",
+      );
+    } finally {
+      if (accountIdRef.current === requestAccount) setSendingCommand(false);
+    }
   }
 
   if (!account) {
@@ -267,10 +288,11 @@ export function AccountDetailPage() {
               className="input font-mono"
               disabled={liveStatus !== "ONLINE"}
             />
-            <button type="submit" className="btn btn-primary" disabled={liveStatus !== "ONLINE"}>
-              Send
+            <button type="submit" className="btn btn-primary" disabled={liveStatus !== "ONLINE" || sendingCommand}>
+              {sendingCommand ? "Sending…" : "Send"}
             </button>
           </form>
+          {commandError && <p role="alert" className="alert-error">{commandError}</p>}
           {id && <EarningsBox accountId={id} />}
         </div>
       )}

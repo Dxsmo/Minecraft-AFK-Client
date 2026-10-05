@@ -127,7 +127,7 @@ export function Layout() {
         <div className="mt-auto px-1.5 pt-4">
           <span className="version-badge">
             <span className="version-dot" />
-            <span className="version-text">V1.8.7</span>
+            <span className="version-text">V1.6.1</span>
           </span>
         </div>
       </aside>
