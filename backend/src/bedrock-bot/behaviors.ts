@@ -2,8 +2,8 @@
 //! task-interrupt system, mirroring the Azalea bot's behavior model so the
 //! Node backend gets the same events regardless of edition.
 //!
-//! Continuous work (auto-sell and auto-command) yields to
-//! one-shot foreground tasks (daily command / inventory move):
+//! Continuous auto-sell yields to
+//! one-shot foreground tasks (manual command / inventory move):
 //! while a foreground task is running, auto-sell does not start, and it resumes
 //! on the next tick once the foreground task has completed. Foreground tasks run
 //! one at a time, so no two Minecraft actions race each other.
@@ -11,8 +11,6 @@
 import { emit, type BehaviorConfig, type Config, type InventorySlot, type OutEvent } from "./protocol.js";
 import { BotSender } from "./send.js";
 
-/** Ignore a duplicate /tpaccept for the same player within this window. */
-const TPACCEPT_DEDUP_MS = 5000;
 /** Emit a heartbeat at most this often. */
 const HEARTBEAT_INTERVAL_MS = 15000;
 const SPAWN_STABILIZE_MS = 250;
@@ -39,7 +37,7 @@ function isTeleportCommand(text: string): boolean {
   const command = text.trim().match(/^\/([^\s]+)/)?.[1]?.toLowerCase();
   return !!command && [
     "home", "spawn", "warp", "server", "hub", "lobby", "back", "rtp", "wild",
-    "tpaccept", "tpyes", "is", "island", "skyblock",
+    "tp", "tpa", "tpahere", "tphere", "tpaccept", "tpyes", "is", "island", "skyblock",
   ].includes(command);
 }
 
@@ -60,13 +58,10 @@ export class BehaviorState {
 
   private spawned = false;
   private lastHeartbeatAt = 0;
-  private lastAutoCommandAt = Date.now();
-  private nextRandomAutoCommandAt: number | null = null;
   private nextAutosellAt = Date.now();
   private automationReadyAt = Number.POSITIVE_INFINITY;
 
   private queue: ForegroundTask[] = [];
-  private lastTpAccept: { name: string; at: number } | null = null;
 
   private sneaking = false;
   private crouchResyncPending = false;
@@ -78,14 +73,6 @@ export class BehaviorState {
     this.sender = sender;
     this.cfg = {
       crouch_enabled: config.crouch_enabled ?? false,
-      auto_command_enabled: config.auto_command_enabled,
-      auto_command_text: config.auto_command_text,
-      auto_command_interval_minutes: config.auto_command_interval_minutes,
-      auto_command_span_enabled: config.auto_command_span_enabled ?? false,
-      auto_command_span_min_seconds: config.auto_command_span_min_seconds ?? 600,
-      auto_command_span_max_seconds: config.auto_command_span_max_seconds ?? 1800,
-      tpauto_enabled: config.tpauto_enabled ?? false,
-      tpauto_allowlist: config.tpauto_allowlist ?? [],
       autosell_enabled: config.autosell_enabled ?? false,
       autosell_interval_seconds: config.autosell_interval_seconds ?? 60,
       autosell_command: config.autosell_command ?? "/sell",
@@ -98,8 +85,7 @@ export class BehaviorState {
       this.cfg.autosell_enabled !== cfg.autosell_enabled ||
       this.cfg.autosell_interval_seconds !== cfg.autosell_interval_seconds ||
       this.cfg.autosell_command !== cfg.autosell_command;
-    this.cfg = { ...cfg, tpauto_allowlist: cfg.tpauto_allowlist ?? [] };
-    this.nextRandomAutoCommandAt = null;
+    this.cfg = { ...cfg };
     if (autosellChanged && this.cfg.autosell_enabled) {
       this.nextAutosellAt = Math.max(Date.now(), this.automationReadyAt);
     }
@@ -124,7 +110,7 @@ export class BehaviorState {
   }
 
   markTeleported(): void {
-    if (!this.spawned) return;
+    this.spawned = true;
     this.inv.containerOpen = false;
     this.automationReadyAt = Date.now() + TELEPORT_STABILIZE_MS;
     this.nextAutosellAt = this.automationReadyAt;
@@ -133,9 +119,6 @@ export class BehaviorState {
 
   // --- Foreground task enqueue (called from stdin command handling) ---
 
-  enqueueTask(text: string): void {
-    this.queue.push({ kind: "command", text });
-  }
   enqueueChat(text: string): void {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -192,41 +175,6 @@ export class BehaviorState {
       }
     }
 
-    // Auto-command at its own interval. The
-    // "Zeitspanne" (random-range) toggle is independent of the fixed-interval
-    // toggle, so it must run even if the "Interval" toggle itself is off.
-    if (
-      !actionSentThisTick
-      && (this.cfg.auto_command_enabled || this.cfg.auto_command_span_enabled)
-      && this.cfg.auto_command_text.trim()
-    ) {
-      if (this.cfg.auto_command_span_enabled) {
-        if (this.nextRandomAutoCommandAt == null) {
-          this.nextRandomAutoCommandAt = now + this.randomAutoCommandDelayMs();
-        }
-        if (now >= this.nextRandomAutoCommandAt) {
-          const text = this.cfg.auto_command_text.trim();
-          this.sender.send(text);
-          this.postponeAutomation(
-            now + (isTeleportCommand(text) ? TELEPORT_COMMAND_GUARD_MS : CHAT_COMMAND_GUARD_MS),
-          );
-          this.nextRandomAutoCommandAt = now + this.randomAutoCommandDelayMs();
-          emit({ type: "behavior_log", message: "Auto-command sent (random range)" });
-        }
-      } else {
-        const interval = Math.max(1, this.cfg.auto_command_interval_minutes) * 60_000;
-        if (now - this.lastAutoCommandAt >= interval) {
-          this.lastAutoCommandAt = now;
-          const text = this.cfg.auto_command_text.trim();
-          this.sender.send(text);
-          this.postponeAutomation(
-            now + (isTeleportCommand(text) ? TELEPORT_COMMAND_GUARD_MS : CHAT_COMMAND_GUARD_MS),
-          );
-          emit({ type: "behavior_log", message: "Auto-command sent" });
-        }
-      }
-    }
-
   }
 
   private runForeground(task: ForegroundTask, now: number): void {
@@ -257,7 +205,7 @@ export class BehaviorState {
     }
   }
 
-  // --- Inbound chat, parsed for tpa ---
+  // --- Inbound inventory lifecycle messages ---
 
   onChat(sender: string | null, message: string): void {
     const now = Date.now();
@@ -267,30 +215,11 @@ export class BehaviorState {
       return;
     }
 
-    // Auto-accept /tpa requests.
-    if (this.cfg.tpauto_enabled && /request(?:ed)?\b.*teleport|teleport.*to you|wants to teleport/i.test(message)) {
-      // Ignore /tpahere ("teleport to them") requests.
-      if (/tpahere|teleport to (?:them|their)/i.test(message)) return;
-      const requester = this.extractTpaRequester(message) ?? sender ?? "";
-      const allow = this.cfg.tpauto_allowlist ?? [];
-      if (allow.length > 0 && !allow.some((n) => n.toLowerCase() === requester.toLowerCase())) return;
-      if (this.lastTpAccept && this.lastTpAccept.name === requester && now - this.lastTpAccept.at < TPACCEPT_DEDUP_MS) {
-        return;
-      }
-      this.lastTpAccept = { name: requester, at: now };
-      this.enqueueChat("/tpaccept");
-      emit({ type: "behavior_log", message: `Queued /tpaccept${requester ? ` from ${requester}` : ""}` });
-    }
   }
 
   private postponeAutomation(until: number): void {
     this.automationReadyAt = Math.max(this.automationReadyAt, until);
     this.nextAutosellAt = Math.max(this.nextAutosellAt, until);
-  }
-
-  private extractTpaRequester(message: string): string | null {
-    const m = message.match(/([A-Za-z0-9_]{2,16})\s+(?:has|wants|would|is)/);
-    return m ? m[1] : null;
   }
 
   // --- Health / food ---
@@ -336,13 +265,6 @@ export class BehaviorState {
   private applyCrouch(on: boolean): void {
     this.sneaking = on;
     this.sender.setSneak(on);
-  }
-
-  private randomAutoCommandDelayMs(): number {
-    const minS = Math.max(1, Math.min(this.cfg.auto_command_span_min_seconds ?? 600, this.cfg.auto_command_span_max_seconds ?? 1800));
-    const maxS = Math.max(1, Math.max(this.cfg.auto_command_span_min_seconds ?? 600, this.cfg.auto_command_span_max_seconds ?? 1800));
-    const sec = minS === maxS ? minS : Math.floor(Math.random() * (maxS - minS + 1)) + minS;
-    return sec * 1000;
   }
 
   // ItemStackRequest-based moves are best-effort and unverified on Bedrock.

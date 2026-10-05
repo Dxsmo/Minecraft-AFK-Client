@@ -1,19 +1,6 @@
 import { z } from "zod";
 import { SPAWNER_TYPE_IDS } from "../minecraft/spawners.js";
 
-/**
- * "Auto home" only ever runs a `/home <name>` command: the `/home ` prefix is
- * fixed and the user only supplies the home name. Validated here so a crafted
- * request can never turn the scheduler into an arbitrary command runner.
- */
-const autoHomeText = z
-  .string()
-  .trim()
-  .max(64)
-  .refine((v) => v === "" || /^\/home [A-Za-z0-9_.-]{1,32}$/.test(v), {
-    message: 'Auto home must be "/home <name>"',
-  });
-
 /** Per-item spawner handling: what to do with each item type the spawner makes. */
 const spawnerActions = z
   .record(z.string().max(64), z.enum(["keep", "drop", "sell"]))
@@ -54,27 +41,9 @@ export const createAccountSchema = z
     crouchEnabled: z.boolean().default(false),
     autoReconnect: z.boolean().default(true),
     notes: z.string().max(50).default(""),
-    autoCommandEnabled: z.boolean().default(false),
-    autoCommandText: autoHomeText.default(""),
-    autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).default(5),
-    autoCommandSpanEnabled: z.boolean().default(false),
-    autoCommandSpanMinSeconds: z.coerce.number().int().min(60).max(86_400).default(600),
-    autoCommandSpanMaxSeconds: z.coerce.number().int().min(60).max(86_400).default(1800),
-    tpAutoEnabled: z.boolean().default(false),
-    tpAutoAllowlist: z
-      .array(z.string().trim().min(1).max(16))
-      .max(50)
-      .default([])
-      .transform((names) => JSON.stringify(Array.from(new Set(names)))),
     autoSellEnabled: z.boolean().default(false),
     autoSellIntervalSeconds: z.coerce.number().min(0.25).max(3600).default(60),
     autoSellCommand: z.string().max(64).default("/sell"),
-    dailyCommandEnabled: z.boolean().default(false),
-    dailyCommandTimes: z
-      .array(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM"))
-      .max(48)
-      .default([])
-      .transform((times) => JSON.stringify(Array.from(new Set(times)).sort())),
     spawnerType: z.enum(["", ...SPAWNER_TYPE_IDS] as [string, ...string[]]).default(""),
     spawnerActions: spawnerActions.default({}).transform((v) => JSON.stringify(v)),
     spawnerClearEnabled: z.boolean().default(false),
@@ -99,27 +68,9 @@ export const updateAccountSchema = z.object({
   crouchEnabled: z.boolean().optional(),
   autoReconnect: z.boolean().optional(),
   notes: z.string().max(50).optional(),
-  autoCommandEnabled: z.boolean().optional(),
-  autoCommandText: autoHomeText.optional(),
-  autoCommandIntervalMinutes: z.coerce.number().int().min(1).max(1440).optional(),
-  autoCommandSpanEnabled: z.boolean().optional(),
-  autoCommandSpanMinSeconds: z.coerce.number().int().min(60).max(86_400).optional(),
-  autoCommandSpanMaxSeconds: z.coerce.number().int().min(60).max(86_400).optional(),
-  tpAutoEnabled: z.boolean().optional(),
-  tpAutoAllowlist: z
-    .array(z.string().trim().min(1).max(16))
-    .max(50)
-    .optional()
-    .transform((names) => (names ? JSON.stringify(Array.from(new Set(names))) : undefined)),
   autoSellEnabled: z.boolean().optional(),
   autoSellIntervalSeconds: z.coerce.number().min(0.25).max(3600).optional(),
   autoSellCommand: z.string().max(64).optional(),
-  dailyCommandEnabled: z.boolean().optional(),
-  dailyCommandTimes: z
-    .array(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM"))
-    .max(48)
-    .optional()
-    .transform((times) => (times ? JSON.stringify(Array.from(new Set(times)).sort()) : undefined)),
   spawnerType: z.enum(["", ...SPAWNER_TYPE_IDS] as [string, ...string[]]).optional(),
   spawnerActions: spawnerActions.optional().transform((v) => (v ? JSON.stringify(v) : undefined)),
   spawnerClearEnabled: z.boolean().optional(),
@@ -127,54 +78,6 @@ export const updateAccountSchema = z.object({
     .optional()
     .transform((times) => (times ? JSON.stringify(Array.from(new Set(times)).sort()) : undefined)),
 });
-
-/**
- * Settings only an ADMIN may change. Normal users get a reduced feature set —
- * no auto home or auto-TPA —
- * so these keys are stripped from a non-admin update before it reaches the DB.
- * Hiding them in the UI alone would not be a real authorization boundary.
- *
- * Crouch, auto-sell and the spawner settings stay available to every
- * user, since those drive features they can still trigger themselves.
- */
-export const ADMIN_ONLY_ACCOUNT_FIELDS = [
-  "tpAutoEnabled",
-  "tpAutoAllowlist",
-  "autoCommandEnabled",
-  "autoCommandText",
-  "autoCommandIntervalMinutes",
-  "autoCommandSpanEnabled",
-  "autoCommandSpanMinSeconds",
-  "autoCommandSpanMaxSeconds",
-  "dailyCommandEnabled",
-  "dailyCommandTimes",
-] as const;
-
-/** Removes admin-only keys from an update payload made by a non-admin user. */
-export function stripAdminOnlyFields(input: UpdateAccountInput): UpdateAccountInput {
-  const out: Record<string, unknown> = { ...input };
-  for (const key of ADMIN_ONLY_ACCOUNT_FIELDS) delete out[key];
-  return out as UpdateAccountInput;
-}
-
-/**
- * Resets admin-only keys to their schema defaults on a create payload made by a
- * non-admin. Creating an account is open to every user, so without this a normal
- * user could set admin-only settings once at creation and keep them forever —
- * the update path only strips them, it never resets them.
- */
-export function stripAdminOnlyCreateFields(input: CreateAccountInput): CreateAccountInput {
-  const defaults = createAccountSchema.parse({
-    name: input.name,
-    serverHost: input.serverHost,
-    credentialsSecret: input.credentialsSecret,
-  });
-  const out: Record<string, unknown> = { ...input };
-  for (const key of ADMIN_ONLY_ACCOUNT_FIELDS) {
-    out[key] = (defaults as Record<string, unknown>)[key];
-  }
-  return out as CreateAccountInput;
-}
 
 export const assignUsersSchema = z.object({
   userIds: z.array(z.string()),

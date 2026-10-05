@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { ConsoleLogEntry } from "../lib/types";
 
 const TYPE_STYLES: Record<ConsoleLogEntry["type"], string> = {
@@ -28,6 +28,18 @@ export function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLo
   // Tracks whether the user is (roughly) scrolled to the bottom already, so we only
   // auto-follow new output when they haven't scrolled up to read history.
   const stickToBottomRef = useRef(true);
+  const previousViewRef = useRef<{ firstId?: string; height: number; top: number }>({ height: 0, top: 0 });
+
+  // Preserve the reading position when an older page is inserted above it.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const previous = previousViewRef.current;
+    if (previous.firstId && logs[0]?.id !== previous.firstId && logs.some((log) => log.id === previous.firstId)) {
+      el.scrollTop = previous.top + el.scrollHeight - previous.height;
+    }
+    previousViewRef.current = { firstId: logs[0]?.id, height: el.scrollHeight, top: el.scrollTop };
+  }, [logs]);
 
   // Key the auto-follow on the newest entry's id, not the array length: the log
   // buffer is capped (ring buffer), so once it's full `length` stops changing
@@ -39,6 +51,7 @@ export function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLo
     if (!el || !stickToBottomRef.current) return;
     // Scroll only this container - never the page/ancestors (unlike scrollIntoView).
     el.scrollTop = el.scrollHeight;
+    previousViewRef.current.top = el.scrollTop;
   }, [lastLogId]);
 
   const handleScroll = () => {
@@ -46,6 +59,7 @@ export function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLo
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     stickToBottomRef.current = distanceFromBottom < 48;
+    previousViewRef.current.top = el.scrollTop;
   };
 
   return (

@@ -27,15 +27,15 @@ dashboard) is edition-agnostic.
   Java → the compiled `azalea-bot` binary; Bedrock → `node dist/bedrock-bot/index.js`.
   `ClientManager` sets `edition` in the runtime config.
 - **Bedrock bot** — `backend/src/bedrock-bot/` (protocol/send/behaviors/index)
-  mirrors the Rust bot: lifecycle, reconnect handoff, chat, health, admin-only auto home,
-  auto-sell (command-based), crouch, tpa auto-accept, centralized sell
+  mirrors the Rust bot: lifecycle, reconnect handoff, chat, health,
+  auto-sell (command-based), crouch, centralized sell
   chat parsing, and a best-effort inventory snapshot.
 
 ### What works vs. what is limited on Bedrock
 
 - **Works (same as Java):** connect/login (offline + Microsoft device-code),
-  chat/console, commands, admin-only auto home, interval auto-sell, crouch,
-  tpa auto-accept, health telemetry, sell chat parsing.
+  chat/console, commands, interval auto-sell, crouch,
+  health telemetry, sell chat parsing.
 - **Best-effort / unverified:** live inventory snapshot and drag-and-drop item
   moves (uses `ItemStackRequest`; item names fall back to `bedrock:<id>` because
   there is no bundled Bedrock item palette).

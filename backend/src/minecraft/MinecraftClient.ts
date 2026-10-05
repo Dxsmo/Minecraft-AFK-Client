@@ -35,7 +35,7 @@ const SUBPROCESS_ONLINE_SILENCE_MS = 45_000;
 /// How often the online-hang watchdog checks for subprocess silence.
 const ONLINE_WATCHDOG_INTERVAL_MS = 15_000;
 
-/// How often the daily-command / spawner schedulers wake up. A 30s cadence is
+/// How often the spawner scheduler wakes up. A 30s cadence is
 /// fine for minute-granular daily times (deduped per day) and keeps overhead
 /// negligible.
 const SCHEDULER_TICK_MS = 30_000;
@@ -51,10 +51,6 @@ const SCHEDULER_TICK_MS = 30_000;
 function stripMinecraftFormatting(text: string): string {
   return text.replace(/§[0-9a-u]/gi, "").replace(/§/g, "");
 }
-/// How often to re-query saved /homes while online, so the shortcut buttons
-/// stay in sync even if a home is added/removed outside the web console.
-const HOMES_POLL_INTERVAL_MS = 5 * 60_000;
-
 /**
  * Wraps the Azalea Rust bot subprocess (one per Minecraft account) and exposes
  * a small state machine plus console/status/profile event streams.
@@ -90,21 +86,7 @@ export class MinecraftClient extends EventEmitter {
   private food = 20;
   /** Most recent live inventory snapshot from the bot, if any. */
   private inventory: InventorySnapshot | undefined;
-  /** Last discovered /homes list for this account. */
-  private homes: string[] = [];
-  /** While > now, incoming chat is scanned for /homes output lines. */
-  private homesQueryUntil = 0;
-  /** While > now, lines like "- homeName" are treated as /homes list entries. */
-  private homesCollectUntil = 0;
-  private homesCollect: string[] = [];
-  /** Debounce timer that applies a collected /homes list once, after the
-   *  bullet lines stop arriving, instead of flickering the shortcuts on every
-   *  individual line. */
-  private homesCollectTimer: NodeJS.Timeout | null = null;
-  /** Epoch ms of the last /homes query, for the 5-minute refresh cadence. */
-  private lastHomesQueryAt = 0;
-
-  /** Drives the daily-command + spawner schedulers (see runScheduledTasks). */
+  /** Drives the spawner scheduler (see runScheduledTasks). */
   private schedulerTimer: NodeJS.Timeout | null = null;
   /** Maps a daily "HH:MM" to the YYYY-MM-DD it last fired, to run it once per day. */
   private firedDaily = new Map<string, string>();
@@ -112,7 +94,6 @@ export class MinecraftClient extends EventEmitter {
   constructor(private config: ClientRuntimeConfig) {
     super();
     this.log = accountLogger(config.id, config.name);
-    this.homes = [...(config.homes ?? [])];
     this.schedulerTimer = setInterval(() => this.runScheduledTasks(), SCHEDULER_TICK_MS);
   }
 
@@ -132,14 +113,6 @@ export class MinecraftClient extends EventEmitter {
       this.sendToBot({
         type: "configure",
         crouch_enabled: config.crouchEnabled,
-        auto_command_enabled: config.autoCommandEnabled,
-        auto_command_text: config.autoCommandText,
-        auto_command_interval_minutes: config.autoCommandIntervalMinutes,
-        auto_command_span_enabled: config.autoCommandSpanEnabled,
-        auto_command_span_min_seconds: config.autoCommandSpanMinSeconds,
-        auto_command_span_max_seconds: config.autoCommandSpanMaxSeconds,
-        tpauto_enabled: config.tpAutoEnabled,
-        tpauto_allowlist: config.tpAutoAllowlist,
         autosell_enabled: config.autoSellEnabled,
         autosell_interval_seconds: config.autoSellIntervalSeconds,
         autosell_command: config.autoSellCommand,
@@ -164,7 +137,6 @@ export class MinecraftClient extends EventEmitter {
       reconnectAttempt: this.reconnectAttempt,
       msaSignIn: this.msaSignIn,
       authenticated: this.authenticated,
-      homes: this.homes,
     };
   }
 
@@ -199,12 +171,6 @@ export class MinecraftClient extends EventEmitter {
       return false;
     }
     this.sendToBot({ type: "chat", text: command });
-    // If the user just created/updated a home (e.g. "/sethome base"), re-query
-    // the homes list shortly after so the shortcut buttons pick it up. The
-    // small delay gives the server time to register the new home first.
-    if (/^\/sethome(\s|$)/i.test(command.trim())) {
-      setTimeout(() => this.refreshHomes(), 1500);
-    }
     return true;
   }
 
@@ -265,30 +231,16 @@ export class MinecraftClient extends EventEmitter {
   }
 
   /**
-   * Runs the time-of-day daily-command and spawner-clear schedulers.
-   * Both dispatch through the bot's foreground task queue,
+   * Runs the time-of-day spawner-clear scheduler.
+   * Tasks dispatch through the bot's foreground task queue,
    * so they automatically pause any in-progress auto-sell cycle
    * and resume it afterwards — no scheduling logic lives in the bot itself.
    */
   private runScheduledTasks(): void {
     if (this.status !== "ONLINE" || !this.subprocess) return;
 
-    // Daily command: fire the existing auto-command text once at each configured
-    // time of day (server local time), deduped per day.
-    const text = this.config.autoCommandText.trim();
-    if (this.config.dailyCommandEnabled && text && this.config.dailyCommandTimes.length > 0) {
-      const now = new Date();
-      const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-      const today = now.toISOString().slice(0, 10);
-      if (this.config.dailyCommandTimes.includes(hhmm) && this.firedDaily.get(hhmm) !== today) {
-        this.firedDaily.set(hhmm, today);
-        this.sendToBot({ type: "run_task", text });
-        this.emitConsole("SYSTEM", `Daily command scheduled for ${hhmm} dispatched`);
-      }
-    }
-
     // Spawner clear: run the configured clear routine once at each configured
-    // time of day, deduped per day (same pattern as the daily command above).
+    // time of day, deduped per day.
     if (this.config.spawnerClearEnabled && this.config.spawnerClearTimes.length > 0) {
       const now = new Date();
       const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
@@ -300,21 +252,6 @@ export class MinecraftClient extends EventEmitter {
         this.emitConsole("SYSTEM", `Scheduled spawner clear for ${hhmm} dispatched`);
       }
     }
-
-    // Homes poll: always re-query the saved /homes every 5 minutes so the
-    // shortcut buttons stay accurate even without a reconnect.
-    if (Date.now() - this.lastHomesQueryAt >= HOMES_POLL_INTERVAL_MS) {
-      this.refreshHomes();
-    }
-  }
-
-  /** Send a `/homes` query and open the parse window; refreshes the shortcut
-   *  buttons via the resulting chat output. No-op unless online. */
-  private refreshHomes(): void {
-    if (this.status !== "ONLINE" || !this.subprocess) return;
-    this.lastHomesQueryAt = Date.now();
-    this.homesQueryUntil = Date.now() + 60_000;
-    this.sendToBot({ type: "chat", text: "/homes" });
   }
 
   private attemptConnect(): void {
@@ -414,14 +351,6 @@ export class MinecraftClient extends EventEmitter {
       password: this.config.credentialsPassword,
       cache_dir: cacheDir,
       crouch_enabled: this.config.crouchEnabled,
-      auto_command_enabled: this.config.autoCommandEnabled,
-      auto_command_text: this.config.autoCommandText,
-      auto_command_interval_minutes: this.config.autoCommandIntervalMinutes,
-      auto_command_span_enabled: this.config.autoCommandSpanEnabled,
-      auto_command_span_min_seconds: this.config.autoCommandSpanMinSeconds,
-      auto_command_span_max_seconds: this.config.autoCommandSpanMaxSeconds,
-      tpauto_enabled: this.config.tpAutoEnabled,
-      tpauto_allowlist: this.config.tpAutoAllowlist,
       autosell_enabled: this.config.autoSellEnabled,
       autosell_interval_seconds: this.config.autoSellIntervalSeconds,
       autosell_command: this.config.autoSellCommand,
@@ -480,8 +409,6 @@ export class MinecraftClient extends EventEmitter {
         this.reconnectAttempt = 0;
         this.setStatus("ONLINE");
         this.emitConsole("SYSTEM", "Spawned into the world");
-        // Auto-refresh saved homes after each successful join.
-        this.refreshHomes();
         break;
 
       case "chat": {
@@ -491,7 +418,6 @@ export class MinecraftClient extends EventEmitter {
         if (amount !== null) {
           this.emit("earning", { minecraftAccountId: this.config.id, amount });
         }
-        this.tryUpdateHomesFromChat(clean);
         this.emit("chat", { minecraftAccountId: this.config.id, message: clean });
         if (sender) this.emitConsole("CHAT", `<${stripMinecraftFormatting(sender)}> ${clean}`);
         else this.emitConsole("SERVER_MESSAGE", clean);
@@ -597,11 +523,6 @@ export class MinecraftClient extends EventEmitter {
     this.connectedSince = null;
     this.msaSignIn = undefined;
     this.authenticated = false;
-    this.homesQueryUntil = 0;
-    if (this.homesCollectTimer) {
-      clearTimeout(this.homesCollectTimer);
-      this.homesCollectTimer = null;
-    }
     if (!child) return;
 
     this.log.debug(reason);
@@ -684,91 +605,6 @@ export class MinecraftClient extends EventEmitter {
       message,
       timestamp: new Date().toISOString(),
     } as ConsoleEvent);
-  }
-
-  private tryUpdateHomesFromChat(message: string): void {
-    const now = Date.now();
-
-    // Header line from servers like HugoSMP; following bullet lines carry names.
-    if (/deine\s+homes\s*:/i.test(message) || /^homes\s*:/i.test(message)) {
-      this.homesCollectUntil = now + 4_000;
-      this.homesCollect = [];
-      this.scheduleHomesFinalize();
-      return;
-    }
-
-    // While collecting, accept bullet-list lines like "- spawner". We buffer the
-    // names and apply them once (debounced) so the shortcut buttons update a
-    // single time with the complete list, instead of flickering per line.
-    if (now <= this.homesCollectUntil) {
-      const bullet = message.match(/^\s*[-•]\s*([A-Za-z0-9_\-]{1,32})\s*$/);
-      if (bullet?.[1]) {
-        this.homesCollect.push(bullet[1]);
-        this.scheduleHomesFinalize();
-        return;
-      }
-    }
-
-    // Always parse explicit "/home <name>" mentions; users may run /homes
-    // manually at any time and still expect shortcuts to update.
-    const explicit = Array.from(message.matchAll(/\/home\s+([A-Za-z0-9_\-]+)/gi)).map((m) => m[1]);
-    if (explicit.length > 0) {
-      this.applyHomes(explicit);
-      return;
-    }
-
-    if (now > this.homesQueryUntil) return;
-    const parsed = this.parseHomesLine(message);
-    if (parsed === null) return;
-    this.applyHomes(parsed);
-  }
-
-  /** (Re)arm the debounce that applies the buffered /homes bullet list once the
-   *  lines stop arriving, so the shortcut buttons update a single time. */
-  private scheduleHomesFinalize(): void {
-    if (this.homesCollectTimer) clearTimeout(this.homesCollectTimer);
-    this.homesCollectTimer = setTimeout(() => {
-      this.homesCollectTimer = null;
-      if (this.homesCollect.length > 0) this.applyHomes(this.homesCollect);
-    }, 1200);
-  }
-
-  private applyHomes(candidates: string[]): void {
-    const next = Array.from(new Set(candidates.map((h) => h.trim()).filter(Boolean)));
-    if (next.length === this.homes.length && next.every((h, i) => h === this.homes[i])) return;
-    this.homes = next;
-    this.emit("homes", { minecraftAccountId: this.config.id, homes: this.homes });
-    this.emitStatus();
-  }
-
-  private parseHomesLine(line: string): string[] | null {
-    const lower = line.toLowerCase();
-    // Explicit "no homes" style replies.
-    if (
-      (lower.includes("home") || lower.includes("homes")) &&
-      (lower.includes("no home") || lower.includes("no homes") || lower.includes("keine homes"))
-    ) {
-      return [];
-    }
-
-    // Common server output style: "/home Name" entries in one line.
-    const cmdMatches = Array.from(line.matchAll(/\/home\s+([A-Za-z0-9_\-]+)/g)).map((m) => m[1]);
-    if (cmdMatches.length > 0) return cmdMatches;
-
-    // Fallback: "Homes: Name1, Name2, Name3" / "Häuser: ..."
-    if (lower.includes("homes") || lower.includes("häuser") || lower.includes("haeuser")) {
-      const idx = line.indexOf(":");
-      if (idx !== -1) {
-        const tail = line.slice(idx + 1);
-        const names = tail
-          .replace(/[\[\]()]/g, " ")
-          .split(/[,\|]/)
-          .map((s) => s.trim())
-          .filter((s) => /^[A-Za-z0-9_\-]{1,32}$/.test(s));
-        if (names.length > 0) return names;
-      }
-    }
-    return null;
   }
 
   /**

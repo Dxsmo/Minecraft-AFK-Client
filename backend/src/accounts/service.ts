@@ -1,19 +1,9 @@
 import { prisma } from "../database/prisma.js";
 import type { CreateAccountInput, UpdateAccountInput } from "./schemas.js";
 import type { SessionContext } from "../auth/session.js";
-import { parseSpawnerActions, type SpawnerAction } from "../minecraft/spawners.js";
+import { parseSpawnerActions } from "../minecraft/spawners.js";
 
-/** Parses the JSON-encoded tpAuto allowlist column into a string array. */
-export function parseAllowlist(raw: string): string[] {
-  try {
-    const value = JSON.parse(raw);
-    return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-/** Parses the JSON-encoded daily-command times column into a string array. */
+/** Parses the JSON-encoded daily spawner-clear times into a string array. */
 export function parseDailyTimes(raw: string): string[] {
   try {
     const value = JSON.parse(raw);
@@ -23,53 +13,10 @@ export function parseDailyTimes(raw: string): string[] {
   }
 }
 
-/** Parses the JSON-encoded homes column into a string array. */
-export function parseHomes(raw: string): string[] {
-  try {
-    const value = JSON.parse(raw);
-    return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && v.trim().length > 0) : [];
-  } catch {
-    return [];
-  }
-}
-
-/** Presents a stored account to API clients, decoding JSON-encoded list columns to arrays. */
-function present<
-  T extends {
-    tpAutoAllowlist: string;
-    dailyCommandTimes: string;
-    homesJson: string;
-    spawnerActions: string;
-    spawnerClearTimes: string;
-  },
->(
-  account: T,
-): Omit<
-  T,
-  "tpAutoAllowlist" | "dailyCommandTimes" | "homesJson" | "spawnerActions" | "spawnerClearTimes"
-> & {
-  tpAutoAllowlist: string[];
-  dailyCommandTimes: string[];
-  homes: string[];
-  spawnerActions: Record<string, SpawnerAction>;
-  spawnerClearTimes: string[];
-} {
-  const {
-    tpAutoAllowlist,
-    dailyCommandTimes,
-    homesJson,
-    spawnerActions,
-    spawnerClearTimes,
-    ...rest
-  } = account;
-  return {
-    ...rest,
-    tpAutoAllowlist: parseAllowlist(tpAutoAllowlist),
-    dailyCommandTimes: parseDailyTimes(dailyCommandTimes),
-    homes: parseHomes(homesJson),
-    spawnerActions: parseSpawnerActions(spawnerActions),
-    spawnerClearTimes: parseDailyTimes(spawnerClearTimes),
-  };
+/** Decode the remaining JSON settings for API clients. */
+function present<T extends { spawnerActions: string; spawnerClearTimes: string }>(account: T) {
+  const { spawnerActions, spawnerClearTimes, ...rest } = account;
+  return { ...rest, spawnerActions: parseSpawnerActions(spawnerActions), spawnerClearTimes: parseDailyTimes(spawnerClearTimes) };
 }
 
 /**
@@ -89,20 +36,9 @@ const publicAccountSelect = {
   crouchEnabled: true,
   autoReconnect: true,
   notes: true,
-  autoCommandEnabled: true,
-  autoCommandText: true,
-  autoCommandIntervalMinutes: true,
-  autoCommandSpanEnabled: true,
-  autoCommandSpanMinSeconds: true,
-  autoCommandSpanMaxSeconds: true,
-  tpAutoEnabled: true,
-  tpAutoAllowlist: true,
   autoSellEnabled: true,
   autoSellIntervalSeconds: true,
   autoSellCommand: true,
-  dailyCommandEnabled: true,
-  dailyCommandTimes: true,
-  homesJson: true,
   spawnerType: true,
   spawnerActions: true,
   spawnerClearEnabled: true,

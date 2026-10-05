@@ -51,7 +51,7 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
       return;
     }
 
-    const history = await getConsoleLogs(accountId, 200);
+    const history = await getConsoleLogs(accountId);
     safeSend(socket, { type: "history", logs: history });
     const status = clientManager.get(accountId)?.getStatus();
     if (status) safeSend(socket, { type: "status", status });

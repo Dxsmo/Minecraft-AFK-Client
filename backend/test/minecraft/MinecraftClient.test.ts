@@ -71,9 +71,16 @@ function baseConfig(overrides: Partial<ClientRuntimeConfig> = {}): ClientRuntime
     credentialsSecret: null,
     credentialsPassword: null,
     autoReconnect: true,
-    autoCommandEnabled: false,
-    autoCommandText: "",
-    autoCommandIntervalMinutes: 5,
+    edition: "JAVA",
+    crouchEnabled: false,
+    autoSellEnabled: false,
+    autoSellIntervalSeconds: 60,
+    autoSellCommand: "/sell",
+    spawnerType: "",
+    spawnerDropItems: [],
+    spawnerSellItems: [],
+    spawnerClearEnabled: false,
+    spawnerClearTimes: [],
     ...overrides,
   };
 }
@@ -122,6 +129,22 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(config.host).toBe("play.example.com");
     expect(config.port).toBe(25566);
     expect(config.auth_type).toBe("offline");
+    expect(config).not.toHaveProperty("auto_command_enabled");
+    expect(config).not.toHaveProperty("tpauto_enabled");
+  });
+
+  it("never automatically queries /homes on joins, scheduling or /sethome", async () => {
+    const client = makeClient();
+    client.connect();
+    lastChild().send({ type: "spawn" });
+    await tick();
+    (client as any).runScheduledTasks();
+    client.sendCommand("/sethome farm");
+    lastChild().send({ type: "spawn" });
+    await tick();
+    const commands = lastChild().stdin.write.mock.calls.map(([line]) => JSON.parse(line));
+    expect(commands.filter((cmd) => cmd.type === "chat").map((cmd) => cmd.text)).toEqual(["/sethome farm"]);
+    expect(client.getStatus()).not.toHaveProperty("homes");
   });
 
   it("goes OFFLINE on manual disconnect", () => {

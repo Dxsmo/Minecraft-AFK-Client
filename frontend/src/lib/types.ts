@@ -64,7 +64,6 @@ export interface LiveStatus {
   connectedSince?: string;
   msaSignIn?: MsaSignInPrompt;
   authenticated?: boolean;
-  homes?: string[];
 }
 
 export interface MinecraftAccount {
@@ -79,20 +78,9 @@ export interface MinecraftAccount {
   crouchEnabled: boolean;
   autoReconnect: boolean;
   notes: string;
-  autoCommandEnabled: boolean;
-  autoCommandText: string;
-  autoCommandIntervalMinutes: number;
-  autoCommandSpanEnabled: boolean;
-  autoCommandSpanMinSeconds: number;
-  autoCommandSpanMaxSeconds: number;
-  tpAutoEnabled: boolean;
-  tpAutoAllowlist: string[];
   autoSellEnabled: boolean;
   autoSellIntervalSeconds: number;
   autoSellCommand: string;
-  dailyCommandEnabled: boolean;
-  dailyCommandTimes: string[];
-  homes: string[];
   spawnerType: string;
   spawnerActions: Record<string, SpawnerAction>;
   spawnerClearEnabled: boolean;

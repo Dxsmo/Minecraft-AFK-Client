@@ -25,23 +25,6 @@ pub struct Config {
     /// When true, continuously sneak/crouch.
     #[serde(default)]
     pub crouch_enabled: bool,
-    pub auto_command_enabled: bool,
-    pub auto_command_text: String,
-    pub auto_command_interval_minutes: u64,
-    #[serde(default)]
-    pub auto_command_span_enabled: bool,
-    #[serde(default = "default_auto_command_span_min_seconds")]
-    pub auto_command_span_min_seconds: u64,
-    #[serde(default = "default_auto_command_span_max_seconds")]
-    pub auto_command_span_max_seconds: u64,
-
-    /// Auto-accept incoming `/tpa` teleport requests (but never `/tpahere`).
-    #[serde(default)]
-    pub tpauto_enabled: bool,
-    /// If non-empty, only auto-accept `/tpa` requests from these Minecraft
-    /// names (case-insensitive). Empty means accept from anyone.
-    #[serde(default)]
-    pub tpauto_allowlist: Vec<String>,
     /// Periodically sell the inventory by running the sell command and moving
     /// all items into the sell menu the server opens.
     #[serde(default)]
@@ -77,35 +60,12 @@ fn default_autosell_command() -> String {
     "/sell".to_string()
 }
 
-fn default_auto_command_span_min_seconds() -> u64 {
-    600
-}
-
-fn default_auto_command_span_max_seconds() -> u64 {
-    1800
-}
-
 /// Behavior-only subset of [`Config`], sent again later to update settings
 /// live without needing to reconnect.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BehaviorConfig {
     #[serde(default)]
     pub crouch_enabled: bool,
-    pub auto_command_enabled: bool,
-    pub auto_command_text: String,
-    pub auto_command_interval_minutes: u64,
-    #[serde(default)]
-    pub auto_command_span_enabled: bool,
-    #[serde(default = "default_auto_command_span_min_seconds")]
-    pub auto_command_span_min_seconds: u64,
-    #[serde(default = "default_auto_command_span_max_seconds")]
-    pub auto_command_span_max_seconds: u64,
-    #[serde(default)]
-    pub tpauto_enabled: bool,
-    /// If non-empty, only auto-accept `/tpa` requests from these Minecraft
-    /// names (case-insensitive). Empty means accept from anyone.
-    #[serde(default)]
-    pub tpauto_allowlist: Vec<String>,
     #[serde(default)]
     pub autosell_enabled: bool,
     #[serde(default = "default_autosell_interval")]
@@ -127,11 +87,6 @@ pub enum Command {
     Chat { text: String },
     /// Update account automation settings live.
     Configure(BehaviorConfig),
-    /// Run a chat command as a *foreground one-shot task*: any continuous task
-    /// (auto-sell) is paused until it has been sent, then resumed. Used by the
-    /// Node-side daily-command scheduler so a scheduled command never collides
-    /// with an in-progress auto-sell cycle.
-    RunTask { text: String },
     /// Clean a nearby spawner as a foreground one-shot task: right-click a
     /// spawner within reach (without walking to it), drop the items in the
     /// container it opens, and close it. Pauses auto-sell for the duration.
@@ -184,7 +139,7 @@ pub enum OutEvent {
     /// An unrecoverable error before or during setup (auth failure, etc.).
     /// The process exits with a non-zero code immediately after this.
     FatalError { error: String },
-    /// A behavior fired an action worth logging (e.g. an auto-command was sent).
+    /// A behavior fired an action worth logging (e.g. a menu was recovered).
     BehaviorLog { message: String },
     /// The bot's current health (0..=20) and food/hunger level (0..=20),
     /// emitted whenever either value changes.

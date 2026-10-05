@@ -157,6 +157,7 @@ async function main(): Promise<void> {
       localRuntimeEntityId = id;
       sender.setRuntimeEntityId(id);
       captureItemPalette(p.itemstates);
+      if (spawned) behavior.markTeleported();
     } catch {
       /* ignore */
     }
@@ -250,9 +251,6 @@ function handleCommand(
       break;
     case "configure":
       behavior.updateConfig(cmd);
-      break;
-    case "run_task":
-      behavior.enqueueTask(cmd.text);
       break;
     case "clean_spawner":
       behavior.enqueueCleanSpawner();

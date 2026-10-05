@@ -3,7 +3,7 @@ import type { ClientRuntimeConfig, ClientStatusSnapshot, ConsoleEvent } from "./
 import { prisma } from "../database/prisma.js";
 import { persistConsoleLog } from "../logging/consoleLogService.js";
 import { logger } from "../logging/logger.js";
-import { parseAllowlist, parseDailyTimes, parseHomes } from "../accounts/service.js";
+import { parseDailyTimes } from "../accounts/service.js";
 import { parseSpawnerActions, resolveSpawnerActions } from "./spawners.js";
 import type { MinecraftAccount } from "@prisma/client";
 
@@ -26,20 +26,9 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     credentialsPassword: account.credentialsPassword,
     crouchEnabled: account.crouchEnabled,
     autoReconnect: account.autoReconnect,
-    autoCommandEnabled: account.autoCommandEnabled,
-    autoCommandText: account.autoCommandText,
-    autoCommandIntervalMinutes: account.autoCommandIntervalMinutes,
-    autoCommandSpanEnabled: account.autoCommandSpanEnabled,
-    autoCommandSpanMinSeconds: account.autoCommandSpanMinSeconds,
-    autoCommandSpanMaxSeconds: account.autoCommandSpanMaxSeconds,
-    tpAutoEnabled: account.tpAutoEnabled,
-    tpAutoAllowlist: parseAllowlist(account.tpAutoAllowlist),
     autoSellEnabled: account.autoSellEnabled,
     autoSellIntervalSeconds: account.autoSellIntervalSeconds,
     autoSellCommand: account.autoSellCommand,
-    dailyCommandEnabled: account.dailyCommandEnabled,
-    dailyCommandTimes: parseDailyTimes(account.dailyCommandTimes),
-    homes: parseHomes(account.homesJson),
     spawnerType: account.spawnerType,
     spawnerDropItems: spawner.dropItems,
     spawnerSellItems: spawner.sellItems,
@@ -148,13 +137,6 @@ export class ClientManager {
         .create({ data: { minecraftAccountId, amount } })
         .catch((err) => {
           if (err?.code !== "P2025") logger.error({ err }, "Failed to persist sell earning");
-        });
-    });
-    client.on("homes", ({ minecraftAccountId, homes }: { minecraftAccountId: string; homes: string[] }) => {
-      prisma.minecraftAccount
-        .update({ where: { id: minecraftAccountId }, data: { homesJson: JSON.stringify(homes) } })
-        .catch((err) => {
-          if (err?.code !== "P2025") logger.error({ err }, "Failed to persist homes");
         });
     });
     this.clients.set(account.id, client);

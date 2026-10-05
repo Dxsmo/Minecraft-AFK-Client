@@ -9,15 +9,12 @@ export function AccountSettingsPanel({
   users,
   canManageAccess,
   currentUserId,
-  isAdmin,
   onUpdated,
 }: {
   account: MinecraftAccount;
   users: ManagedUser[];
   canManageAccess: boolean;
   currentUserId?: string;
-  /** Admins see the full feature set; normal users get the reduced one. */
-  isAdmin: boolean;
   onUpdated: () => void;
 }) {
   const [crouchEnabled, setCrouchEnabled] = useState(account.crouchEnabled);
@@ -25,30 +22,6 @@ export function AccountSettingsPanel({
   const [serverHost, setServerHost] = useState(account.serverHost);
   const [serverPort, setServerPort] = useState(account.serverPort);
   const [autoReconnect, setAutoReconnect] = useState(account.autoReconnect);
-  const [autoCommandEnabled, setAutoCommandEnabled] = useState(account.autoCommandEnabled);
-  // Auto home only ever runs "/home <name>", so the UI edits the bare name and
-  // the fixed prefix is re-attached on save.
-  const [autoHomeName, setAutoHomeName] = useState(homeNameFromCommand(account.autoCommandText));
-  const [autoCommandIntervalMinutes, setAutoCommandIntervalMinutes] = useState(account.autoCommandIntervalMinutes);
-  const [autoCommandSpanEnabled, setAutoCommandSpanEnabled] = useState(account.autoCommandSpanEnabled);
-  const [autoCommandSpanMinValue, setAutoCommandSpanMinValue] = useState(
-    spanValueFromSeconds(account.autoCommandSpanMinSeconds ?? 600),
-  );
-  const [autoCommandSpanMinUnit, setAutoCommandSpanMinUnit] = useState<"minutes" | "hours">(
-    spanUnitFromSeconds(account.autoCommandSpanMinSeconds ?? 600),
-  );
-  const [autoCommandSpanMaxValue, setAutoCommandSpanMaxValue] = useState(
-    spanValueFromSeconds(account.autoCommandSpanMaxSeconds ?? 1800),
-  );
-  const [autoCommandSpanMaxUnit, setAutoCommandSpanMaxUnit] = useState<"minutes" | "hours">(
-    spanUnitFromSeconds(account.autoCommandSpanMaxSeconds ?? 1800),
-  );
-  const [dailyCommandEnabled, setDailyCommandEnabled] = useState(account.dailyCommandEnabled);
-  const [dailyCommandTimes, setDailyCommandTimes] = useState<string[]>(account.dailyCommandTimes ?? []);
-  const [dailyTimeDraft, setDailyTimeDraft] = useState("08:00");
-  const [tpAutoEnabled, setTpAutoEnabled] = useState(account.tpAutoEnabled);
-  const [tpAutoAllowlist, setTpAutoAllowlist] = useState<string[]>(account.tpAutoAllowlist ?? []);
-  const [allowlistDraft, setAllowlistDraft] = useState("");
   const [autoSellEnabled, setAutoSellEnabled] = useState(account.autoSellEnabled);
   const [autoSellIntervalSeconds, setAutoSellIntervalSeconds] = useState(account.autoSellIntervalSeconds);
   const [autoSellCommand, setAutoSellCommand] = useState(account.autoSellCommand);
@@ -89,20 +62,6 @@ export function AccountSettingsPanel({
         spawnerActions,
         spawnerClearEnabled,
         spawnerClearTimes,
-        ...(isAdmin
-          ? {
-              autoCommandEnabled,
-              autoCommandText: commandFromHomeName(autoHomeName),
-              autoCommandIntervalMinutes,
-              autoCommandSpanEnabled,
-              autoCommandSpanMinSeconds: toSpanSeconds(autoCommandSpanMinValue, autoCommandSpanMinUnit),
-              autoCommandSpanMaxSeconds: toSpanSeconds(autoCommandSpanMaxValue, autoCommandSpanMaxUnit),
-              dailyCommandEnabled,
-              dailyCommandTimes,
-              tpAutoEnabled,
-              tpAutoAllowlist,
-            }
-          : {}),
       });
       if (canManageAccess) {
         await api.put(`/minecraft/accounts/${account.id}/assignments`, { userIds: Array.from(assigned) });
@@ -132,37 +91,6 @@ export function AccountSettingsPanel({
     }
   }
 
-  function addAllowlistName() {
-    const name = allowlistDraft.trim();
-    if (!name) return;
-    if (name.length > 16 || !/^[A-Za-z0-9_]+$/.test(name)) {
-      setError("Invalid Minecraft name");
-      return;
-    }
-    if (!tpAutoAllowlist.some((n) => n.toLowerCase() === name.toLowerCase())) {
-      setTpAutoAllowlist([...tpAutoAllowlist, name]);
-    }
-    setAllowlistDraft("");
-  }
-
-  function removeAllowlistName(name: string) {
-    setTpAutoAllowlist(tpAutoAllowlist.filter((n) => n !== name));
-  }
-
-  function addDailyTime() {
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(dailyTimeDraft)) {
-      setError("Invalid time (use HH:MM)");
-      return;
-    }
-    if (!dailyCommandTimes.includes(dailyTimeDraft)) {
-      setDailyCommandTimes([...dailyCommandTimes, dailyTimeDraft].sort());
-    }
-  }
-
-  function removeDailyTime(time: string) {
-    setDailyCommandTimes(dailyCommandTimes.filter((t) => t !== time));
-  }
-
   function addSpawnerTime() {
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(spawnerTimeDraft)) {
       setError("Invalid time (use HH:MM)");
@@ -184,8 +112,6 @@ export function AccountSettingsPanel({
     });
   }
 
-  // Normal users get a reduced feature set: no auto home or auto-TPA
-  // (mirrored server-side in the accounts API).
   const categories: { id: string; label: string; icon: CatIcon; meta?: string; on?: boolean }[] = [
     { id: "general", label: "General", icon: "user", meta: displayName.trim() || account.name },
     { id: "connection", label: "Connection", icon: "server", meta: `${serverHost}:${serverPort}` },
@@ -195,8 +121,6 @@ export function AccountSettingsPanel({
       icon: "activity",
       on: crouchEnabled,
     },
-    ...(isAdmin ? [{ id: "autohome", label: "Auto home", icon: "terminal" as CatIcon, on: autoCommandEnabled || dailyCommandEnabled || autoCommandSpanEnabled }] : []),
-    ...(isAdmin ? [{ id: "autotpa", label: "Auto-TPA", icon: "portal" as CatIcon, on: tpAutoEnabled }] : []),
     { id: "autosell", label: "Auto-sell", icon: "tag", on: autoSellEnabled },
     {
       id: "spawner",
@@ -350,186 +274,6 @@ export function AccountSettingsPanel({
               <>
                 <Toggle label="Crouch" description="Continuously sneak while connected." checked={crouchEnabled} onChange={setCrouchEnabled} />
                 <Toggle label="Auto-reconnect" checked={autoReconnect} onChange={setAutoReconnect} />
-              </>
-            )}
-
-            {isAdmin && activeCat === "autohome" && (
-              <>
-                <div>
-                  <label className="label">Home</label>
-                  {/* The "/home " prefix is fixed: auto home may only ever
-                      teleport the bot to one of its own homes. */}
-                  <div className="cmd-prefix-field">
-                    <span className="cmd-prefix">/home</span>
-                    <input
-                      value={autoHomeName}
-                      onChange={(e) => setAutoHomeName(e.target.value)}
-                      placeholder="base"
-                      className="cmd-prefix-input"
-                      spellCheck={false}
-                    />
-                  </div>
-                  <p className="mt-1 text-xs" style={{ color: "var(--text-subtle)" }}>
-                    Used by all schedules below. Enable interval, Zeitspanne, daily, or any combination.
-                  </p>
-                </div>
-
-                {/* Interval schedule — independent from the daily schedule. */}
-                <div className="border-t pt-3" style={{ borderColor: "var(--border)" }}>
-                  <Toggle
-                    label="Interval"
-                    description="Run the command repeatedly on a fixed timer."
-                    checked={autoCommandEnabled}
-                    onChange={setAutoCommandEnabled}
-                  />
-                  {autoCommandEnabled && (
-                    <div className="mt-2">
-                      <Field label="Every">
-                        <NumberInput value={autoCommandIntervalMinutes} onChange={setAutoCommandIntervalMinutes} min={1} max={1440} suffix="min" />
-                      </Field>
-                    </div>
-                  )}
-                </div>
-
-                <div className="border-t pt-3" style={{ borderColor: "var(--border)" }}>
-                  <Toggle
-                    label="Zeitspanne"
-                    description="Use a random delay between two limits; a new delay is chosen after each run."
-                    checked={autoCommandSpanEnabled}
-                    onChange={setAutoCommandSpanEnabled}
-                  />
-                  {autoCommandSpanEnabled && (
-                    <div className="mt-2 space-y-2">
-                      <Field label="Zahl 1">
-                        <div className="flex items-center gap-2">
-                          <NumberInput value={autoCommandSpanMinValue} onChange={setAutoCommandSpanMinValue} min={1} max={1440} />
-                          <select
-                            value={autoCommandSpanMinUnit}
-                            onChange={(e) => setAutoCommandSpanMinUnit(e.target.value as "minutes" | "hours")}
-                            className="input w-28"
-                          >
-                            <option value="minutes">Minuten</option>
-                            <option value="hours">Stunden</option>
-                          </select>
-                        </div>
-                      </Field>
-                      <Field label="Zahl 2">
-                        <div className="flex items-center gap-2">
-                          <NumberInput value={autoCommandSpanMaxValue} onChange={setAutoCommandSpanMaxValue} min={1} max={1440} />
-                          <select
-                            value={autoCommandSpanMaxUnit}
-                            onChange={(e) => setAutoCommandSpanMaxUnit(e.target.value as "minutes" | "hours")}
-                            className="input w-28"
-                          >
-                            <option value="minutes">Minuten</option>
-                            <option value="hours">Stunden</option>
-                          </select>
-                        </div>
-                      </Field>
-                    </div>
-                  )}
-                </div>
-
-                {/* Daily schedule — independent from the interval schedule. */}
-                <div className="border-t pt-3" style={{ borderColor: "var(--border)" }}>
-                  <Toggle
-                    label="Daily"
-                    description="Run the command once each day at the times below (server local time)."
-                    checked={dailyCommandEnabled}
-                    onChange={setDailyCommandEnabled}
-                  />
-                  {dailyCommandEnabled && (
-                    <div className="mt-2">
-                      {dailyCommandTimes.length > 0 && (
-                        <div className="mb-2 flex flex-wrap gap-1.5">
-                          {dailyCommandTimes.map((time) => (
-                            <span
-                              key={time}
-                              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium tabular-nums"
-                              style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
-                            >
-                              {time}
-                              <button
-                                type="button"
-                                onClick={() => removeDailyTime(time)}
-                                className="leading-none opacity-70 hover:opacity-100"
-                                aria-label={`Remove ${time}`}
-                              >
-                                ×
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <div className="flex gap-2">
-                        <input
-                          type="time"
-                          value={dailyTimeDraft}
-                          onChange={(e) => setDailyTimeDraft(e.target.value)}
-                          className="input w-32"
-                        />
-                        <button type="button" onClick={addDailyTime} className="btn btn-secondary btn-sm shrink-0">
-                          + Add time
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-
-            {activeCat === "autotpa" && (
-              <>
-                <Toggle
-                  label="Accept incoming /tpa"
-                  description="Accepts players teleporting to the bot. Ignores /tpahere."
-                  checked={tpAutoEnabled}
-                  onChange={setTpAutoEnabled}
-                />
-                <div>
-                  <label className="label">Allowed names</label>
-                  <p className="mb-2 text-xs" style={{ color: "var(--text-subtle)" }}>
-                    Leave empty to accept from anyone, or add names to accept only from them.
-                  </p>
-                  {tpAutoAllowlist.length > 0 && (
-                    <div className="mb-2 flex flex-wrap gap-1.5">
-                      {tpAutoAllowlist.map((name) => (
-                        <span
-                          key={name}
-                          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
-                          style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
-                        >
-                          {name}
-                          <button
-                            type="button"
-                            onClick={() => removeAllowlistName(name)}
-                            className="leading-none opacity-70 hover:opacity-100"
-                            aria-label={`Remove ${name}`}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  <div className="flex gap-2">
-                    <input
-                      value={allowlistDraft}
-                      onChange={(e) => setAllowlistDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          addAllowlistName();
-                        }
-                      }}
-                      placeholder="Add a Minecraft name…"
-                      className="input"
-                    />
-                    <button type="button" onClick={addAllowlistName} className="btn btn-secondary btn-sm shrink-0">
-                      Add
-                    </button>
-                  </div>
-                </div>
               </>
             )}
 
@@ -731,25 +475,10 @@ export function AccountSettingsPanel({
   );
 }
 
-function spanUnitFromSeconds(seconds: number): "minutes" | "hours" {
-  return seconds % 3600 === 0 ? "hours" : "minutes";
-}
-
-function spanValueFromSeconds(seconds: number): number {
-  return spanUnitFromSeconds(seconds) === "hours" ? Math.max(1, Math.round(seconds / 3600)) : Math.max(1, Math.round(seconds / 60));
-}
-
-function toSpanSeconds(value: number, unit: "minutes" | "hours"): number {
-  const clamped = Math.max(1, Math.floor(value));
-  return unit === "hours" ? clamped * 3600 : clamped * 60;
-}
-
 type CatIcon =
   | "user"
   | "server"
   | "activity"
-  | "terminal"
-  | "portal"
   | "tag"
   | "users"
   | "cube";
@@ -788,20 +517,6 @@ function CatGlyph({ name }: { name: CatIcon }) {
       return (
         <svg {...common}>
           <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-        </svg>
-      );
-    case "terminal":
-      return (
-        <svg {...common}>
-          <polyline points="4 17 10 11 4 5" />
-          <line x1="12" y1="19" x2="20" y2="19" />
-        </svg>
-      );
-    case "portal":
-      return (
-        <svg {...common}>
-          <ellipse cx="12" cy="12" rx="6" ry="9" />
-          <ellipse cx="12" cy="12" rx="2.5" ry="5" />
         </svg>
       );
     case "tag":
@@ -914,18 +629,4 @@ function Toggle({
       )}
     </div>
   );
-}
-
-/**
- * Auto home stores the full "/home <name>" command, but the UI only edits the
- * name. These two helpers convert between the stored command and that name.
- */
-function homeNameFromCommand(command: string | undefined): string {
-  const match = /^\/home\s+(.+)$/i.exec((command ?? "").trim());
-  return match ? match[1].trim() : "";
-}
-
-function commandFromHomeName(name: string): string {
-  const trimmed = name.trim();
-  return trimmed ? `/home ${trimmed}` : "";
 }

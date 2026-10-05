@@ -24,7 +24,7 @@ Minecraft Client Manager (ClientManager)
         │
         ▼
 MinecraftClient instances ──spawn──▶ azalea-bot (Rust subprocess, NDJSON over stdio)
-        │                                    │  Crouch / Auto-command / Auto-sell
+        │                                    │  Crouch / Auto-sell
         ▼                                    ▼
 Minecraft Server(s) ◀────────────────────────┘
 ```
@@ -187,10 +187,6 @@ additional users access afterwards in the account's **Settings** panel):
   disk (`data/bot-cache/<account>/`) so subsequent starts are silent. No
   password is ever entered or stored.
 - Continuous crouching and auto-reconnect
-- Auto home: an optional `/home <name>` teleport run automatically on a fixed
-  interval, a random time span, and/or at fixed times of day — configured per
-  account in **Settings**. Only the home name is editable; the `/home ` prefix
-  is fixed and enforced server-side.
 - Auto-sell: one cycle per interval — send the sell command, wait for the
   server's menu, move inventory stacks with paced shift-clicks, wait for the
   server to confirm an inventory decrease, then close the menu. Server-side
@@ -305,8 +301,7 @@ Behaviors live in the Rust bot (`backend/rust-bot/src/behaviors.rs`) and are
 driven from Azalea's game tick:
 
 - **Crouch** – continuously hold sneak without periodic release/re-press cycles
-- **Auto home** – periodic `/home <name>` teleport
-- **Auto-sell** – sell-menu cycle (open → fill → confirm → close) with backoff
+- **Auto-sell** – sell-menu cycle with bounded timeouts and recovery after teleports/world changes
 - **Clean Spawner** – drop/sell the targeted spawner's contents per item type
 
 They read a shared config that `{"type":"configure"}` updates live, so
@@ -319,10 +314,10 @@ retried several times before the run closes the menu and reports the failure.
 
 ### Feature visibility
 
-Normal users get a reduced feature set: no balance polling, auto-TPA, live
-inventory or home shortcuts. This is enforced
-in the API (admin-only routes plus stripped admin-only fields on `PATCH`), not
-just hidden in the UI. Admins keep the full feature set for every account.
+Live inventory controls are admin-only, enforced by the API routes and the UI.
+Balance polling, automatic home queries, home shortcuts, auto-home and
+auto-TPA have been removed for all roles. Manually entered commands remain
+available through the console.
 
 ---
 
@@ -342,8 +337,9 @@ Commands typed in the console (or sent via `POST
 Minecraft server through the bot. **The service never bypasses server
 permissions** — if the bot account isn't OP'd or lacks a permission-plugin
 grant, the vanilla server will reject the command exactly as it would for
-a real player. The last 2000 console lines per account are persisted to
-SQLite and pruned automatically.
+a real player. The last 20,000 console lines per account are persisted to
+SQLite and pruned automatically. The console initially loads 2,000 lines;
+older history can be loaded in pages while keeping the reading position.
 
 ---
 

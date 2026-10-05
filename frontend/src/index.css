@@ -654,50 +654,6 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
-   Auto home: a fixed "/home" prefix glued to the editable name input, so it is
-   visually obvious that only the home name is user-controlled.
-   --------------------------------------------------------------------------- */
-.cmd-prefix-field {
-  display: flex;
-  align-items: stretch;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background-color: var(--bg-elev);
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
-}
-.cmd-prefix-field:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.cmd-prefix {
-  display: flex;
-  align-items: center;
-  padding: 0 0.6rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  color: var(--accent);
-  background-color: var(--accent-soft);
-  border-right: 1px solid var(--border);
-  user-select: none;
-}
-.cmd-prefix-input {
-  flex: 1;
-  min-width: 0;
-  padding: 0.45rem 0.6rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.8rem;
-  color: var(--text);
-  background: transparent;
-  border: 0;
-  outline: none;
-}
-
-/* ---------------------------------------------------------------------------
    Spawner settings: type picker chips + per-item drop/sell selector.
    --------------------------------------------------------------------------- */
 .spawner-grid {

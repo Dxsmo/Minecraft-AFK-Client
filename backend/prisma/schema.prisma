@@ -107,28 +107,22 @@ model MinecraftAccount {
   autoReconnect              Boolean      @default(true)
   // Free-form short note shown in the dashboard/settings (e.g. "farming cobble").
   notes                      String       @default("")
-  // Automatically types a configured chat message/command at a fixed interval,
-  // independent of crouching and other account automation.
+  // Legacy auto-home/command columns retained for database compatibility.
+  // No longer read, scheduled, configurable or exposed by the API.
   autoCommandEnabled         Boolean      @default(false)
   autoCommandText            String       @default("")
   autoCommandIntervalMinutes Int          @default(5)
-  // Optional random interval mode for auto-command. When enabled, the command
-  // is sent repeatedly with a freshly random delay between min/max after each run.
   autoCommandSpanEnabled     Boolean      @default(false)
   autoCommandSpanMinSeconds  Int          @default(600)
   autoCommandSpanMaxSeconds  Int          @default(1800)
-  // Auto-accept incoming /tpa teleport requests (never /tpahere).
+  // Legacy auto-TPA columns, unused and no longer exposed by the API.
   tpAutoEnabled              Boolean      @default(false)
-  // JSON-encoded array of Minecraft names; when non-empty, only /tpa requests
-  // from these players are auto-accepted. Empty ("[]") means accept from anyone.
   tpAutoAllowlist            String       @default("[]")
   // Periodically run the sell command and shift all items into the sell menu.
   autoSellEnabled            Boolean      @default(false)
   autoSellIntervalSeconds    Float        @default(60)
   autoSellCommand            String       @default("/sell")
-  // Daily scheduler for the existing auto-command text: when enabled, the
-  // configured autoCommandText is run once at each time of day listed in
-  // dailyCommandTimes (JSON-encoded array of "HH:MM", server local time).
+  // Legacy daily auto-home scheduler columns, unused.
   dailyCommandEnabled        Boolean      @default(false)
   dailyCommandTimes          String       @default("[]")
   // Legacy balance columns retained for database compatibility; no longer used.
@@ -137,8 +131,7 @@ model MinecraftAccount {
   // Legacy stored balance, no longer exposed or refreshed.
   lastBalance                Float?
   lastBalanceAt              DateTime?
-  // JSON-encoded array of discovered /homes names for this account, refreshed
-  // after every successful server join.
+  // Legacy homes cache, unused. No automatic /homes queries are sent.
   homesJson                  String       @default("[]")
   // Spawner handling. `spawnerType` selects which mob spawner this account is
   // parked at ("" = unconfigured), which in turn determines the item types the

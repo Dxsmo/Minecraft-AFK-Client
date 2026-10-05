@@ -7,8 +7,6 @@ import {
   commandSchema,
   moveItemSchema,
   dropItemSchema,
-  stripAdminOnlyFields,
-  stripAdminOnlyCreateFields,
 } from "./schemas.js";
 import * as accountsService from "./service.js";
 import { executeCommand } from "../commands/service.js";
@@ -56,8 +54,8 @@ export default async function accountsRoutes(app: FastifyInstance) {
       reply.code(404).send({ error: "Account not found" });
       return;
     }
-    const { limit } = req.query as { limit?: string };
-    reply.send(await getConsoleLogs(id, limit ? Number(limit) : undefined));
+    const { limit, before } = req.query as { limit?: string; before?: string };
+    reply.send(await getConsoleLogs(id, limit ? Number(limit) : undefined, before));
   });
 
   app.get("/api/minecraft/accounts/:id/earnings", async (req, reply) => {
@@ -94,13 +92,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
     const body = parseOrReject(createAccountSchema, req.body, reply);
     if (!body) return;
 
-    // Same gate as the PATCH below: a non-admin must not be able to set
-    // admin-only settings by supplying them at creation time (they'd otherwise
-    // stick forever, since the update path strips them).
-    const input =
-      req.session!.user.role === "ADMIN" ? body : stripAdminOnlyCreateFields(body);
-
-    const account = await accountsService.createAccount(input, req.session!).catch((err) => {
+    const account = await accountsService.createAccount(body, req.session!).catch((err) => {
       if (err.code === "P2002") {
         reply.code(409).send({ error: "Account name already exists" });
         return null;
@@ -133,11 +125,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
       return;
     }
 
-    // Non-admins may only change the basic account fields; anything admin-only
-    // is dropped server-side so a hand-crafted request can't bypass the UI.
-    const data = req.session!.user.role === "ADMIN" ? body : stripAdminOnlyFields(body);
-
-    const account = await accountsService.updateAccount(id, data).catch(() => null);
+    const account = await accountsService.updateAccount(id, body).catch(() => null);
     if (!account) {
       reply.code(404).send({ error: "Account not found" });
       return;

@@ -10,13 +10,13 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use azalea::container::ContainerHandleRef;
+use azalea::entity::InLoadedChunk;
 use azalea::movement::LastSentInput;
 use azalea::registry::builtin::BlockKind;
-use azalea::{BlockPos, Client};
+use azalea::{BlockPos, Client, InGameState};
 use azalea_inventory::components::{CustomName, Lore};
 use azalea_inventory::operations::{PickupClick, ThrowClick};
 use azalea_inventory::ItemStack;
-use rand::Rng;
 
 use crate::emit;
 use crate::protocol::{BehaviorConfig, Config, InventorySlot, OutEvent};
@@ -50,6 +50,9 @@ const SPAWN_STABILIZE_DELAY: Duration = Duration::from_millis(250);
 /// same-world teleports. Let the destination and inventory settle before the
 /// next sell cycle starts.
 const TELEPORT_STABILIZE_DELAY: Duration = Duration::from_millis(100);
+/// A proxy may omit/reorder Spawn during a transfer. Recover once the actual
+/// destination chunk and inventory are usable, after a bounded loading guard.
+const WORLD_TRANSITION_RECOVERY_DELAY: Duration = Duration::from_secs(5);
 /// A teleport command is paused immediately, even before its position packet
 /// arrives. This also covers rejected/slow commands without freezing forever.
 const TELEPORT_COMMAND_GUARD: Duration = Duration::from_millis(750);
@@ -63,10 +66,6 @@ const INVENTORY_BUSY_DELAY: Duration = Duration::from_millis(250);
 /// Repeated menu failures are logged at most this often. Retrying itself still
 /// follows the configured interval and is never slowed down by logging.
 const AUTOSELL_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(30);
-/// Ignore an identical `/tpaccept …` command if we already sent it within this
-/// window, to avoid reacting multiple times to a burst of duplicate server
-/// messages (request line + clickable hint often arrive together).
-const TPACCEPT_DEDUP: Duration = Duration::from_secs(4);
 /// How often the bot emits a heartbeat so the Node supervisor can tell a live
 /// (but silent) bot apart from a hung one and recycle the latter.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
@@ -101,7 +100,7 @@ const INVENTORY_RESYNC_DELAY: Duration = Duration::from_millis(300);
 /// Tracks one auto-sell cycle. Each cycle opens the sell menu, immediately
 /// shift-clicks the inventory and closes it again ("open/close principle") —
 /// the menu is never left open between cycles, so the bot's GUI is free for chat,
-/// scheduled commands and the spawner tasks in between.
+/// manual commands and the spawner tasks in between.
 #[derive(Clone, Copy)]
 enum AutoSellPhase {
     Idle,
@@ -128,7 +127,7 @@ enum AutoSellPhase {
 /// (pause/resume) system. Scheduling/timing lives in Node; this just ensures
 /// safe, non-overlapping execution.
 enum ForegroundTask {
-    /// Send a single chat line (e.g. a scheduled daily command).
+    /// Send a single chat line requested by the user.
     Chat { text: String, teleporting: bool },
     /// Right-click a nearby spawner and drop the items in its container.
     CleanSpawner,
@@ -187,9 +186,6 @@ struct SpawnerProgress {
 
 pub struct BehaviorState {
     config: BehaviorConfig,
-    last_auto_command_at: Instant,
-    /// Next due time for random-range auto-command mode.
-    next_random_auto_command_at: Option<Instant>,
     /// Earliest time a new auto-sell cycle may start. The timestamp is advanced
     /// when a command is sent, so a slow cycle never overlaps the next one.
     next_autosell_at: Instant,
@@ -202,18 +198,17 @@ pub struct BehaviorState {
     /// Azalea does not emit another Spawn for every Respawn packet. In that
     /// case the following position synchronization completes the world switch.
     awaiting_respawn_position: bool,
+    transition_recovery_at: Option<Instant>,
     /// Shared quiescence gate for spawn, teleports and asynchronous commands.
     automation_ready_at: Instant,
     /// A non-teleport foreground chat command may open its own menu (for
-    /// example `/homes`). Close only that command-owned menu after its guard;
+    /// example a manual command). Close only that command-owned menu after its guard;
     /// auto-sell itself never closes an unrelated pre-existing GUI.
     command_menu_close_at: Option<Instant>,
     /// Foreground one-shot tasks awaiting execution (see [`ForegroundTask`]).
     task_queue: VecDeque<ForegroundTask>,
     /// The foreground task currently mid-execution, if any.
     active_task: Option<ActiveTask>,
-    /// The last `/tpaccept …` command we sent and when, for de-duplication.
-    last_tpaccept: Option<(String, Instant)>,
     /// When set, emit a fresh inventory snapshot at this time (after an
     /// inventory move/drop, so the UI resyncs with the bot's real state once the
     /// click packets have been processed).
@@ -233,14 +228,6 @@ impl BehaviorState {
         Self {
             config: BehaviorConfig {
                 crouch_enabled: config.crouch_enabled,
-                auto_command_enabled: config.auto_command_enabled,
-                auto_command_text: config.auto_command_text.clone(),
-                auto_command_interval_minutes: config.auto_command_interval_minutes,
-                auto_command_span_enabled: config.auto_command_span_enabled,
-                auto_command_span_min_seconds: config.auto_command_span_min_seconds,
-                auto_command_span_max_seconds: config.auto_command_span_max_seconds,
-                tpauto_enabled: config.tpauto_enabled,
-                tpauto_allowlist: config.tpauto_allowlist.clone(),
                 autosell_enabled: config.autosell_enabled,
                 autosell_interval_seconds: config.autosell_interval_seconds,
                 autosell_command: config.autosell_command.clone(),
@@ -248,18 +235,16 @@ impl BehaviorState {
                 spawner_drop_items: config.spawner_drop_items.clone(),
                 spawner_sell_items: config.spawner_sell_items.clone(),
             },
-            last_auto_command_at: now,
-            next_random_auto_command_at: None,
             next_autosell_at: now,
             autosell_phase: AutoSellPhase::Idle,
             last_autosell_failure_log: None,
             spawned: false,
             awaiting_respawn_position: false,
+            transition_recovery_at: None,
             automation_ready_at: now,
             command_menu_close_at: None,
             task_queue: VecDeque::new(),
             active_task: None,
-            last_tpaccept: None,
             inventory_resync_at: None,
             last_inventory_sig: None,
             last_heartbeat_at: now,
@@ -273,26 +258,13 @@ impl BehaviorState {
             || self.config.autosell_interval_seconds != config.autosell_interval_seconds
             || self.config.autosell_command != config.autosell_command;
         self.config = config;
-        // Re-arm random scheduling from "now" whenever span settings change.
-        self.next_random_auto_command_at = None;
         if autosell_schedule_changed && self.config.autosell_enabled {
             let now = Instant::now();
             self.next_autosell_at = self.automation_ready_at.max(now);
         }
     }
 
-    /// Enqueue a scheduled chat command as a foreground one-shot task. Auto-sell
-    /// is paused until it runs, then resumed (handled by the tick loop).
-    pub fn enqueue_task(&mut self, text: String) {
-        let text = text.trim().to_string();
-        if !text.is_empty() {
-            let teleporting = is_teleport_command(&text);
-            self.task_queue
-                .push_back(ForegroundTask::Chat { text, teleporting });
-        }
-    }
-
-    /// Queue a user/background chat command through the same serialization
+    /// Queue a user chat command through the same serialization
     /// point as auto-sell. Teleport commands are urgent: they cancel an open
     /// sell GUI first, then run before ordinary queued work.
     pub fn enqueue_chat(&mut self, bot: &Client, text: String) {
@@ -376,11 +348,13 @@ impl BehaviorState {
     }
 
     /// Called for Login, including proxy server and dimension/world changes.
-    /// No automation is allowed again until the matching Spawn event arrives.
+    /// Automation resumes on Spawn, authoritative position synchronization,
+    /// or a loaded-world check when the proxy omits those events.
     pub fn on_login(&mut self, bot: &Client) {
         self.interrupt_for_transition(bot);
         self.spawned = false;
-        self.awaiting_respawn_position = false;
+        self.awaiting_respawn_position = true;
+        self.transition_recovery_at = Some(Instant::now() + WORLD_TRANSITION_RECOVERY_DELAY);
         self.crouch_resync_pending = true;
     }
 
@@ -396,6 +370,7 @@ impl BehaviorState {
         if self.awaiting_respawn_position {
             self.spawned = true;
             self.awaiting_respawn_position = false;
+            self.transition_recovery_at = None;
         }
         if !self.spawned {
             return;
@@ -416,6 +391,7 @@ impl BehaviorState {
         self.interrupt_for_transition(bot);
         self.spawned = true;
         self.awaiting_respawn_position = false;
+        self.transition_recovery_at = None;
         self.automation_ready_at = now + SPAWN_STABILIZE_DELAY;
         self.next_autosell_at = self.automation_ready_at;
         self.last_autosell_failure_log = None;
@@ -438,7 +414,7 @@ impl BehaviorState {
 
     pub fn on_tick(&mut self, bot: &Client) {
         let now = Instant::now();
-        let mut command_sent_this_tick = false;
+        self.recover_loaded_world(bot, now);
 
         // Only restore input once the destination is ready. Keep the pending
         // flag on failures so missing components during transfer are retried.
@@ -475,66 +451,7 @@ impl BehaviorState {
         let recovered_orphan_menu =
             automation_ready && self.recover_orphaned_autosell_menu(bot, now);
 
-        // Auto-command: type a configured chat message/command at a fixed
-        // interval. "Zeitspanne"
-        // (random-range) mode is its own independent toggle, so it must run
-        // even if the fixed-interval "Interval" toggle is off.
-        if automation_ready
-            && !recovered_orphan_menu
-            && (self.config.auto_command_enabled || self.config.auto_command_span_enabled)
-        {
-            let text = self.config.auto_command_text.trim().to_string();
-            if !text.is_empty() {
-                if self.config.auto_command_span_enabled {
-                    if self.next_random_auto_command_at.is_none() {
-                        self.next_random_auto_command_at =
-                            Some(now + random_auto_command_delay(&self.config));
-                    }
-                    if now >= self.next_random_auto_command_at.expect("set above")
-                        && matches!(self.autosell_phase, AutoSellPhase::Idle)
-                        && !self.foreground_busy()
-                        && self.command_menu_close_at.is_none()
-                        && (is_teleport_command(&text) || inventory_is_mutable(bot))
-                    {
-                        if is_teleport_command(&text) {
-                            self.close_open_menu(bot);
-                        }
-                        bot.chat(text.clone());
-                        command_sent_this_tick = true;
-                        self.guard_after_chat(now, is_teleport_command(&text));
-                        self.next_random_auto_command_at =
-                            Some(now + random_auto_command_delay(&self.config));
-                        emit(&OutEvent::BehaviorLog {
-                            message: format!("Auto-command sent (random range): {text}"),
-                        });
-                    }
-                } else {
-                    let interval =
-                        Duration::from_secs(self.config.auto_command_interval_minutes.max(1) * 60);
-                    if now.duration_since(self.last_auto_command_at) >= interval
-                        && matches!(self.autosell_phase, AutoSellPhase::Idle)
-                        && !self.foreground_busy()
-                        && self.command_menu_close_at.is_none()
-                        && (is_teleport_command(&text) || inventory_is_mutable(bot))
-                    {
-                        self.last_auto_command_at = now;
-                        if is_teleport_command(&text) {
-                            self.close_open_menu(bot);
-                        }
-                        bot.chat(text.clone());
-                        command_sent_this_tick = true;
-                        self.guard_after_chat(now, is_teleport_command(&text));
-                        emit(&OutEvent::BehaviorLog {
-                            message: format!("Auto-command sent: {text}"),
-                        });
-                    }
-                }
-            }
-        } else if !self.config.auto_command_enabled && !self.config.auto_command_span_enabled {
-            self.next_random_auto_command_at = None;
-        }
-
-        if automation_ready && !command_sent_this_tick && !recovered_orphan_menu {
+        if automation_ready && !recovered_orphan_menu {
             let foreground_ran = self.tick_foreground(bot, now);
             if !foreground_ran {
                 self.tick_autosell(bot, now);
@@ -607,7 +524,7 @@ impl BehaviorState {
                         bot.chat(text.clone());
                         self.guard_after_chat(now, teleporting);
                         emit(&OutEvent::BehaviorLog {
-                            message: format!("Scheduled command sent: {text}"),
+                            message: format!("Command sent: {text}"),
                         });
                     }
                     ForegroundTask::CleanSpawner if !inventory_is_mutable(bot) => {
@@ -963,6 +880,19 @@ impl BehaviorState {
                 started_empty,
                 menu_seen_at,
             } => {
+                // Check the deadline BEFORE looking at the GUI. Empty or
+                // half-loaded player slots after a teleport used to return
+                // above the timeout check and strand this phase forever.
+                if now.saturating_duration_since(since) >= autosell_menu_timeout(started_empty) {
+                    self.close_open_menu(bot);
+                    self.autosell_phase = AutoSellPhase::Idle;
+                    if started_empty && player_item_count(bot) > 0 {
+                        self.next_autosell_at = now + AUTOSELL_ORPHAN_RECOVERY_DELAY;
+                    } else if !started_empty {
+                        self.log_autosell_failure(now, "Verkaufsmenü ging nicht vollständig auf");
+                    }
+                    return;
+                }
                 // A real sell container is open once the menu id is non-zero AND
                 // the menu has slots in front of the player's own section.
                 if let Ok(inv) = bot.get_inventory() {
@@ -1010,23 +940,6 @@ impl BehaviorState {
                                 }
                             }
                         }
-                    }
-                }
-
-                let timeout = autosell_menu_timeout(started_empty);
-                if now.duration_since(since) >= timeout {
-                    self.close_open_menu(bot);
-                    self.autosell_phase = AutoSellPhase::Idle;
-                    if started_empty {
-                        // Empty is a normal no-op. Preserve the configured
-                        // cadence while it remains empty, but if drops arrived
-                        // during the probe retry immediately after the old
-                        // request has been fully retired.
-                        if player_item_count(bot) > 0 {
-                            self.next_autosell_at = now;
-                        }
-                    } else {
-                        self.log_autosell_failure(now, "Verkaufsmenü ging nicht auf");
                     }
                 }
             }
@@ -1091,70 +1004,26 @@ impl BehaviorState {
         }
     }
 
-    /// Handles an incoming chat/system message. When `tpauto` is enabled and the
-    /// message is an incoming `/tpa` request (someone wanting to teleport **to**
-    /// the bot), it accepts it. Requests where the bot would be teleported **to**
-    /// someone else (`/tpahere`) are deliberately ignored.
-    ///
-    /// Rather than guessing the server's phrasing, we look for the clickable
-    /// `/tpaccept …` command the server itself puts in the message and replay it
-    /// verbatim — this works across servers/languages (e.g. HugoSMP's
-    /// `/tpaccept <name> tpa`) and only falls back to a bare `/tpaccept` when no
-    /// such hint is present.
+    /// A server inventory-loading reply invalidates the current sell GUI.
     pub fn on_chat(&mut self, bot: &Client, message: &str) {
-        let now = Instant::now();
-        // Proxy networks reject commands while they are persisting/restoring
-        // the inventory. Treat that reply as a lifecycle signal: tear down the
-        // current menu, wait briefly, then resume at normal configured cadence.
         if is_inventory_busy_message(message) {
             self.interrupt_for_transition(bot);
-            self.postpone_automation_until(now + INVENTORY_BUSY_DELAY);
-            return;
+            self.postpone_automation_until(Instant::now() + INVENTORY_BUSY_DELAY);
         }
+    }
 
-        if !self.config.tpauto_enabled {
-            return;
-        }
-        let Some(command) = parse_tpa_accept_command(message) else {
-            return;
-        };
-
-        // Optional allowlist: when configured, only accept requests from the
-        // named players. The requester's name is the first real argument of the
-        // suggested `/tpaccept …` command (e.g. "/tpaccept Desmodus tpa").
-        if !self.config.tpauto_allowlist.is_empty() {
-            let target = tpaccept_target_name(&command);
-            let allowed = target.as_deref().is_some_and(|name| {
-                self.config
-                    .tpauto_allowlist
-                    .iter()
-                    .any(|allowed| allowed.trim().eq_ignore_ascii_case(name))
+    fn recover_loaded_world(&mut self, bot: &Client, now: Instant) {
+        if !self.spawned
+            && self.transition_recovery_at.is_some_and(|at| now >= at)
+            && bot.component::<InGameState>().is_ok()
+            && bot.component::<InLoadedChunk>().is_ok()
+            && bot.get_inventory().is_ok()
+        {
+            self.on_spawn(bot);
+            emit(&OutEvent::BehaviorLog {
+                message: "Weltwechsel abgeschlossen: Automation wieder aufgenommen".into(),
             });
-            if !allowed {
-                emit(&OutEvent::BehaviorLog {
-                    message: format!(
-                        "TPAuto: ignored teleport request from {} (not in allowlist)",
-                        target.as_deref().unwrap_or("unknown")
-                    ),
-                });
-                return;
-            }
         }
-
-        if let Some((last_cmd, last_at)) = &self.last_tpaccept {
-            if *last_cmd == command && now.duration_since(*last_at) < TPACCEPT_DEDUP {
-                return;
-            }
-        }
-        self.last_tpaccept = Some((command.clone(), now));
-
-        // TPA acceptance may itself trigger a position sync. It must never be
-        // sent while auto-sell owns a container; queue it first after forcibly
-        // closing/cancelling that sell cycle.
-        self.enqueue_chat(bot, command.clone());
-        emit(&OutEvent::BehaviorLog {
-            message: format!("TPAuto: teleport acceptance queued ({command})"),
-        });
     }
 }
 
@@ -1197,6 +1066,10 @@ fn is_teleport_command(text: &str) -> bool {
             | "back"
             | "rtp"
             | "wild"
+            | "tp"
+            | "tpa"
+            | "tpahere"
+            | "tphere"
             | "tpaccept"
             | "tpyes"
             | "is"
@@ -1214,20 +1087,6 @@ fn is_inventory_busy_message(message: &str) -> bool {
             || lower.contains("saving or loading")
             || lower.contains("being saved")
             || lower.contains("being loaded"))
-}
-
-fn random_auto_command_delay(cfg: &BehaviorConfig) -> Duration {
-    let mut min_s = cfg.auto_command_span_min_seconds.max(1);
-    let mut max_s = cfg.auto_command_span_max_seconds.max(1);
-    if min_s > max_s {
-        std::mem::swap(&mut min_s, &mut max_s);
-    }
-    let seconds = if min_s == max_s {
-        min_s
-    } else {
-        rand::thread_rng().gen_range(min_s..=max_s)
-    };
-    Duration::from_secs(seconds)
 }
 
 /// A cheap signature of the bot's current menu inventory (menu id + each slot's
@@ -1429,134 +1288,25 @@ fn find_spawner_in_reach(bot: &Client) -> Option<BlockPos> {
     .then_some(pos)
 }
 
-/// Words that commonly follow `/tpaccept` as prose rather than as real command
-/// arguments, used to stop argument collection when replaying a suggested
-/// command (English + German).
-const TPACCEPT_STOP_WORDS: &[&str] = &[
-    "to",
-    "the",
-    "this",
-    "that",
-    "and",
-    "or",
-    "type",
-    "click",
-    "accept",
-    "request",
-    "um",
-    "zu",
-    "die",
-    "der",
-    "den",
-    "das",
-    "und",
-    "oder",
-    "dich",
-    "dir",
-    "anfrage",
-    "annehmen",
-    "akzeptieren",
-    "tippe",
-    "schreibe",
-    "hier",
-    "klicke",
-];
-
-/// Returns true if `lower` (an already-lowercased message) describes a
-/// `/tpahere`-style request, i.e. one where the bot would teleport **to** the
-/// requester. Such requests must never be auto-accepted.
-fn is_tpahere_request(lower: &str) -> bool {
-    lower.contains("tpahere")
-        || lower.contains("teleport to them")
-        || lower.contains("teleport to their")
-        || lower.contains("you to teleport")
-        || lower.contains("that you teleport")
-        || lower.contains("dass du dich")
-        || lower.contains("zu ihm")
-        || lower.contains("zu ihr")
-        || lower.contains("zu sich")
-}
-
-/// Derives the exact `/tpaccept …` command to send for an incoming teleport
-/// request, or `None` if the message isn't an acceptable `/tpa` request.
-///
-/// We only act on the clickable/typed `/tpaccept …` command the server puts in
-/// the message. This is deliberate: it avoids firing twice when the request
-/// line and the accept hint arrive as separate messages, and it means we send
-/// exactly the command the server expects (including any trailing flag such as
-/// HugoSMP's `tpa`).
-fn parse_tpa_accept_command(message: &str) -> Option<String> {
-    let lower = message.to_lowercase();
-    if is_tpahere_request(&lower) {
-        return None;
-    }
-
-    let command = extract_tpaccept_command(message)?;
-    // A suggested command that itself targets tpahere must be ignored.
-    if command.to_lowercase().contains("tpahere") {
-        return None;
-    }
-    Some(command)
-}
-
-/// Finds a `/tpaccept` command suggestion inside `message` and reconstructs it,
-/// keeping only genuine command arguments (usernames / short flags like `tpa`)
-/// and dropping any surrounding prose.
-fn extract_tpaccept_command(message: &str) -> Option<String> {
-    let lower = message.to_lowercase();
-    let start = lower.find("/tpaccept")?;
-    // Limit to the remainder of the same line.
-    let rest = &message[start..];
-    let line = rest.split(['\n', '\r']).next().unwrap_or(rest);
-
-    let mut parts = line.split_whitespace();
-    parts.next(); // "/tpaccept" itself
-    let mut command = String::from("/tpaccept");
-    for token in parts {
-        let cleaned: String = token
-            .trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .to_string();
-        let valid = (1..=16).contains(&cleaned.len())
-            && cleaned
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if !valid || TPACCEPT_STOP_WORDS.contains(&cleaned.to_lowercase().as_str()) {
-            break;
-        }
-        command.push(' ');
-        command.push_str(&cleaned);
-    }
-    Some(command)
-}
-
-/// Extracts the requester's Minecraft name from a reconstructed `/tpaccept …`
-/// command — the first argument that isn't a `tpa`/`tpahere` flag. Returns
-/// `None` for a bare `/tpaccept`.
-fn tpaccept_target_name(command: &str) -> Option<String> {
-    command
-        .split_whitespace()
-        .skip(1) // "/tpaccept"
-        .find(|t| !t.eq_ignore_ascii_case("tpa") && !t.eq_ignore_ascii_case("tpahere"))
-        .map(|s| s.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
+    use azalea::client_chat::SendChatEvent;
     use azalea::ecs::prelude::*;
-    use azalea::entity::Jumping;
+    use azalea::entity::{inventory::Inventory, InLoadedChunk, Jumping};
+    use azalea::inventory::CloseContainerEvent;
     use azalea::movement::{send_player_input_packet, LastSentInput};
     use azalea::packet::game::SendGamePacketEvent;
     use azalea::protocol::packets::game::{ServerboundGamePacket, ServerboundPlayerInput};
-    use azalea::{Client, ClientMovementState};
+    use azalea::{Client, ClientMovementState, InGameState};
+    use azalea_inventory::Menu;
     use parking_lot::{Mutex, RwLock};
 
     use super::{
-        autosell_menu_timeout, is_inventory_busy_message, is_teleport_command,
-        parse_tpa_accept_command, tpaccept_target_name, BehaviorState,
-        AUTOSELL_EMPTY_PROBE_TIMEOUT, AUTOSELL_MENU_TIMEOUT,
+        autosell_menu_timeout, is_inventory_busy_message, is_teleport_command, AutoSellPhase,
+        BehaviorState, AUTOSELL_EMPTY_PROBE_TIMEOUT, AUTOSELL_MENU_TIMEOUT,
     };
 
     fn crouch_client(enabled: bool) -> (Client, BehaviorState, Arc<Mutex<Vec<bool>>>) {
@@ -1588,9 +1338,7 @@ mod tests {
         };
         let config = serde_json::from_value(serde_json::json!({
             "host": "localhost", "port": 25565, "auth_type": "offline",
-            "username": "Bot", "cache_dir": "", "crouch_enabled": enabled,
-            "auto_command_enabled": false, "auto_command_text": "",
-            "auto_command_interval_minutes": 5
+            "username": "Bot", "cache_dir": "", "crouch_enabled": enabled
         }))
         .unwrap();
         (client, BehaviorState::new(&config), packets)
@@ -1600,6 +1348,147 @@ mod tests {
         let mut schedule = Schedule::default();
         schedule.add_systems(send_player_input_packet);
         schedule.run(&mut client.ecs.write());
+    }
+
+    fn sell_client() -> (Client, BehaviorState) {
+        let (client, mut state, _) = crouch_client(false);
+        let mut world = client.ecs.write();
+        world.init_resource::<Messages<SendChatEvent>>();
+        world.entity_mut(client.entity).insert(Inventory::default());
+        world.add_observer(
+            |event: On<CloseContainerEvent>, mut inventories: Query<&mut Inventory>| {
+                let mut inventory = inventories.get_mut(event.entity).unwrap();
+                assert_eq!(event.id, inventory.id);
+                inventory.id = 0;
+                inventory.container_menu = None;
+            },
+        );
+        drop(world);
+        state.config.autosell_enabled = true;
+        state.config.autosell_interval_seconds = 0.25;
+        state.spawned = true;
+        (client, state)
+    }
+
+    fn open_empty_sell_menu(client: &Client) {
+        let mut world = client.ecs.write();
+        let mut inventory = world.get_mut::<Inventory>(client.entity).unwrap();
+        inventory.id = 7;
+        inventory.container_menu = Some(Menu::Generic9x3 {
+            contents: Default::default(),
+            player: Default::default(),
+        });
+    }
+
+    fn take_commands(client: &Client) -> Vec<String> {
+        client
+            .ecs
+            .write()
+            .resource_mut::<Messages<SendChatEvent>>()
+            .drain()
+            .map(|event| event.content)
+            .collect()
+    }
+
+    #[test]
+    fn half_loaded_sell_menu_times_out_and_another_sell_is_sent() {
+        // Both a newly opened shell and a previously seen shell with no
+        // authoritative player slots must obey the same deadline.
+        for already_seen in [false, true] {
+            let (client, mut state) = sell_client();
+            open_empty_sell_menu(&client);
+            let since = Instant::now();
+            state.autosell_phase = AutoSellPhase::WaitingForMenu {
+                since,
+                started_empty: false,
+                menu_seen_at: already_seen.then_some(since),
+            };
+            state.tick_autosell(&client, since + Duration::from_millis(50));
+            assert!(matches!(
+                state.autosell_phase,
+                AutoSellPhase::WaitingForMenu { .. }
+            ));
+            state.tick_autosell(&client, since + AUTOSELL_MENU_TIMEOUT);
+            assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
+            assert_eq!(client.get_inventory().unwrap().id(), 0);
+            state.tick_autosell(
+                &client,
+                since + AUTOSELL_MENU_TIMEOUT + Duration::from_millis(100),
+            );
+            assert_eq!(take_commands(&client), vec!["/sell"]);
+        }
+    }
+
+    #[test]
+    fn teleports_clear_stale_menu_and_resume_selling_without_spawn() {
+        let (client, mut state) = sell_client();
+        for command in ["/home farm", "/tpa Steve"] {
+            state.enqueue_chat(&client, command.to_string());
+            state.automation_ready_at = Instant::now();
+            state.on_tick(&client);
+            assert_eq!(take_commands(&client), vec![command]);
+            open_empty_sell_menu(&client);
+            state.autosell_phase = AutoSellPhase::WaitingForMenu {
+                since: Instant::now(),
+                started_empty: false,
+                menu_seen_at: None,
+            };
+            // Actual teleport completion interrupts any in-flight sell/menu.
+            state.on_position_sync(&client);
+            assert_eq!(client.get_inventory().unwrap().id(), 0);
+            state.automation_ready_at = Instant::now();
+            state.next_autosell_at = Instant::now();
+            state.on_tick(&client);
+            let commands = take_commands(&client);
+            assert!(commands.iter().any(|text| text == "/sell"));
+        }
+    }
+
+    #[test]
+    fn lobby_and_world_return_resume_selling_without_spawn_events() {
+        let (client, mut state) = sell_client();
+        state.on_chat(&client, "<HugoSMP> Diese Welt wird in 60 Sekunden neugestartet. Droppe am besten keine Items mehr!");
+        for _ in 0..2 {
+            open_empty_sell_menu(&client);
+            state.on_respawn(&client);
+            state.next_autosell_at = Instant::now();
+            state.on_tick(&client);
+            assert!(take_commands(&client).is_empty());
+            assert_eq!(client.get_inventory().unwrap().id(), 0);
+            // A return can take minutes; waiting longer must not change the
+            // ability to recover from the destination position packet.
+            state.transition_recovery_at = Some(Instant::now() - Duration::from_secs(300));
+            state.on_position_sync(&client);
+            state.automation_ready_at = Instant::now();
+            state.next_autosell_at = Instant::now();
+            state.on_tick(&client);
+            assert_eq!(take_commands(&client), vec!["/sell"]);
+        }
+    }
+
+    #[test]
+    fn missing_spawn_and_position_wait_for_loaded_chunk_then_resume_selling() {
+        let (client, mut state) = sell_client();
+        state.on_login(&client);
+        let after_guard = Instant::now() + Duration::from_secs(6);
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .insert(InGameState);
+        state.recover_loaded_world(&client, after_guard);
+        assert!(!state.spawned);
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .insert(InLoadedChunk);
+        state.recover_loaded_world(&client, after_guard);
+        assert!(state.spawned);
+        state.automation_ready_at = Instant::now();
+        state.next_autosell_at = Instant::now();
+        state.on_tick(&client);
+        assert_eq!(take_commands(&client), vec!["/sell"]);
     }
 
     #[test]
@@ -1710,74 +1599,5 @@ mod tests {
             "Your inventory is currently being loaded"
         ));
         assert!(!is_inventory_busy_message("Dein Inventar ist leer"));
-    }
-
-    #[test]
-    fn hugosmp_accept_hint_line() {
-        assert_eq!(
-            parse_tpa_accept_command("Annehmen - /tpaccept Desmodus tpa").as_deref(),
-            Some("/tpaccept Desmodus tpa")
-        );
-    }
-
-    #[test]
-    fn hugosmp_full_block() {
-        let msg = "[HugoSMP] Desmodus hat dir eine Teleportations-Anfrage gesendet!\n\
-                   Annehmen - /tpaccept Desmodus tpa\n\
-                   Ablehnen - /tpdeny Desmodus tpa";
-        assert_eq!(
-            parse_tpa_accept_command(msg).as_deref(),
-            Some("/tpaccept Desmodus tpa")
-        );
-    }
-
-    #[test]
-    fn ignores_tpahere_variant() {
-        assert_eq!(
-            parse_tpa_accept_command("Annehmen - /tpaccept Desmodus tpahere"),
-            None
-        );
-    }
-
-    #[test]
-    fn ignores_tpahere_german_request() {
-        let msg = "[HugoSMP] Desmodus möchte, dass du dich zu ihm teleportierst!\n\
-                   Annehmen - /tpaccept Desmodus tpahere";
-        assert_eq!(parse_tpa_accept_command(msg), None);
-    }
-
-    #[test]
-    fn request_line_without_hint_is_ignored() {
-        assert_eq!(
-            parse_tpa_accept_command(
-                "[HugoSMP] Desmodus hat dir eine Teleportations-Anfrage gesendet!"
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn essentials_style_bare_accept() {
-        assert_eq!(
-            parse_tpa_accept_command("To teleport, type /tpaccept.").as_deref(),
-            Some("/tpaccept")
-        );
-    }
-
-    #[test]
-    fn essentials_prose_after_command_is_dropped() {
-        assert_eq!(
-            parse_tpa_accept_command("Type /tpaccept to accept this request").as_deref(),
-            Some("/tpaccept")
-        );
-    }
-
-    #[test]
-    fn target_name_from_command() {
-        assert_eq!(
-            tpaccept_target_name("/tpaccept Desmodus tpa").as_deref(),
-            Some("Desmodus")
-        );
-        assert_eq!(tpaccept_target_name("/tpaccept").as_deref(), None);
     }
 }

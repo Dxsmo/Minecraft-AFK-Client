@@ -30,17 +30,6 @@ export interface Config {
 
   /** When true, continuously sneak/crouch. */
   crouch_enabled?: boolean;
-  auto_command_enabled: boolean;
-  auto_command_text: string;
-  auto_command_interval_minutes: number;
-  auto_command_span_enabled?: boolean;
-  auto_command_span_min_seconds?: number;
-  auto_command_span_max_seconds?: number;
-
-  /** Auto-accept incoming /tpa teleport requests (but never /tpahere). */
-  tpauto_enabled?: boolean;
-  /** If non-empty, only auto-accept /tpa from these names (case-insensitive). */
-  tpauto_allowlist?: string[];
   autosell_enabled?: boolean;
   autosell_interval_seconds?: number;
   autosell_command?: string;
@@ -49,14 +38,6 @@ export interface Config {
 /** Behavior-only subset of Config, re-sent later to update settings live. */
 export interface BehaviorConfig {
   crouch_enabled?: boolean;
-  auto_command_enabled: boolean;
-  auto_command_text: string;
-  auto_command_interval_minutes: number;
-  auto_command_span_enabled?: boolean;
-  auto_command_span_min_seconds?: number;
-  auto_command_span_max_seconds?: number;
-  tpauto_enabled?: boolean;
-  tpauto_allowlist?: string[];
   autosell_enabled?: boolean;
   autosell_interval_seconds?: number;
   autosell_command?: string;
@@ -66,7 +47,6 @@ export interface BehaviorConfig {
 export type Command =
   | { type: "chat"; text: string }
   | ({ type: "configure" } & BehaviorConfig)
-  | { type: "run_task"; text: string }
   | { type: "clean_spawner" }
   | { type: "request_inventory" }
   | { type: "move_item"; from: number; to: number }

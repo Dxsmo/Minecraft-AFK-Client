@@ -47,26 +47,10 @@ export interface ClientRuntimeConfig {
   credentialsPassword: string | null;
   crouchEnabled: boolean;
   autoReconnect: boolean;
-  autoCommandEnabled: boolean;
-  autoCommandText: string;
-  autoCommandIntervalMinutes: number;
-  autoCommandSpanEnabled: boolean;
-  autoCommandSpanMinSeconds: number;
-  autoCommandSpanMaxSeconds: number;
-  /** Auto-accept incoming /tpa teleport requests (never /tpahere). */
-  tpAutoEnabled: boolean;
-  /** Only auto-accept /tpa from these Minecraft names; empty = accept anyone. */
-  tpAutoAllowlist: string[];
   /** Periodically run the sell command and move all items into the sell menu. */
   autoSellEnabled: boolean;
   autoSellIntervalSeconds: number;
   autoSellCommand: string;
-  /** Fire the auto-command text at fixed times of day (see dailyCommandTimes). */
-  dailyCommandEnabled: boolean;
-  /** Times of day ("HH:MM", server local time) to run the auto-command once each. */
-  dailyCommandTimes: string[];
-  /** Persisted /homes names from previous joins. */
-  homes: string[];
   /** Configured spawner type id ("" = unconfigured, uses the legacy clear-all). */
   spawnerType: string;
   /** Item ids to throw out of the spawner when it is cleared. */
@@ -102,8 +86,6 @@ export interface ClientStatusSnapshot {
   msaSignIn?: MsaSignInPrompt;
   /** True once the Microsoft profile has been resolved (device-code sign-in completed). */
   authenticated?: boolean;
-  /** Last discovered /homes names for this account. */
-  homes?: string[];
 }
 
 /** A single occupied inventory slot in a live inventory snapshot. */

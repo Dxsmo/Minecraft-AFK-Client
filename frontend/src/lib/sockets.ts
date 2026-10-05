@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConsoleLogEntry, LiveStatus, SniperLiveStatus } from "./types";
+import { api } from "./api";
+
+const MAX_ACCOUNT_CONSOLE_LOGS = 20_000;
+const CONSOLE_HISTORY_PAGE_SIZE = 2000;
 
 export interface ConsoleEventMsg {
   type: "history" | "console" | "status" | "error";
@@ -20,9 +24,24 @@ export function useAccountConsole(accountId: string | undefined) {
   const [status, setStatus] = useState<LiveStatus | null>(null);
   const [connected, setConnected] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
+  const olderCursorRef = useRef<string | null>(null);
+  const loadingOlderRef = useRef(false);
+  const currentAccountRef = useRef(accountId);
+  currentAccountRef.current = accountId;
+  const [hasOlderLogs, setHasOlderLogs] = useState(false);
+  const [loadingOlderLogs, setLoadingOlderLogs] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!accountId) return;
+    setLogs([]);
+    setStatus(null);
+    setConnected(false);
+    setHasOlderLogs(false);
+    setHistoryError(null);
+    olderCursorRef.current = null;
+    loadingOlderRef.current = false;
+    setLoadingOlderLogs(false);
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout>;
 
@@ -31,20 +50,25 @@ export function useAccountConsole(accountId: string | undefined) {
       const socket = new WebSocket(`${proto}://${window.location.host}/ws/accounts/${accountId}`);
       socketRef.current = socket;
 
-      socket.onopen = () => setConnected(true);
+      socket.onopen = () => { if (!cancelled) setConnected(true); };
       socket.onclose = () => {
-        setConnected(false);
-        if (!cancelled) retryTimer = setTimeout(connect, 3000);
+        if (!cancelled) {
+          setConnected(false);
+          retryTimer = setTimeout(connect, 3000);
+        }
       };
       socket.onerror = () => socket.close();
       socket.onmessage = (ev) => {
+        if (cancelled || socketRef.current !== socket) return;
         const msg: ConsoleEventMsg = JSON.parse(ev.data);
         if (msg.type === "history" && msg.logs) {
           setLogs(msg.logs);
+          olderCursorRef.current = msg.logs[0]?.id ?? null;
+          setHasOlderLogs(msg.logs.length === CONSOLE_HISTORY_PAGE_SIZE);
         } else if (msg.type === "console" && msg.event) {
           const e = msg.event;
           setLogs((prev) => [
-            ...prev.slice(-499),
+            ...prev.slice(-(MAX_ACCOUNT_CONSOLE_LOGS - 1)),
             { id: `${e.timestamp}-${Math.random()}`, minecraftAccountId: e.minecraftAccountId, type: e.type, message: e.message, createdAt: e.timestamp },
           ]);
         } else if (msg.type === "status" && msg.status) {
@@ -66,7 +90,38 @@ export function useAccountConsole(accountId: string | undefined) {
       socketRef.current.send(JSON.stringify({ type: "command", command }));
   }
 
-  return { logs, status, connected, sendCommand };
+  async function loadOlderLogs() {
+    if (!accountId || !olderCursorRef.current || loadingOlderRef.current) return;
+    const requestAccount = accountId;
+    const cursor = olderCursorRef.current;
+    loadingOlderRef.current = true;
+    setLoadingOlderLogs(true);
+    setHistoryError(null);
+    try {
+      const older = await api.get<ConsoleLogEntry[]>(
+        `/minecraft/accounts/${accountId}/logs?limit=${CONSOLE_HISTORY_PAGE_SIZE}&before=${encodeURIComponent(cursor)}`,
+      );
+      if (currentAccountRef.current !== requestAccount || olderCursorRef.current !== cursor) return;
+      olderCursorRef.current = older[0]?.id ?? null;
+      setHasOlderLogs(older.length === CONSOLE_HISTORY_PAGE_SIZE);
+      setLogs((prev) => {
+        const known = new Set(prev.map((log) => log.id));
+        return [...older.filter((log) => !known.has(log.id)), ...prev].slice(-MAX_ACCOUNT_CONSOLE_LOGS);
+      });
+    } catch {
+      if (currentAccountRef.current === requestAccount) setHistoryError("Ältere Logs konnten nicht geladen werden. Bitte erneut versuchen.");
+    } finally {
+      if (currentAccountRef.current === requestAccount) {
+        loadingOlderRef.current = false;
+        setLoadingOlderLogs(false);
+      }
+    }
+  }
+
+  return {
+    logs, status, connected, sendCommand, loadOlderLogs, loadingOlderLogs, historyError,
+    hasOlderLogs: hasOlderLogs && logs.length < MAX_ACCOUNT_CONSOLE_LOGS,
+  };
 }
 
 /** Live status snapshots for every account visible to the current user. */

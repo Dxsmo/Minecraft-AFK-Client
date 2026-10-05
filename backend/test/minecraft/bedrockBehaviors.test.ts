@@ -14,11 +14,10 @@ describe("Bedrock crouch after world transitions", () => {
   });
 
   function setup(crouch = true) {
-    const sender = { setSneak: vi.fn() };
+    const sender = { setSneak: vi.fn(), command: vi.fn(), send: vi.fn() };
     const config: Config = {
       host: "localhost", port: 19132, auth_type: "offline", username: "Bot",
       cache_dir: "", crouch_enabled: crouch,
-      auto_command_enabled: false, auto_command_text: "", auto_command_interval_minutes: 5,
     };
     return { sender, behavior: new BehaviorState(config, sender as unknown as BotSender) };
   }
@@ -64,5 +63,34 @@ describe("Bedrock crouch after world transitions", () => {
     vi.advanceTimersByTime(150);
     behavior.onTick();
     expect(sender.setSneak).not.toHaveBeenCalled();
+  });
+
+  it("resumes auto-sell on the authoritative teleport without a second spawn event", () => {
+    const { sender, behavior } = setup();
+    behavior.updateConfig({ crouch_enabled: true, autosell_enabled: true, autosell_interval_seconds: 1 });
+    behavior.markSpawned();
+    vi.advanceTimersByTime(300);
+    behavior.onTick();
+    expect(sender.command).toHaveBeenCalledExactlyOnceWith("/sell");
+    for (let i = 0; i < 2; i++) {
+      behavior.markJoining();
+      vi.advanceTimersByTime(3 * 60_000);
+      behavior.onTick();
+      expect(sender.command).toHaveBeenCalledTimes(i + 1);
+      behavior.markTeleported();
+      vi.advanceTimersByTime(150);
+      behavior.onTick();
+      expect(sender.command).toHaveBeenCalledTimes(i + 2);
+    }
+  });
+
+  it("never accepts teleport requests automatically, even with legacy settings", () => {
+    const { sender, behavior } = setup();
+    behavior.updateConfig({ crouch_enabled: true, tpauto_enabled: true } as any);
+    behavior.markSpawned();
+    behavior.onChat("Steve", "Steve wants to teleport to you. /tpaccept Steve tpa");
+    vi.advanceTimersByTime(300);
+    behavior.onTick();
+    expect(sender.send).not.toHaveBeenCalled();
   });
 });

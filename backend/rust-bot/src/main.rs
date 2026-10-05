@@ -249,7 +249,7 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
         }
         Event::Login => {
             // Login is emitted again for proxy/dimension world changes, before
-            // the new world is ready. Pause all automation until Spawn.
+            // the new world is ready. Pause automation until the destination loads.
             shared().lock().behavior.on_login(&bot);
             emit(&OutEvent::Login);
         }
@@ -261,7 +261,7 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
         }
         Event::Chat(packet) => {
             let (sender, message) = packet.split_sender_and_content();
-            // Auto-accept /tpa requests before the message is moved into the event.
+            // Process inventory lifecycle messages before forwarding the chat.
             shared().lock().behavior.on_chat(&bot, &message);
             emit(&OutEvent::Chat { sender, message });
         }
@@ -287,7 +287,6 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
                 match cmd {
                     Command::Chat { text } => shared().lock().behavior.enqueue_chat(&bot, text),
                     Command::Configure(cfg) => shared().lock().behavior.update_config(cfg),
-                    Command::RunTask { text } => shared().lock().behavior.enqueue_task(text),
                     Command::CleanSpawner => shared().lock().behavior.enqueue_clean_spawner(),
                     Command::RequestInventory => shared().lock().behavior.emit_inventory(&bot),
                     Command::MoveItem { from, to } => {

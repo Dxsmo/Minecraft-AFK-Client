@@ -18,7 +18,7 @@ export function AccountDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [command, setCommand] = useState("");
   const [tab, setTab] = useState<"console" | "inventory" | "settings">("console");
-  const { logs, status, sendCommand } = useAccountConsole(id);
+  const { logs, status, sendCommand, loadOlderLogs, loadingOlderLogs, hasOlderLogs, historyError } = useAccountConsole(id);
   const inputRef = useRef<HTMLInputElement>(null);
   const isAdmin = user?.role === "ADMIN";
   const isCreator = !!account && !!user && account.createdBy?.id === user.id;
@@ -98,7 +98,6 @@ export function AccountDetailPage() {
   const liveStatus = status?.status ?? account.status;
   const displayName = account.displayName?.trim() || status?.name || account.name;
   const msaSignIn = status?.msaSignIn;
-  const homes = status?.status === "ONLINE" ? status.homes ?? [] : account.homes ?? [];
 
   return (
     <div className="space-y-5">
@@ -253,6 +252,12 @@ export function AccountDetailPage() {
       {tab === "console" && (
         <div key="console" className="tab-panel space-y-3">
           <ConsoleView logs={logs} className="h-[560px]" />
+          {hasOlderLogs && (
+            <button type="button" onClick={() => void loadOlderLogs()} disabled={loadingOlderLogs} className="btn btn-secondary btn-sm">
+              {loadingOlderLogs ? "Logs werden geladen…" : "Ältere Logs laden"}
+            </button>
+          )}
+          {historyError && <p className="alert-error">{historyError}</p>}
           <form onSubmit={handleSendCommand} className="flex gap-2">
             <input
               ref={inputRef}
@@ -266,29 +271,6 @@ export function AccountDetailPage() {
               Send
             </button>
           </form>
-          {isAdmin && homes.length > 0 && (
-            <div
-              className="rounded-xl p-2.5"
-              style={{ border: "1px solid var(--border)", backgroundColor: "var(--surface)" }}
-            >
-              <div className="mb-2 text-center text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
-                Homes
-              </div>
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                {homes.map((home) => (
-                  <button
-                    key={home}
-                    type="button"
-                    onClick={() => sendCommand(`/home ${home}`)}
-                    className="btn btn-secondary btn-sm"
-                    disabled={liveStatus !== "ONLINE"}
-                  >
-                    Home {home}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
           {id && <EarningsBox accountId={id} />}
         </div>
       )}
@@ -308,7 +290,6 @@ export function AccountDetailPage() {
             users={users}
             canManageAccess={canManageAccess}
             currentUserId={user?.id}
-            isAdmin={isAdmin}
             onUpdated={load}
           />
         </div>
