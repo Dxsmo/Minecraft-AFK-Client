@@ -85,7 +85,7 @@ function baseConfig(overrides: Partial<ClientRuntimeConfig> = {}): ClientRuntime
   };
 }
 
-const active: Array<{ disconnect: () => void }> = [];
+const active: Array<{ disconnect: () => void; dispose: () => void }> = [];
 function makeClient(overrides: Partial<ClientRuntimeConfig> = {}) {
   const client = new MinecraftClient(baseConfig(overrides));
   active.push(client);
@@ -145,6 +145,49 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     const commands = lastChild().stdin.write.mock.calls.map(([line]) => JSON.parse(line));
     expect(commands.filter((cmd) => cmd.type === "chat").map((cmd) => cmd.text)).toEqual(["/sethome farm"]);
     expect(client.getStatus()).not.toHaveProperty("homes");
+  });
+
+  it.each(["JAVA", "BEDROCK"] as const)("sends no automatic commands on %s joins or reconnects with legacy home settings", async (edition) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const client = makeClient({
+        edition,
+        ...{
+          homes: ["farm"],
+          autoCommandEnabled: true,
+          autoCommandText: "/homes",
+          autoCommandIntervalMinutes: 5,
+          dailyCommandEnabled: true,
+          dailyCommandTimes: ["00:00"],
+        },
+      });
+      client.connect();
+      for (let join = 0; join < 2; join++) {
+        const child = lastChild();
+        child.send({ type: "login" });
+        child.send({ type: "spawn" });
+        await tick();
+        // Exercise the real scheduling interval and delayed join callbacks.
+        // Heartbeats keep the unrelated online watchdog from recycling the bot.
+        for (let interval = 0; interval < 12; interval++) {
+          child.send({ type: "heartbeat" });
+          await tick();
+          vi.advanceTimersByTime(30_000);
+        }
+        const messages = child.stdin.write.mock.calls.map(([line]) => JSON.parse(line));
+        expect(messages.filter((message) => message.type === "chat" || message.type === "run_task")).toEqual([]);
+        expect(messages[0]).not.toHaveProperty("auto_command_text");
+        if (join === 0) {
+          child.exitWith(1);
+          await tick();
+          vi.advanceTimersByTime(32_000);
+          expect(children).toHaveLength(2);
+        }
+      }
+    } finally {
+      for (const client of active) client.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("goes OFFLINE on manual disconnect", () => {
