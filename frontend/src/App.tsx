@@ -13,6 +13,8 @@ const NameSniperPage = lazy(() => import("./pages/NameSniperPage").then((module)
 const SniperAccountDetailPage = lazy(() => import("./pages/SniperAccountDetailPage").then((module) => ({ default: module.SniperAccountDetailPage })));
 const ItemWorthPage = lazy(() => import("./pages/ItemWorthPage").then((module) => ({ default: module.ItemWorthPage })));
 
+const MinigamesModule = lazy(() => import("./modules/minigames/MinigamesModule").then(module => ({ default: module.MinigamesModule })));
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -28,6 +30,7 @@ export default function App() {
                 <Route path="/settings" element={<SettingsPage />} />
 
                 <Route element={<RequireAdmin />}>
+                  <Route path="/minigames/*" element={<MinigamesModule />} />
                   <Route path="/namesniper" element={<NameSniperPage />} />
                   <Route path="/namesniper/:id" element={<SniperAccountDetailPage />} />
                   <Route path="/item-worth" element={<ItemWorthPage />} />

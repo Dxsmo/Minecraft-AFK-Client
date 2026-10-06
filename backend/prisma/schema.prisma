@@ -394,3 +394,95 @@ model ItemWorthRunValue {
   @@unique([runId, itemId])
   @@index([runId, recordedAt])
 }
+
+// Isolated minigame domain. Aggregate snapshots keep game-specific data versioned.
+model MinigameLobby {
+  id String @id
+  code String @unique
+  hostUuid String
+  game String
+  network String
+  state String
+  snapshot String
+  revision Int @default(0)
+  createdAt DateTime @default(now())
+  startedAt DateTime?
+  finishedAt DateTime?
+  members MinigameMember[]
+  events MinigameEvent[]
+  @@index([state, createdAt])
+}
+model MinigameMember {
+  id String @id @default(cuid())
+  lobbyId String
+  playerUuid String
+  activePlayer String? @unique
+  snapshot String
+  lobby MinigameLobby @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  @@unique([lobbyId, playerUuid])
+}
+model MinigameEvent {
+  id String @id @default(cuid())
+  lobbyId String?
+  playerUuid String?
+  game String?
+  type String
+  details String
+  createdAt DateTime @default(now())
+  lobby MinigameLobby? @relation(fields: [lobbyId], references: [id], onDelete: SetNull)
+  @@index([lobbyId, createdAt])
+  @@index([playerUuid, createdAt])
+  @@index([type, createdAt])
+}
+model MinigamePlayer {
+  uuid String @id
+  name String
+  minecraftVersion String
+  modVersion String
+  protocolVersion Int
+  network String
+  capabilities String
+  itemIds String
+  streamerMode Boolean @default(false)
+  connectionState String @default("DISCONNECTED")
+  lastSeen DateTime @default(now())
+}
+model MinigameSession {
+  tokenHash String @id
+  playerUuid String
+  expiresAt DateTime
+  @@index([expiresAt])
+}
+model MinigameChallenge {
+  id String @id
+  serverId String
+  name String
+  expiresAt DateTime
+}
+model MinigameContent {
+  id String @id
+  kind String
+  data String
+  enabled Boolean @default(true)
+  updatedAt DateTime @updatedAt
+  @@index([kind, enabled])
+}
+model MinigameStats {
+  id String @id @default(cuid())
+  playerUuid String
+  game String
+  gamesPlayed Int @default(0)
+  wins Int @default(0)
+  losses Int @default(0)
+  draws Int @default(0)
+  metrics String @default("{}")
+  @@unique([playerUuid, game])
+}
+
+model MinigameReceipt {
+  id String @id
+  playerUuid String
+  hash String
+  expiresAt DateTime
+  @@index([expiresAt])
+}

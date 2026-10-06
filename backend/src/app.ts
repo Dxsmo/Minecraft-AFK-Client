@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import minigameRoutes from "./minigames/routes.js";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
@@ -73,6 +74,7 @@ export async function buildApp() {
   await app.register(auditLogRoutes);
   await app.register(securityRoutes);
   await app.register(registerWebsocketRoutes);
+  await app.register(minigameRoutes);
 
   app.get("/api/health", async () => ({ status: "ok" }));
 

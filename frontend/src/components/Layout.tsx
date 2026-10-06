@@ -2,7 +2,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useAuth } from "../lib/auth";
 
-type IconName = "dashboard" | "sniper" | "worth" | "users" | "logs" | "settings";
+type IconName = "minigames" | "dashboard" | "sniper" | "worth" | "users" | "logs" | "settings";
 
 function Icon({ name }: { name: IconName }) {
   const common = {
@@ -16,6 +16,8 @@ function Icon({ name }: { name: IconName }) {
     strokeLinejoin: "round" as const,
   };
   switch (name) {
+    case "minigames":
+      return <svg {...common}><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M7 10v4M5 12h4M16 10h.01M19 14h.01"/></svg>;
     case "dashboard":
       return (
         <svg {...common}>
@@ -71,6 +73,7 @@ function Icon({ name }: { name: IconName }) {
 const navItems: { to: string; label: string; icon: IconName; adminOnly: boolean }[] = [
   { to: "/dashboard", label: "Dashboard", icon: "dashboard", adminOnly: false },
   { to: "/namesniper", label: "Name Sniper", icon: "sniper", adminOnly: true },
+  { to: "/minigames", label: "Minigames", icon: "minigames", adminOnly: true },
   { to: "/item-worth", label: "Item Wert", icon: "worth", adminOnly: true },
   { to: "/users", label: "Users", icon: "users", adminOnly: true },
   { to: "/logs", label: "Audit Logs", icon: "logs", adminOnly: true },
