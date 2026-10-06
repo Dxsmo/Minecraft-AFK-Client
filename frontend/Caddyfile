@@ -16,6 +16,20 @@ log {
 }
 
 # API + WebSocket traffic goes to the backend container.
+# The mod uses an API-only gateway. It never serves website pages or the
+# admin endpoints; Minecraft proof and lobby authorization still run in Fastify.
+@ghgames path /ghgames /ghgames/*
+handle @ghgames {
+	uri strip_prefix /ghgames
+	@player_api path /api/health /api/minigames/auth/challenge /api/minigames/auth/session /api/minigames/content /api/minigames/photos /api/minigames/photos/* /ws/minigames
+	handle @player_api {
+		reverse_proxy backend:4000
+	}
+	handle {
+		respond "Not found" 404
+	}
+}
+
 handle /api/* {
 	reverse_proxy backend:4000
 }
