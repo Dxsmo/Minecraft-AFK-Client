@@ -22,10 +22,8 @@ use azalea_inventory::operations::{PickupClick, ThrowClick};
 use azalea_inventory::ItemStack;
 
 use crate::emit;
-use crate::protocol::{BehaviorConfig, Config, InventorySlot, OutEvent};
+use crate::protocol::{BehaviorConfig, Config, OutEvent};
 
-/// Quietly recheck stale empty inventory snapshots without menu spam.
-const AUTOSELL_EMPTY_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 /// Allow slow servers/proxies to finish opening and synchronizing the menu.
 /// Healthy cycles still proceed immediately; this only bounds missing replies.
 const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_secs(5);
@@ -90,11 +88,6 @@ const SPAWNER_MAX_STEPS: u32 = 200;
 const SPAWNER_KEEP_STACKS: usize = 1;
 /// Keywords identifying the spawner GUI's sell button by item name/lore.
 const SPAWNER_SELL_KEYWORDS: [&str; 6] = ["verkauf", "sell", "vend", "money", "geld", "$"];
-/// After an inventory move/drop, wait this long before emitting a fresh
-/// snapshot so the server's click acknowledgement has been applied and the UI
-/// resyncs with the bot's real inventory state.
-const INVENTORY_RESYNC_DELAY: Duration = Duration::from_millis(300);
-
 /// Tracks one auto-sell cycle. Each cycle opens the sell menu, immediately
 /// shift-clicks the inventory and closes it again ("open/close principle") —
 /// the menu is never left open between cycles, so the bot's GUI is free for chat,
@@ -130,10 +123,6 @@ enum ForegroundTask {
     Chat { text: String, teleporting: bool },
     /// Right-click a nearby spawner and drop the items in its container.
     CleanSpawner,
-    /// Move an item between two of the bot's own inventory slots.
-    MoveItem { from: u16, to: u16 },
-    /// Drop the whole stack in one of the bot's own inventory slots.
-    DropItem { slot: u16 },
 }
 
 /// A foreground task that is mid-execution and spans multiple ticks.
@@ -188,7 +177,8 @@ pub struct BehaviorState {
     /// Earliest time a new auto-sell cycle may start. The timestamp is advanced
     /// when a command is sent, so a slow cycle never overlaps the next one.
     next_autosell_at: Instant,
-    next_empty_probe_at: Instant,
+    /// Independent of spawn/teleport/config guards, which may be reset at any time.
+    restart_sell_pause: Option<(Instant, Instant)>,
     manual_chat_queue: VecDeque<String>,
     autosell_phase: AutoSellPhase,
     last_autosell_failure_log: Option<Instant>,
@@ -210,14 +200,6 @@ pub struct BehaviorState {
     task_queue: VecDeque<ForegroundTask>,
     /// The foreground task currently mid-execution, if any.
     active_task: Option<ActiveTask>,
-    /// When set, emit a fresh inventory snapshot at this time (after an
-    /// inventory move/drop, so the UI resyncs with the bot's real state once the
-    /// click packets have been processed).
-    inventory_resync_at: Option<Instant>,
-    /// Signature of the last inventory we emitted, so we can push a fresh
-    /// snapshot whenever the bot's real inventory changes (e.g. after the server
-    /// corrects a rejected click) instead of relying only on a fixed delay.
-    last_inventory_sig: Option<u64>,
     last_heartbeat_at: Instant,
     /// Re-send held crouch after a world/position transition has settled.
     crouch_resync_pending: bool,
@@ -237,7 +219,12 @@ impl BehaviorState {
                 spawner_sell_items: config.spawner_sell_items.clone(),
             },
             next_autosell_at: now,
-            next_empty_probe_at: now + AUTOSELL_EMPTY_PROBE_INTERVAL,
+            restart_sell_pause: (config.autosell_resume_after_ms > 0).then(|| {
+                (
+                    now + Duration::from_millis(config.autosell_pause_after_ms),
+                    now + Duration::from_millis(config.autosell_resume_after_ms),
+                )
+            }),
             manual_chat_queue: VecDeque::new(),
             autosell_phase: AutoSellPhase::Idle,
             last_autosell_failure_log: None,
@@ -248,8 +235,6 @@ impl BehaviorState {
             command_menu_close_at: None,
             task_queue: VecDeque::new(),
             active_task: None,
-            inventory_resync_at: None,
-            last_inventory_sig: None,
             last_heartbeat_at: now,
             crouch_resync_pending: false,
         }
@@ -317,22 +302,19 @@ impl BehaviorState {
         }
     }
 
-    /// Enqueue an inventory move as a foreground one-shot task so it never runs
-    /// concurrently with auto-sell or another Minecraft action.
-    pub fn enqueue_move_item(&mut self, from: u16, to: u16) {
-        self.task_queue
-            .push_back(ForegroundTask::MoveItem { from, to });
+    pub fn pause_autosell(&mut self, after_ms: u64, resume_ms: u64) {
+        let now = Instant::now();
+        self.restart_sell_pause = (resume_ms > 0).then(|| {
+            (
+                now + Duration::from_millis(after_ms),
+                now + Duration::from_millis(resume_ms),
+            )
+        });
     }
 
-    /// Enqueue an inventory drop as a foreground one-shot task.
-    pub fn enqueue_drop_item(&mut self, slot: u16) {
-        self.task_queue.push_back(ForegroundTask::DropItem { slot });
-    }
-
-    /// Emit a live snapshot of the bot's own inventory. Read-only, so it is not
-    /// routed through the task queue.
-    pub fn emit_inventory(&self, bot: &Client) {
-        emit_inventory_snapshot(bot);
+    fn sell_paused(&self, now: Instant) -> bool {
+        self.restart_sell_pause
+            .is_some_and(|(start, end)| now >= start && now < end)
     }
 
     /// True while a foreground one-shot task is queued or running; auto-sell must
@@ -437,6 +419,12 @@ impl BehaviorState {
     pub fn on_tick(&mut self, bot: &Client) {
         let now = Instant::now();
         self.recover_loaded_world(bot, now);
+        // Cancel menu interactions at the pause boundary before any more sell clicks.
+        if self.sell_paused(now)
+            && (!matches!(self.autosell_phase, AutoSellPhase::Idle) || self.active_task.is_some())
+        {
+            self.interrupt_for_transition(bot);
+        }
 
         // Only restore input once the destination is ready. Keep the pending
         // flag on failures so missing components during transfer are retried.
@@ -479,27 +467,6 @@ impl BehaviorState {
             let foreground_ran = self.tick_foreground(bot, now);
             if !foreground_ran {
                 self.tick_autosell(bot, now);
-            }
-        }
-
-        // Deferred inventory resync after a move/drop, so the UI reflects the
-        // bot's real inventory once the server has acknowledged the click.
-        if let Some(at) = self.inventory_resync_at {
-            if now >= at {
-                self.inventory_resync_at = None;
-                emit_inventory_snapshot(bot);
-                self.last_inventory_sig = inventory_signature(bot);
-            }
-        }
-
-        // Push a fresh snapshot whenever the bot's real inventory changes (item
-        // pickups, server corrections of a rejected click, etc.). This is what
-        // keeps a dropped stack from lingering as a "ghost" in the UI: once the
-        // server sends its authoritative slot update, we detect it and re-emit.
-        if let Some(sig) = inventory_signature(bot) {
-            if self.last_inventory_sig != Some(sig) {
-                self.last_inventory_sig = Some(sig);
-                emit_inventory_snapshot(bot);
             }
         }
 
@@ -551,7 +518,9 @@ impl BehaviorState {
                             message: format!("Command sent: {text}"),
                         });
                     }
-                    ForegroundTask::CleanSpawner if !inventory_is_mutable(bot) => {
+                    ForegroundTask::CleanSpawner
+                        if self.sell_paused(now) || !inventory_is_mutable(bot) =>
+                    {
                         self.task_queue.push_front(ForegroundTask::CleanSpawner);
                         return true;
                     }
@@ -582,31 +551,6 @@ impl BehaviorState {
                             message: "Finden von Spawner fehlgeschlagen".into(),
                         }),
                     },
-                    ForegroundTask::MoveItem { from, to } => {
-                        if inventory_is_mutable(bot) {
-                            // Pick the stack up from `from`, then put it down on
-                            // `to` — two left clicks, exactly like a player would.
-                            let inv = bot.get_inventory().expect("inventory present");
-                            inv.click(PickupClick::Left { slot: Some(from) });
-                            inv.click(PickupClick::Left { slot: Some(to) });
-                            self.inventory_resync_at = Some(now + INVENTORY_RESYNC_DELAY);
-                        } else {
-                            self.task_queue
-                                .push_front(ForegroundTask::MoveItem { from, to });
-                            return true;
-                        }
-                    }
-                    ForegroundTask::DropItem { slot } => {
-                        if inventory_is_mutable(bot) {
-                            let inv = bot.get_inventory().expect("inventory present");
-                            inv.click(ThrowClick::All { slot });
-                            self.inventory_resync_at = Some(now + INVENTORY_RESYNC_DELAY);
-                        } else {
-                            self.task_queue
-                                .push_front(ForegroundTask::DropItem { slot });
-                            return true;
-                        }
-                    }
                 }
             }
         }
@@ -849,7 +793,7 @@ impl BehaviorState {
     /// pass, close on the next game tick. There is no batch/confirmation phase
     /// and no success logging on the hot path.
     fn tick_autosell(&mut self, bot: &Client, now: Instant) {
-        if !self.config.autosell_enabled {
+        if !self.config.autosell_enabled || self.sell_paused(now) {
             if !matches!(self.autosell_phase, AutoSellPhase::Idle) {
                 self.close_open_menu(bot);
             }
@@ -871,8 +815,6 @@ impl BehaviorState {
                     return;
                 }
 
-                // Fresh items wake a due cycle immediately. Quiet probes guard
-                // against a stale empty snapshot without hammering the server.
                 if now < self.next_autosell_at {
                     return;
                 }
@@ -889,12 +831,6 @@ impl BehaviorState {
                 }
 
                 let started_empty = player_item_count(bot) == 0;
-                if started_empty && now < self.next_empty_probe_at {
-                    return;
-                }
-                // A successful sale can empty the inventory too. Do not
-                // immediately reopen the menu once the last stack is gone.
-                self.next_empty_probe_at = now + AUTOSELL_EMPTY_PROBE_INTERVAL;
                 let command = self.config.autosell_command.trim();
                 let command = if command.is_empty() { "/sell" } else { command };
                 self.next_autosell_at = now + interval;
@@ -1142,39 +1078,6 @@ fn is_inventory_busy_message(message: &str) -> bool {
             || lower.contains("being loaded"))
 }
 
-/// A cheap signature of the bot's current menu inventory (menu id + each slot's
-/// item kind and count). Changes whenever the real inventory changes, which lets
-/// the tick loop re-emit a snapshot so the UI never shows a stale "ghost" slot.
-fn inventory_signature(bot: &Client) -> Option<u64> {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let inv = bot.get_inventory().ok()?;
-    let slots = inv.slots()?;
-    let mut hasher = DefaultHasher::new();
-    inv.id().hash(&mut hasher);
-    for stack in slots.iter() {
-        if stack.is_present() {
-            stack.kind().to_str().hash(&mut hasher);
-            stack.count().hash(&mut hasher);
-        } else {
-            0u8.hash(&mut hasher);
-        }
-    }
-    Some(hasher.finish())
-}
-
-/// Convert an item stack into a snapshot slot, or `None` if the slot is empty.
-fn slot_to_snapshot(stack: &ItemStack) -> Option<InventorySlot> {
-    if stack.is_present() {
-        Some(InventorySlot {
-            id: stack.kind().to_str().to_string(),
-            count: stack.count().max(0) as u32,
-        })
-    } else {
-        None
-    }
-}
-
 /// Extract an item's display name and lore as plain strings (formatting stripped).
 fn item_text(stack: &ItemStack) -> (String, Vec<String>) {
     let name = stack
@@ -1241,9 +1144,8 @@ fn find_spawner_sell_slot(
     None
 }
 
-/// Total number of items in the player's storage/hotbar section. This is only
-/// used to wake an empty probe when fresh drops arrive; it is deliberately not
-/// used to decide whether `/sell` may run or whether clicks were successful.
+/// Local player item count is only a hint for diagnostics and timeout recovery.
+/// It must never slow the configured sell cadence: snapshots may be stale.
 fn player_item_count(bot: &Client) -> u64 {
     let Ok(menu) = bot.menu() else { return 0 };
     let slots = menu.slots();
@@ -1252,62 +1154,6 @@ fn player_item_count(bot: &Client) -> u64 {
         .filter(|stack| stack.is_present())
         .map(|stack| stack.count().max(0) as u64)
         .sum()
-}
-
-/// Read the bot's own inventory and emit an [`OutEvent::Inventory`] snapshot.
-/// The player inventory menu lays its 46 slots out as: craft result (0), craft
-/// grid (1-4), armor (5-8), inventory (9-44: 27 main + 9 hotbar) and off-hand
-/// (45). We surface the storage, hotbar, armor and off-hand slots. When a
-/// container GUI is open the player's own inventory is the *last* 36 menu slots;
-/// we still show those, but mark the snapshot immutable.
-fn emit_inventory_snapshot(bot: &Client) {
-    let Ok(inv) = bot.get_inventory() else {
-        return;
-    };
-    let Some(slots) = inv.slots() else {
-        return;
-    };
-    let n = slots.len();
-    if n < 36 {
-        return;
-    }
-    let mutable = inv.id() == 0;
-
-    // Slot layout differs between the player's own inventory menu and a container.
-    //
-    // Player inventory menu (id 0, 46 slots):
-    //   0 craft-out · 1-4 craft · 5-8 armor · 9-35 storage · 36-44 hotbar · 45 offhand
-    // Any other (container) menu appends the player's 27 storage + 9 hotbar as the
-    // final 36 slots (no armor/offhand), so "last 36" is only correct there.
-    let (main, hotbar, armor, offhand): (
-        Vec<Option<InventorySlot>>,
-        Vec<Option<InventorySlot>>,
-        Vec<Option<InventorySlot>>,
-        Option<InventorySlot>,
-    ) = if mutable && n >= 46 {
-        (
-            slots[9..36].iter().map(slot_to_snapshot).collect(),
-            slots[36..45].iter().map(slot_to_snapshot).collect(),
-            slots[5..9].iter().map(slot_to_snapshot).collect(),
-            slot_to_snapshot(&slots[45]),
-        )
-    } else {
-        let player = &slots[n - 36..n];
-        (
-            player[0..27].iter().map(slot_to_snapshot).collect(),
-            player[27..36].iter().map(slot_to_snapshot).collect(),
-            vec![None; 4],
-            None,
-        )
-    };
-
-    emit(&OutEvent::Inventory {
-        main,
-        hotbar,
-        offhand,
-        armor,
-        mutable,
-    });
 }
 
 /// Returns the position of the spawner the bot is **currently looking at**, or
@@ -1422,7 +1268,6 @@ mod tests {
         state.config.autosell_enabled = true;
         state.config.autosell_interval_seconds = 0.25;
         state.spawned = true;
-        state.next_empty_probe_at = Instant::now();
         (client, state)
     }
 
@@ -1438,26 +1283,52 @@ mod tests {
     }
 
     #[test]
-    fn empty_inventory_probes_are_quiet_and_new_items_resume_immediately() {
+    fn empty_inventory_keeps_the_configured_sell_interval() {
         let (client, mut state) = sell_client();
+        state.config.autosell_interval_seconds = 5.0;
         let since = Instant::now();
-        tick_sell(&client, &mut state, since);
-        assert_eq!(take_commands(&client), vec!["/sell"]);
-        tick_sell(&client, &mut state, since + AUTOSELL_MENU_TIMEOUT);
-        assert!(state.last_autosell_failure_log.is_none());
-        for seconds in 6..30 {
-            tick_sell(&client, &mut state, since + Duration::from_secs(seconds));
+        for cycle in 0..12 {
+            let now = since + Duration::from_secs(cycle * 5);
+            tick_sell(&client, &mut state, now);
+            assert_eq!(take_commands(&client), vec!["/sell"]);
+            open_empty_sell_menu(&client);
+            state.autosell_phase = AutoSellPhase::WaitingForMenu {
+                since: now,
+                started_empty: true,
+                content_received: Some((7, 63)),
+            };
+            tick_sell(&client, &mut state, now + Duration::from_millis(50));
+            tick_sell(&client, &mut state, now + Duration::from_millis(100));
+            assert!(take_commands(&client).is_empty());
         }
+    }
+
+    #[test]
+    fn restart_pause_cancels_pending_clicks_and_survives_world_and_config_changes() {
+        let (client, mut state) = sell_client();
+        let clicks = capture_sell_clicks(&client);
+        state.pause_autosell(20_000, 330_000);
+        let (start, end) = state.restart_sell_pause.unwrap();
+        tick_sell(&client, &mut state, start - Duration::from_millis(1));
+        assert_eq!(take_commands(&client), vec!["/sell"]);
+        open_empty_sell_menu(&client);
+        let mut slots = vec![ItemStack::Empty; 63];
+        slots[27] = ItemStack::new(ItemKind::Beef, 64);
+        receive_content(&client, &mut state, 7, slots);
+        tick_sell(&client, &mut state, start);
+        assert!(clicks.lock().is_empty());
+        assert_eq!(client.get_inventory().unwrap().id(), 0);
+        assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
+        state.on_login(&client);
+        state.on_spawn(&client);
+        state.on_position_sync(&client);
+        let mut config = state.config.clone();
+        config.autosell_interval_seconds = 5.0;
+        state.update_config(config);
+        tick_sell(&client, &mut state, end - Duration::from_millis(1));
         assert!(take_commands(&client).is_empty());
-        tick_sell(&client, &mut state, since + Duration::from_secs(30));
+        tick_sell(&client, &mut state, end);
         assert_eq!(take_commands(&client), vec!["/sell"]);
-        tick_sell(&client, &mut state, since + Duration::from_secs(35));
-        assert!(state.last_autosell_failure_log.is_none());
-        put_player_stack(&client);
-        tick_sell(&client, &mut state, since + Duration::from_secs(36));
-        assert_eq!(take_commands(&client), vec!["/sell"]);
-        tick_sell(&client, &mut state, since + Duration::from_secs(42));
-        assert!(state.last_autosell_failure_log.is_some());
     }
 
     #[test]
@@ -1593,10 +1464,10 @@ mod tests {
             assert_eq!(client.get_inventory().unwrap().id(), 0);
             assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
             tick_sell(&client, &mut state, since + Duration::from_millis(2200));
-            assert!(take_commands(&client).is_empty());
+            assert_eq!(take_commands(&client), vec!["/sell"]);
             put_player_stack(&client);
             tick_sell(&client, &mut state, since + Duration::from_millis(2250));
-            assert_eq!(take_commands(&client), vec!["/sell"]);
+            assert!(take_commands(&client).is_empty());
         }
     }
 

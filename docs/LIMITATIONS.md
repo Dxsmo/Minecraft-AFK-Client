@@ -29,16 +29,13 @@ dashboard) is edition-agnostic.
 - **Bedrock bot** — `backend/src/bedrock-bot/` (protocol/send/behaviors/index)
   mirrors the Rust bot: lifecycle, reconnect handoff, chat, health,
   auto-sell (command-based), crouch, centralized sell
-  chat parsing, and a best-effort inventory snapshot.
+  chat parsing.
 
 ### What works vs. what is limited on Bedrock
 
 - **Works (same as Java):** connect/login (offline + Microsoft device-code),
   chat/console, commands, interval auto-sell, crouch,
   health telemetry, sell chat parsing.
-- **Best-effort / unverified:** live inventory snapshot and drag-and-drop item
-  moves (uses `ItemStackRequest`; item names fall back to `bedrock:<id>` because
-  there is no bundled Bedrock item palette).
 - **Not available on Bedrock:** `clean_spawner` (emits a warning) and Live View
   screenshots (headless, same as Java — see §2).
 
@@ -81,25 +78,9 @@ the UI and stays in sync with the server:
 
 - Live console (chat + server messages + events) via WebSocket.
 - Live status: connection state, health, food, reconnects.
-- Live inventory tab (see feature #10) renders the bot's **actual** inventory
-  contents (slots, stack sizes, hotbar) read from the open menu — this is the
-  closest faithful "view" a headless client can provide.
 
 If a rendered Live View is ever required, the realistic path is an **external
 renderer**: run a separate, GPU-capable headless renderer (e.g. a containerised
 official client or a project like `chunky`) fed by the bot's position/world,
 and upload its output. That is a standalone component, not something Azalea can
 do in-process.
-
-## 3. Live inventory item textures (partial)
-
-**Status: functional, but without item icons.**
-
-The live inventory tab (feature #10) reflects the bot's **real** inventory —
-slot contents, stack sizes, hotbar, armor and off-hand — and drag-and-drop moves
-and drops are executed on the server through the bot. What it cannot show are the
-official **item textures**: this project bundles no Minecraft texture assets
-(they are Mojang-copyrighted and are not redistributed here). Each slot therefore
-renders the item id and stack count on a deterministic per-item colour instead of
-an icon. Dropping in a texture atlas later (or wiring up a resource-pack loader)
-would be a purely cosmetic, additive change to `InventoryPanel.tsx`.

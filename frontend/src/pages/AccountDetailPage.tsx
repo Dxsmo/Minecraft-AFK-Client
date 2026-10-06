@@ -7,7 +7,6 @@ import type { ManagedUser, MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { ConsoleView } from "../components/ConsoleView";
 import { AccountSettingsPanel } from "../components/AccountSettingsPanel";
-import { InventoryPanel } from "../components/InventoryPanel";
 
 export function AccountDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -21,7 +20,7 @@ export function AccountDetailPage() {
   const [commandError, setCommandError] = useState<string | null>(null);
   const accountIdRef = useRef(id);
   accountIdRef.current = id;
-  const [tab, setTab] = useState<"console" | "inventory" | "settings">("console");
+  const [tab, setTab] = useState<"console" | "settings">("console");
   const { logs, status, loadOlderLogs, loadingOlderLogs, hasOlderLogs, historyError } = useAccountConsole(id);
   const inputRef = useRef<HTMLInputElement>(null);
   const isAdmin = user?.role === "ADMIN";
@@ -256,13 +255,6 @@ export function AccountDetailPage() {
           <TabIcon name="console" />
           Console
         </button>
-        {/* Live inventory is an admin-only feature (also enforced by the API). */}
-        {isAdmin && (
-          <button className="tab-btn" data-active={tab === "inventory"} onClick={() => setTab("inventory")}>
-            <TabIcon name="inventory" />
-            Inventory
-          </button>
-        )}
         <button className="tab-btn" data-active={tab === "settings"} onClick={() => setTab("settings")}>
           <TabIcon name="settings" />
           Einstellungen
@@ -294,14 +286,6 @@ export function AccountDetailPage() {
           </form>
           {commandError && <p role="alert" className="alert-error">{commandError}</p>}
           {id && <EarningsBox accountId={id} />}
-        </div>
-      )}
-
-      {tab === "inventory" && isAdmin && (
-        <div key="inventory" className="tab-panel">
-          <div className="card flex justify-center p-6">
-            <InventoryPanel accountId={account.id} online={liveStatus === "ONLINE"} />
-          </div>
         </div>
       )}
 
@@ -344,7 +328,7 @@ function StatPill({
   );
 }
 
-function TabIcon({ name }: { name: "console" | "inventory" | "settings" }) {
+function TabIcon({ name }: { name: "console" | "settings" }) {
   const common = {
     width: 15,
     height: 15,
@@ -360,16 +344,6 @@ function TabIcon({ name }: { name: "console" | "inventory" | "settings" }) {
       <svg {...common}>
         <polyline points="4 17 10 11 4 5" />
         <line x1="12" y1="19" x2="20" y2="19" />
-      </svg>
-    );
-  }
-  if (name === "inventory") {
-    return (
-      <svg {...common}>
-        <rect x="3" y="3" width="7" height="7" rx="1" />
-        <rect x="14" y="3" width="7" height="7" rx="1" />
-        <rect x="3" y="14" width="7" height="7" rx="1" />
-        <rect x="14" y="14" width="7" height="7" rx="1" />
       </svg>
     );
   }

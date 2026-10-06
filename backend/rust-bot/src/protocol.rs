@@ -35,6 +35,11 @@ pub struct Config {
     /// The command that opens the server's sell menu (e.g. "/sell").
     #[serde(default = "default_autosell_command")]
     pub autosell_command: String,
+    /// Restart pause offsets relative to process startup, retained across reconnects by Node.
+    #[serde(default)]
+    pub autosell_pause_after_ms: u64,
+    #[serde(default)]
+    pub autosell_resume_after_ms: u64,
     /// The configured spawner type id (e.g. "cow"), or empty when the account
     /// has not picked one. Empty selects the legacy "empty the whole container"
     /// behavior; anything else means the drop/sell lists are authoritative, even
@@ -93,16 +98,11 @@ pub enum Command {
     /// spawner within reach (without walking to it), drop the items in the
     /// container it opens, and close it. Pauses auto-sell for the duration.
     CleanSpawner,
-    /// Emit a snapshot of the bot's own inventory (an [`OutEvent::Inventory`]).
-    /// Read-only, so it runs immediately without touching the task queue.
-    RequestInventory,
-    /// Move an item between two of the bot's own inventory slots (raw player
-    /// menu slot indices). Runs as a foreground one-shot task so it never
-    /// collides with auto-sell or other Minecraft actions.
-    MoveItem { from: u16, to: u16 },
-    /// Drop the whole stack in one of the bot's own inventory slots (raw player
-    /// menu slot index). Runs as a foreground one-shot task.
-    DropItem { slot: u16 },
+    /// Schedule the restart pause independently of behavior settings and world transitions.
+    PauseAutosell {
+        autosell_pause_after_ms: u64,
+        autosell_resume_after_ms: u64,
+    },
     /// Gracefully disconnect and exit.
     Disconnect,
 }
@@ -146,19 +146,6 @@ pub enum OutEvent {
     /// The bot's current health (0..=20) and food/hunger level (0..=20),
     /// emitted whenever either value changes.
     Health { health: f32, food: u32 },
-    /// A live snapshot of the bot's own inventory. Slots use the player-menu
-    /// layout: `main` is the 27 storage slots, `hotbar` the 9 hotbar slots,
-    /// `offhand` the off-hand slot, and `armor` the 4 armor slots. Each entry is
-    /// `null` for an empty slot. `mutable` is true only when the player's own
-    /// inventory is open (no container GUI in the way), i.e. when move/drop
-    /// actions are accepted.
-    Inventory {
-        main: Vec<Option<InventorySlot>>,
-        hotbar: Vec<Option<InventorySlot>>,
-        offhand: Option<InventorySlot>,
-        armor: Vec<Option<InventorySlot>>,
-        mutable: bool,
-    },
     /// Periodic liveness signal so the Node supervisor can distinguish a hung
     /// bot from a healthy but idle one.
     Heartbeat,
@@ -180,15 +167,6 @@ pub enum OutEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source: Option<String>,
     },
-}
-
-/// A single occupied inventory slot in an [`OutEvent::Inventory`] snapshot.
-#[derive(Debug, Clone, Serialize)]
-pub struct InventorySlot {
-    /// The item identifier, e.g. `"minecraft:diamond"`.
-    pub id: String,
-    /// The stack size.
-    pub count: u32,
 }
 
 /// The first stdin line for the `namesniper-bot` binary (see `bin/namesniper.rs`).

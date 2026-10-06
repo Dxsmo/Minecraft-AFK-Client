@@ -3,12 +3,12 @@
 //! Node backend gets the same events regardless of edition.
 //!
 //! Continuous auto-sell yields to
-//! one-shot foreground tasks (manual command / inventory move):
+//! one-shot foreground tasks (manual command):
 //! while a foreground task is running, auto-sell does not start, and it resumes
 //! on the next tick once the foreground task has completed. Foreground tasks run
 //! one at a time, so no two Minecraft actions race each other.
 
-import { emit, type BehaviorConfig, type Config, type InventorySlot, type OutEvent } from "./protocol.js";
+import { emit, type BehaviorConfig, type Config, type OutEvent } from "./protocol.js";
 import { BotSender } from "./send.js";
 
 /** Emit a heartbeat at most this often. */
@@ -18,21 +18,10 @@ const TELEPORT_STABILIZE_MS = 100;
 const TELEPORT_COMMAND_GUARD_MS = 750;
 const CHAT_COMMAND_GUARD_MS = 100;
 const INVENTORY_BUSY_DELAY_MS = 250;
-const EMPTY_INVENTORY_PROBE_MS = 30_000;
 
 type ForegroundTask =
   | { kind: "command"; text: string }
-  | { kind: "move"; from: number; to: number }
-  | { kind: "drop"; slot: number }
   | { kind: "clean_spawner" };
-
-type InvState = {
-  main: (InventorySlot | null)[];
-  hotbar: (InventorySlot | null)[];
-  offhand: InventorySlot | null;
-  armor: (InventorySlot | null)[];
-  containerOpen: boolean;
-};
 
 function isTeleportCommand(text: string): boolean {
   const command = text.trim().match(/^\/([^\s]+)/)?.[1]?.toLowerCase();
@@ -60,8 +49,8 @@ export class BehaviorState {
   private spawned = false;
   private lastHeartbeatAt = 0;
   private nextAutosellAt = Date.now();
-  private nextEmptyProbeAt = Date.now() + EMPTY_INVENTORY_PROBE_MS;
-  private inventoryKnown = false;
+  private restartPauseStart = 0;
+  private restartPauseEnd = 0;
   private automationReadyAt = Number.POSITIVE_INFINITY;
 
   private manualQueue: ForegroundTask[] = [];
@@ -71,16 +60,21 @@ export class BehaviorState {
   private crouchResyncPending = false;
   private lastHealth: { health: number; food: number } | null = null;
 
-  private inv: InvState = { main: [], hotbar: [], offhand: null, armor: [], containerOpen: false };
-
   constructor(config: Config, sender: BotSender) {
     this.sender = sender;
+    this.pauseAutosell(config.autosell_pause_after_ms ?? 0, config.autosell_resume_after_ms ?? 0);
     this.cfg = {
       crouch_enabled: config.crouch_enabled ?? false,
       autosell_enabled: config.autosell_enabled ?? false,
       autosell_interval_seconds: config.autosell_interval_seconds ?? 60,
       autosell_command: config.autosell_command ?? "/sell",
     };
+  }
+
+  pauseAutosell(afterMs: number, resumeMs: number): void {
+    const now = Date.now();
+    this.restartPauseStart = now + afterMs;
+    this.restartPauseEnd = now + resumeMs;
   }
 
   updateConfig(cfg: BehaviorConfig): void {
@@ -110,12 +104,10 @@ export class BehaviorState {
     this.spawned = false;
     this.crouchResyncPending = true;
     this.automationReadyAt = Number.POSITIVE_INFINITY;
-    this.inv.containerOpen = false;
   }
 
   markTeleported(): void {
     this.spawned = true;
-    this.inv.containerOpen = false;
     this.automationReadyAt = Date.now() + TELEPORT_STABILIZE_MS;
     this.nextAutosellAt = this.automationReadyAt;
     this.crouchResyncPending = true;
@@ -131,12 +123,6 @@ export class BehaviorState {
   enqueueBackgroundChat(text: string): void {
     const trimmed = text.trim();
     if (trimmed) this.queue.push({ kind: "command", text: trimmed });
-  }
-  enqueueMoveItem(from: number, to: number): void {
-    this.queue.push({ kind: "move", from, to });
-  }
-  enqueueDropItem(slot: number): void {
-    this.queue.push({ kind: "drop", slot });
   }
   enqueueCleanSpawner(): void {
     this.queue.push({ kind: "clean_spawner" });
@@ -174,12 +160,10 @@ export class BehaviorState {
     }
 
     // Continuous auto-sell yields to any foreground task.
-    if (this.cfg.autosell_enabled && !actionSentThisTick) {
+    const sellPaused = now >= this.restartPauseStart && now < this.restartPauseEnd;
+    if (this.cfg.autosell_enabled && !actionSentThisTick && !sellPaused) {
       const interval = Math.max(0.25, this.cfg.autosell_interval_seconds ?? 60) * 1000;
       if (now >= this.nextAutosellAt) {
-        const empty = this.inventoryKnown && ![...this.inv.main, ...this.inv.hotbar].some((slot) => slot && slot.count > 0);
-        if (empty && now < this.nextEmptyProbeAt) return;
-        this.nextEmptyProbeAt = now + EMPTY_INVENTORY_PROBE_MS;
         this.nextAutosellAt = now + interval;
         const command = (this.cfg.autosell_command ?? "/sell").trim() || "/sell";
         this.sender.command(command);
@@ -195,12 +179,6 @@ export class BehaviorState {
           now + (isTeleportCommand(task.text) ? TELEPORT_COMMAND_GUARD_MS : CHAT_COMMAND_GUARD_MS),
         );
         emit({ type: "behavior_log", message: `Command dispatched: ${task.text}` });
-        break;
-      case "move":
-        this.doMoveItem(task.from, task.to);
-        break;
-      case "drop":
-        this.doDropItem(task.slot);
         break;
       case "clean_spawner":
         // Clean-spawner needs precise world/block interaction and container item
@@ -242,55 +220,8 @@ export class BehaviorState {
     emit({ type: "health", health: h, food: f } satisfies OutEvent);
   }
 
-  // --- Inventory ---
-
-  setContainerOpen(open: boolean): void {
-    this.inv.containerOpen = open;
-  }
-
-  /** Replace the player inventory storage/hotbar from an inventory_content packet. */
-  setPlayerInventory(main: (InventorySlot | null)[], hotbar: (InventorySlot | null)[]): void {
-    this.inventoryKnown = true;
-    this.inv.main = main;
-    this.inv.hotbar = hotbar;
-  }
-  setArmor(armor: (InventorySlot | null)[]): void {
-    this.inv.armor = armor;
-  }
-  setOffhand(offhand: InventorySlot | null): void {
-    this.inv.offhand = offhand;
-  }
-
-  emitInventory(): void {
-    emit({
-      type: "inventory",
-      main: this.inv.main,
-      hotbar: this.inv.hotbar,
-      offhand: this.inv.offhand,
-      armor: this.inv.armor,
-      // Item moves are only accepted when no container GUI is open.
-      mutable: !this.inv.containerOpen,
-    });
-  }
-
   private applyCrouch(on: boolean): void {
     this.sneaking = on;
     this.sender.setSneak(on);
-  }
-
-  // ItemStackRequest-based moves are best-effort and unverified on Bedrock.
-  private doMoveItem(from: number, to: number): void {
-    this.sender.itemStackRequest([
-      { type: "take", count: 64, source: this.slotRef(from), destination: this.slotRef(to) },
-      { type: "place", count: 64, source: this.slotRef(from), destination: this.slotRef(to) },
-    ]);
-  }
-  private doDropItem(slot: number): void {
-    this.sender.itemStackRequest([{ type: "drop", count: 64, source: this.slotRef(slot), randomly: false }]);
-  }
-  private slotRef(slot: number): object {
-    // Player inventory container. Slot indexing mirrors the Java raw player-menu
-    // layout the frontend uses; on Bedrock this mapping is approximate.
-    return { container: "inventory", slot };
   }
 }

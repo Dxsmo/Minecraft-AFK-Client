@@ -159,6 +159,61 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(client.getStatus()).not.toHaveProperty("homes");
   });
 
+  it.each(["JAVA", "BEDROCK"] as const)("retains the restart sell pause across %s reconnects", async (edition) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const client = makeClient({ edition, autoSellEnabled: true });
+      client.connect();
+      const first = lastChild();
+      first.send({ type: "spawn" });
+      first.send({ type: "chat", sender: null, message: "§cDie Welt wird in 30 Sekunden neu gestartet!" });
+      await tick();
+      const commands = first.stdin.write.mock.calls.map(([line]) => JSON.parse(String(line)));
+      expect(commands.find((cmd) => cmd.type === "pause_autosell")).toEqual({
+        type: "pause_autosell", autosell_pause_after_ms: 20_000, autosell_resume_after_ms: 330_000,
+      });
+      // A later countdown refers to the same restart rather than restarting five minutes from now.
+      vi.advanceTimersByTime(25_000);
+      first.send({ type: "chat", sender: null, message: "Die Welt wird in 5 Sekunden neu gestartet!" });
+      await tick();
+      expect(JSON.parse(String(first.stdin.write.mock.calls.at(-1)![0]))).toEqual({
+        type: "pause_autosell", autosell_pause_after_ms: 0, autosell_resume_after_ms: 305_000,
+      });
+      first.exitWith(1);
+      await tick();
+      vi.advanceTimersByTime(33_000);
+      const replacement = lastChild();
+      expect(replacement).not.toBe(first);
+      const config = JSON.parse(String(replacement.stdin.write.mock.calls[0][0]));
+      expect(config.autosell_pause_after_ms).toBe(0);
+      expect(config.autosell_resume_after_ms).toBeGreaterThanOrEqual(273_000);
+      expect(config.autosell_resume_after_ms).toBeLessThanOrEqual(275_000);
+      replacement.send({ type: "spawn" });
+      await tick();
+      client.updateConfig(baseConfig({ edition, autoSellEnabled: true, autoSellIntervalSeconds: 5 }));
+      expect(JSON.parse(String(replacement.stdin.write.mock.calls.at(-1)![0]))).toMatchObject({
+        type: "configure", autosell_enabled: true, autosell_interval_seconds: 5,
+      });
+      vi.advanceTimersByTime(272_000);
+      client.restart();
+      const expiredConfig = JSON.parse(String(lastChild().stdin.write.mock.calls[0][0]));
+      expect(expiredConfig.autosell_resume_after_ms).toBe(0);
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores player chat that looks like a world restart announcement", async () => {
+    const client = makeClient();
+    client.connect();
+    lastChild().send({ type: "spawn" });
+    lastChild().send({ type: "chat", sender: "Steve", message: "Die Welt wird in 10 Sekunden neu gestartet!" });
+    await tick();
+    const commands = lastChild().stdin.write.mock.calls.map(([line]) => JSON.parse(String(line)));
+    expect(commands.some((cmd) => cmd.type === "pause_autosell")).toBe(false);
+  });
+
   it.each(["JAVA", "BEDROCK"] as const)("sends no automatic commands on %s joins or reconnects with legacy home settings", async (edition) => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {

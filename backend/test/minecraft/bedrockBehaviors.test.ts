@@ -84,23 +84,63 @@ describe("Bedrock crouch after world transitions", () => {
     }
   });
 
-  it("quietly probes known empty inventory and resumes when items arrive", () => {
+  it("keeps selling every five seconds over time without local inventory data", () => {
     const { sender, behavior } = setup();
-    behavior.updateConfig({ crouch_enabled: true, autosell_enabled: true, autosell_interval_seconds: 0.25 });
-    behavior.setPlayerInventory([], []);
+    behavior.updateConfig({ crouch_enabled: true, autosell_enabled: true, autosell_interval_seconds: 5 });
     behavior.markSpawned();
-    for (let i = 0; i < 119; i++) {
-      vi.advanceTimersByTime(250);
-      behavior.onTick();
-    }
-    expect(sender.command).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(250);
+    vi.advanceTimersByTime(300);
     behavior.onTick();
-    expect(sender.command).toHaveBeenCalledExactlyOnceWith("/sell");
-    vi.advanceTimersByTime(250);
-    behavior.setPlayerInventory([{ id: "beef", count: 64 }], []);
+    for (let i = 0; i < 120; i++) {
+      vi.advanceTimersByTime(4999);
+      behavior.onTick();
+      expect(sender.command).toHaveBeenCalledTimes(i + 1);
+      vi.advanceTimersByTime(1);
+      behavior.onTick();
+      expect(sender.command).toHaveBeenCalledTimes(i + 2);
+    }
+  });
+
+  it("pauses ten seconds before restart and resumes five minutes afterwards across world and config changes", () => {
+    const { sender, behavior } = setup();
+    const cfg = { crouch_enabled: true, autosell_enabled: true, autosell_interval_seconds: 5 };
+    behavior.updateConfig(cfg);
+    behavior.markSpawned();
+    vi.advanceTimersByTime(300);
+    behavior.onTick();
+    behavior.pauseAutosell(20_000, 330_000);
+    vi.advanceTimersByTime(19_999);
     behavior.onTick();
     expect(sender.command).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1);
+    behavior.onTick();
+    behavior.markJoining();
+    behavior.markSpawned();
+    behavior.markTeleported();
+    behavior.updateConfig({ ...cfg, autosell_interval_seconds: 1 });
+    behavior.enqueueChat("/home");
+    behavior.onTick();
+    expect(sender.send).toHaveBeenCalledWith("/home");
+    vi.advanceTimersByTime(309_999);
+    behavior.onTick();
+    expect(sender.command).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1);
+    behavior.onTick();
+    expect(sender.command).toHaveBeenCalledTimes(3);
+  });
+
+  it("honors a restart pause supplied when a subprocess is recreated", () => {
+    const sender = { setSneak: vi.fn(), command: vi.fn(), send: vi.fn() };
+    const behavior = new BehaviorState({
+      host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "",
+      autosell_enabled: true, autosell_pause_after_ms: 0, autosell_resume_after_ms: 60_000,
+    }, sender as unknown as BotSender);
+    behavior.markSpawned();
+    vi.advanceTimersByTime(59_999);
+    behavior.onTick();
+    expect(sender.command).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    behavior.onTick();
+    expect(sender.command).toHaveBeenCalledExactlyOnceWith("/sell");
   });
 
   it("gives manual commands priority and bypasses automation guards in FIFO order", () => {

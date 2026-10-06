@@ -1,5 +1,8 @@
 import { EventEmitter } from "node:events";
 import { parseSellEarning } from "./sellEarnings.js";
+import {
+  parseWorldRestartSeconds, WORLD_RESTART_SELL_LEAD_MS, WORLD_RESTART_SELL_COOLDOWN_MS,
+} from "./worldRestart.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -10,8 +13,6 @@ import type {
   ClientStatusSnapshot,
   ConsoleEvent,
   ConsoleEventType,
-  InventoryItem,
-  InventorySnapshot,
   MsaSignInPrompt,
   ProfileEvent,
 } from "./types.js";
@@ -82,10 +83,11 @@ export class MinecraftClient extends EventEmitter {
   private authenticated = false;
   private readonly log: Logger;
 
+  /** Kept by the supervisor so a subprocess reconnect cannot bypass the pause. */
+  private worldRestartAt: number | null = null;
+
   private health = 20;
   private food = 20;
-  /** Most recent live inventory snapshot from the bot, if any. */
-  private inventory: InventorySnapshot | undefined;
   /** Drives the spawner scheduler (see runScheduledTasks). */
   private schedulerTimer: NodeJS.Timeout | null = null;
   /** Maps a daily "HH:MM" to the YYYY-MM-DD it last fired, to run it once per day. */
@@ -203,31 +205,6 @@ export class MinecraftClient extends EventEmitter {
     }
     this.sendToBot({ type: "clean_spawner" });
     this.emitConsole("SYSTEM", "Clean spawner task dispatched");
-    return true;
-  }
-
-  /** Ask the bot to emit a fresh inventory snapshot (received asynchronously). */
-  requestInventory(): void {
-    if (this.status !== "ONLINE" || !this.subprocess) return;
-    this.sendToBot({ type: "request_inventory" });
-  }
-
-  /** The most recently received inventory snapshot, if any. */
-  getInventory(): InventorySnapshot | undefined {
-    return this.inventory;
-  }
-
-  /** Move an item between two of the bot's own player-menu slots. */
-  moveInventoryItem(from: number, to: number): boolean {
-    if (this.status !== "ONLINE" || !this.subprocess) return false;
-    this.sendToBot({ type: "move_item", from, to });
-    return true;
-  }
-
-  /** Drop the whole stack in one of the bot's own player-menu slots. */
-  dropInventoryItem(slot: number): boolean {
-    if (this.status !== "ONLINE" || !this.subprocess) return false;
-    this.sendToBot({ type: "drop_item", slot });
     return true;
   }
 
@@ -363,6 +340,7 @@ export class MinecraftClient extends EventEmitter {
       autosell_enabled: this.config.autoSellEnabled,
       autosell_interval_seconds: this.config.autoSellIntervalSeconds,
       autosell_command: this.config.autoSellCommand,
+      ...this.sellPauseWindow(),
       spawner_type: this.config.spawnerType,
       spawner_drop_items: this.config.spawnerDropItems,
       spawner_sell_items: this.config.spawnerSellItems,
@@ -374,6 +352,17 @@ export class MinecraftClient extends EventEmitter {
         this.handleConnectionFailure("Connection timed out");
       }
     }, SUBPROCESS_HANG_TIMEOUT_MS);
+  }
+
+  private sellPauseWindow(): { autosell_pause_after_ms: number; autosell_resume_after_ms: number } {
+    const now = Date.now();
+    if (this.worldRestartAt === null || now >= this.worldRestartAt + WORLD_RESTART_SELL_COOLDOWN_MS) {
+      return { autosell_pause_after_ms: 0, autosell_resume_after_ms: 0 };
+    }
+    return {
+      autosell_pause_after_ms: Math.max(0, this.worldRestartAt - WORLD_RESTART_SELL_LEAD_MS - now),
+      autosell_resume_after_ms: this.worldRestartAt + WORLD_RESTART_SELL_COOLDOWN_MS - now,
+    };
   }
 
   private handleRustBotEvent(event: Record<string, unknown>): void {
@@ -423,6 +412,14 @@ export class MinecraftClient extends EventEmitter {
       case "chat": {
         const { sender, message } = event as { sender: string | null; message: string };
         const clean = stripMinecraftFormatting(message);
+        if (!sender) {
+          const seconds = parseWorldRestartSeconds(clean);
+          if (seconds !== null) {
+            this.worldRestartAt = Date.now() + seconds * 1000;
+            this.sendToBot({ type: "pause_autosell", ...this.sellPauseWindow() });
+            this.emitConsole("SYSTEM", "Weltneustart: AutoSell pausiert ab 10 Sekunden vorher bis 5 Minuten danach");
+          }
+        }
         const amount = parseSellEarning(clean);
         if (amount !== null) {
           this.emit("earning", { minecraftAccountId: this.config.id, amount });
@@ -448,25 +445,6 @@ export class MinecraftClient extends EventEmitter {
       case "heartbeat":
         // Liveness only; lastActivityAt is already refreshed for every line.
         break;
-
-      case "inventory": {
-        const e = event as {
-          main: (InventoryItem | null)[];
-          hotbar: (InventoryItem | null)[];
-          offhand: InventoryItem | null;
-          armor: (InventoryItem | null)[];
-          mutable: boolean;
-        };
-        this.inventory = {
-          main: e.main ?? [],
-          hotbar: e.hotbar ?? [],
-          offhand: e.offhand ?? null,
-          armor: e.armor ?? [],
-          mutable: Boolean(e.mutable),
-          updatedAt: new Date().toISOString(),
-        };
-        break;
-      }
 
       case "warning":
         this.emitConsole("WARNING", String((event as { message: string }).message));
@@ -570,8 +548,6 @@ export class MinecraftClient extends EventEmitter {
     if (this.status === newStatus) return;
     this.log.debug(`Status: ${this.status} -> ${newStatus}`);
     this.status = newStatus;
-    // A stale inventory snapshot is meaningless once the bot leaves the world.
-    if (newStatus !== "ONLINE") this.inventory = undefined;
     this.emitStatus();
   }
 

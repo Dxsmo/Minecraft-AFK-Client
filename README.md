@@ -195,6 +195,9 @@ additional users access afterwards in the account's **Settings** panel):
   inventories get the same loading window, so a slow response is not discarded.
   Missing/partial menus time out and retry; diagnostics distinguish a missing
   menu from missing inventory data. Teleports/world changes cancel stale cycles.
+  Empty or stale local inventory snapshots do not delay the configured interval.
+  World-restart countdowns pause automatic selling from 10 seconds before the
+  announced restart until 5 minutes afterwards, including bot reconnects.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once
@@ -314,7 +317,8 @@ retried several times before the run closes the menu and reports the failure.
 
 ### Feature visibility
 
-Live inventory controls are admin-only, enforced by the API routes and the UI.
+Live inventory viewing, moving and dropping have been removed for all roles,
+including admins, together with their API routes and bot protocol commands.
 Balance polling, automatic home queries, home shortcuts, auto-home and
 auto-TPA have been removed for all roles. Manually entered commands remain
 available through the console.

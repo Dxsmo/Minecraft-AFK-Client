@@ -7,14 +7,14 @@
 //!
 //! NOTE: bedrock-protocol is a low-level packet client and exact packet schemas
 //! vary by protocol version. This bot implements the console/automation feature
-//! set reliably; deeper container features (inventory item moves,
-//! clean-spawner) are best-effort and unverified against a live Bedrock server.
+//! set reliably; auto-sell menus are unverified against a live Bedrock server, and
+//! clean-spawner is unavailable.
 
 import { mkdirSync } from "node:fs";
 import readline from "node:readline";
 import { createClient } from "bedrock-protocol";
 
-import { emit, type Command, type Config, type InventorySlot } from "./protocol.js";
+import { emit, type Command, type Config } from "./protocol.js";
 import { BotSender } from "./send.js";
 import { BehaviorState } from "./behaviors.js";
 
@@ -152,11 +152,10 @@ async function main(): Promise<void> {
   let localRuntimeEntityId: bigint | null = null;
   c.on("start_game", (packet: unknown) => {
     try {
-      const p = packet as { runtime_entity_id?: unknown; itemstates?: unknown };
+      const p = packet as { runtime_entity_id?: unknown };
       const id = toBigIntOrNull(p.runtime_entity_id);
       localRuntimeEntityId = id;
       sender.setRuntimeEntityId(id);
-      captureItemPalette(p.itemstates);
       if (spawned) behavior.markTeleported();
     } catch {
       /* ignore */
@@ -174,15 +173,6 @@ async function main(): Promise<void> {
       if (teleport && id != null && id === localRuntimeEntityId) behavior.markTeleported();
     } catch {
       /* ignore malformed movement packet */
-    }
-  });
-
-  // 1.21.60+ delivers the item palette in a separate item_registry packet.
-  c.on("item_registry", (packet: unknown) => {
-    try {
-      captureItemPalette((packet as { itemstates?: unknown }).itemstates);
-    } catch {
-      /* ignore */
     }
   });
 
@@ -224,17 +214,6 @@ async function main(): Promise<void> {
     }
   });
 
-  // --- Inventory ---
-  c.on("container_open", () => behavior.setContainerOpen(true));
-  c.on("container_close", () => behavior.setContainerOpen(false));
-  c.on("inventory_content", (packet: unknown) => {
-    try {
-      handleInventoryContent(packet, behavior);
-    } catch {
-      /* ignore malformed inventory packet */
-    }
-  });
-
   // --- stdin command loop ---
   startCommandReader((cmd) => handleCommand(cmd, behavior, c, shutdown));
 }
@@ -258,14 +237,8 @@ function handleCommand(
     case "clean_spawner":
       behavior.enqueueCleanSpawner();
       break;
-    case "request_inventory":
-      behavior.emitInventory();
-      break;
-    case "move_item":
-      behavior.enqueueMoveItem(cmd.from, cmd.to);
-      break;
-    case "drop_item":
-      behavior.enqueueDropItem(cmd.slot);
+    case "pause_autosell":
+      behavior.pauseAutosell(cmd.autosell_pause_after_ms, cmd.autosell_resume_after_ms);
       break;
     case "disconnect":
       try {
@@ -277,65 +250,6 @@ function handleCommand(
       shutdown(0);
       break;
   }
-}
-
-/** Parse a Bedrock inventory_content packet into a player-inventory snapshot. */
-function handleInventoryContent(packet: unknown, behavior: BehaviorState): void {
-  const p = packet as { window_id?: unknown; input?: unknown[] };
-  const items = (p.input ?? []).map(itemToSlot);
-  const wid = p.window_id;
-  const isPlayer = wid === 0 || wid === "inventory";
-  const isArmor = wid === 120 || wid === "armor";
-  const isOffhand = wid === 119 || wid === "offhand";
-
-  if (isPlayer) {
-    // Bedrock player container: slots 0-8 hotbar, 9-35 storage.
-    const hotbar = items.slice(0, 9);
-    const main = items.slice(9, 36);
-    behavior.setPlayerInventory(pad(main, 27), pad(hotbar, 9));
-    behavior.emitInventory();
-  } else if (isArmor) {
-    behavior.setArmor(pad(items.slice(0, 4), 4));
-    behavior.emitInventory();
-  } else if (isOffhand) {
-    behavior.setOffhand(items[0] ?? null);
-    behavior.emitInventory();
-  }
-}
-
-function itemToSlot(raw: unknown): InventorySlot | null {
-  const r = raw as { network_id?: number; count?: number; name?: string };
-  const count = typeof r?.count === "number" ? r.count : 0;
-  const networkId = typeof r?.network_id === "number" ? r.network_id : 0;
-  if (!networkId || count <= 0) return null;
-  // Prefer an explicit name; otherwise resolve the network id via the item
-  // palette captured from start_game / item_registry, falling back to a raw id.
-  const resolved = r.name || itemPalette.get(networkId);
-  const id = resolved
-    ? resolved.includes(":")
-      ? resolved
-      : `minecraft:${resolved}`
-    : `bedrock:${networkId}`;
-  return { id, count };
-}
-
-/** network/runtime id -> item name, captured from the server's item palette. */
-const itemPalette = new Map<number, string>();
-
-function captureItemPalette(states: unknown): void {
-  if (!Array.isArray(states)) return;
-  for (const s of states) {
-    const st = s as { name?: string; runtime_id?: number };
-    if (typeof st?.runtime_id === "number" && typeof st?.name === "string") {
-      itemPalette.set(st.runtime_id, st.name);
-    }
-  }
-}
-
-function pad<T>(arr: (T | null)[], len: number): (T | null)[] {
-  const out = arr.slice(0, len);
-  while (out.length < len) out.push(null);
-  return out;
 }
 
 function reasonOf(packet: unknown): string {

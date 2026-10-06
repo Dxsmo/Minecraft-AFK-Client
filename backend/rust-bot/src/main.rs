@@ -297,11 +297,15 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
                     }
                     Command::Configure(cfg) => shared().lock().behavior.update_config(cfg),
                     Command::CleanSpawner => shared().lock().behavior.enqueue_clean_spawner(),
-                    Command::RequestInventory => shared().lock().behavior.emit_inventory(&bot),
-                    Command::MoveItem { from, to } => {
-                        shared().lock().behavior.enqueue_move_item(from, to)
+                    Command::PauseAutosell {
+                        autosell_pause_after_ms,
+                        autosell_resume_after_ms,
+                    } => {
+                        shared()
+                            .lock()
+                            .behavior
+                            .pause_autosell(autosell_pause_after_ms, autosell_resume_after_ms);
                     }
-                    Command::DropItem { slot } => shared().lock().behavior.enqueue_drop_item(slot),
                     Command::Disconnect => {
                         emit(&OutEvent::Disconnect {
                             reason: Some("Requested by controller".into()),

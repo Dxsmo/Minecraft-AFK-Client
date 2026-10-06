@@ -5,8 +5,6 @@ import {
   assignUsersSchema,
   reorderAccountsSchema,
   commandSchema,
-  moveItemSchema,
-  dropItemSchema,
 } from "./schemas.js";
 import * as accountsService from "./service.js";
 import { executeCommand } from "../commands/service.js";
@@ -20,8 +18,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
   app.addHook("preHandler", app.requireAuth);
 
   /**
-   * Guard for admin-only account features (live inventory and
-   * spawner/behavior tuning). Normal users work with a reduced feature set,
+   * Guard for admin-only account features (spawner/behavior tuning). Normal users work with a reduced feature set,
    * and that reduction is enforced here rather than only in the UI. Answers 404
    * so the endpoint's existence isn't leaked to non-admins.
    */
@@ -66,20 +63,6 @@ export default async function accountsRoutes(app: FastifyInstance) {
       return;
     }
     reply.send(await accountsService.getEarningsSummary(id));
-  });
-
-  app.get("/api/minecraft/accounts/:id/inventory", async (req, reply) => {
-    if (!requireAdminFeature(req, reply)) return;
-    const { id } = req.params as { id: string };
-    const account = await accountsService.getAccountForSession(req.session!, id);
-    if (!account) {
-      reply.code(404).send({ error: "Account not found" });
-      return;
-    }
-    // Ask the bot for a fresh snapshot (arrives asynchronously, picked up by the
-    // next poll) and return whatever we currently have.
-    clientManager.requestInventory(id);
-    reply.send({ inventory: clientManager.getInventory(id) ?? null });
   });
 
   // ---- Management ----
@@ -259,48 +242,6 @@ export default async function accountsRoutes(app: FastifyInstance) {
     { preHandler: app.requireCsrf },
     async (req, reply) => {
       await guardedLifecycle(req, reply, (id) => clientManager.cleanSpawner(id), "ACCOUNT_CLEAN_SPAWNER");
-    },
-  );
-
-  app.post(
-    "/api/minecraft/accounts/:id/inventory/move",
-    { preHandler: app.requireCsrf },
-    async (req, reply) => {
-      if (!requireAdminFeature(req, reply)) return;
-      const { id } = req.params as { id: string };
-      const body = parseOrReject(moveItemSchema, req.body, reply);
-      if (!body) return;
-      const allowed = await accountsService.canAccessAccount(req.session!, id);
-      if (!allowed) {
-        reply.code(404).send({ error: "Account not found" });
-        return;
-      }
-      if (!clientManager.moveInventoryItem(id, body.from, body.to)) {
-        reply.code(409).send({ error: "Bot is not online" });
-        return;
-      }
-      reply.send({ ok: true });
-    },
-  );
-
-  app.post(
-    "/api/minecraft/accounts/:id/inventory/drop",
-    { preHandler: app.requireCsrf },
-    async (req, reply) => {
-      if (!requireAdminFeature(req, reply)) return;
-      const { id } = req.params as { id: string };
-      const body = parseOrReject(dropItemSchema, req.body, reply);
-      if (!body) return;
-      const allowed = await accountsService.canAccessAccount(req.session!, id);
-      if (!allowed) {
-        reply.code(404).send({ error: "Account not found" });
-        return;
-      }
-      if (!clientManager.dropInventoryItem(id, body.slot)) {
-        reply.code(409).send({ error: "Bot is not online" });
-        return;
-      }
-      reply.send({ ok: true });
     },
   );
 

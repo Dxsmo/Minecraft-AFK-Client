@@ -122,31 +122,4 @@ export class BotSender {
       this.disabled.add("sneak");
     }
   }
-
-  /**
-   * Attempt an inventory move/drop via the modern ItemStackRequest flow. The
-   * request format is complex and highly version-dependent; on Bedrock this is
-   * best-effort and unverified against a live server. Returns false (and warns)
-   * when the action isn't supported by the negotiated protocol schema.
-   */
-  itemStackRequest(actions: object[]): boolean {
-    if (this.disabled.has("item_stack_request")) return false;
-    try {
-      this.client.queue("item_stack_request", {
-        requests: [{ request_id: this.nextRequestId(), actions, custom_names: [], cause: "" }],
-      });
-      return true;
-    } catch {
-      this.disabled.add("item_stack_request");
-      warn("Inventory item actions are not supported for this Bedrock server/version.");
-      return false;
-    }
-  }
-
-  private reqId = 0;
-  private nextRequestId(): number {
-    // ItemStackRequest ids are conventionally negative and decreasing.
-    this.reqId -= 1;
-    return this.reqId;
-  }
 }

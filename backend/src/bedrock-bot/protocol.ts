@@ -33,6 +33,8 @@ export interface Config {
   autosell_enabled?: boolean;
   autosell_interval_seconds?: number;
   autosell_command?: string;
+  autosell_pause_after_ms?: number;
+  autosell_resume_after_ms?: number;
 }
 
 /** Behavior-only subset of Config, re-sent later to update settings live. */
@@ -49,16 +51,8 @@ export type Command =
   | { type: "background_chat"; text: string }
   | ({ type: "configure" } & BehaviorConfig)
   | { type: "clean_spawner" }
-  | { type: "request_inventory" }
-  | { type: "move_item"; from: number; to: number }
-  | { type: "drop_item"; slot: number }
+  | { type: "pause_autosell"; autosell_pause_after_ms: number; autosell_resume_after_ms: number }
   | { type: "disconnect" };
-
-/** A single occupied inventory slot in an Inventory snapshot. */
-export interface InventorySlot {
-  id: string;
-  count: number;
-}
 
 /** Events emitted on stdout, one JSON object per line, tagged by `type`. */
 export type OutEvent =
@@ -73,14 +67,6 @@ export type OutEvent =
   | { type: "fatal_error"; error: string }
   | { type: "behavior_log"; message: string }
   | { type: "health"; health: number; food: number }
-  | {
-      type: "inventory";
-      main: (InventorySlot | null)[];
-      hotbar: (InventorySlot | null)[];
-      offhand: InventorySlot | null;
-      armor: (InventorySlot | null)[];
-      mutable: boolean;
-    }
   | { type: "heartbeat" };
 
 /**

@@ -79,7 +79,7 @@ export async function buildApp() {
   app.get("/api/health", async () => ({ status: "ok" }));
 
   // Public item/block texture endpoint (no auth — textures aren't sensitive).
-  // Served from the minecraft-assets package so the inventory UI can show real
+  // Served from the minecraft-assets package so item lists can show real
   // Minecraft icons instead of raw ids. 404 lets the frontend fall back.
   app.get("/api/assets/item/:name", async (req, reply) => {
     const raw = String((req.params as { name: string }).name).replace(/\.png$/i, "");
