@@ -214,6 +214,79 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(commands.some((cmd) => cmd.type === "pause_autosell")).toBe(false);
   });
 
+  it("recognizes HugoSMP world restart announcements in named chat", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const client = makeClient();
+      client.connect();
+      const child = lastChild();
+      child.send({ type: "spawn" });
+      child.send({
+        type: "chat", sender: "§6HugoSMP",
+        message: "Diese Welt wird in 60 Sekunden neugestartet. Droppe am besten keine Items mehr!",
+      });
+      await tick();
+      const commands = child.stdin.write.mock.calls.map(([line]) => JSON.parse(String(line)));
+      expect(commands.find((cmd) => cmd.type === "pause_autosell")).toEqual({
+        type: "pause_autosell", autosell_pause_after_ms: 50_000, autosell_resume_after_ms: 360_000,
+      });
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reconnects a bot without tick heartbeats even when chat, health and output still arrive", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const client = makeClient();
+      client.connect();
+      const stuck = lastChild();
+      stuck.send({ type: "spawn" });
+      const other = makeClient({ id: "acc-2" });
+      other.connect();
+      const healthy = lastChild();
+      healthy.send({ type: "spawn" });
+      await tick();
+      for (let i = 0; i < 6; i++) {
+        stuck.send({ type: "chat", sender: "HugoSMP", message: "Server message" });
+        stuck.send({ type: "health", health: 20, food: 20 });
+        stuck.stdout.write("not JSON\n");
+        healthy.send({ type: "heartbeat" });
+        await tick();
+        vi.advanceTimersByTime(10_000);
+      }
+      expect(client.getStatus().status).toBe("RECONNECTING");
+      expect(client.getStatus().lastError).toBe("Bot froze (no heartbeat)");
+      expect(other.getStatus().status).toBe("ONLINE");
+      client.dispose();
+      other.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a quiet bot connected while its behavior ticks remain alive", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const client = makeClient();
+      client.connect();
+      const child = lastChild();
+      child.send({ type: "spawn" });
+      await tick();
+      for (let i = 0; i < 6; i++) {
+        vi.advanceTimersByTime(20_000);
+        child.send({ type: "heartbeat" });
+        await tick();
+      }
+      expect(client.getStatus().status).toBe("ONLINE");
+      expect(children).toHaveLength(1);
+      client.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["JAVA", "BEDROCK"] as const)("sends no automatic commands on %s joins or reconnects with legacy home settings", async (edition) => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {

@@ -61,10 +61,9 @@ fn flush_stdout() {
 /// whenever either value changes. Values are unavailable before the bot has
 /// spawned, in which case this is a no-op.
 fn report_health(bot: &Client) {
-    let Ok(health_component) = bot.component::<Health>() else {
+    let Ok(health) = bot.component::<Health>().map(|health| **health) else {
         return;
     };
-    let health = **health_component;
     let Ok(hunger) = bot.hunger() else {
         return;
     };
@@ -235,9 +234,46 @@ async fn build_account(config: &Config) -> Result<Account, String> {
     }
 }
 
+/// Handle stdin on every client event, including packet/login events while
+/// world ticks are unavailable. Explicit commands must not wait for Spawn.
+fn process_pending_commands(bot: &Client) {
+    let pending: Vec<Command> = {
+        let mut s = shared().lock();
+        std::mem::take(&mut s.pending)
+    };
+    for cmd in pending {
+        match cmd {
+            Command::Chat { text } => shared().lock().behavior.enqueue_chat(bot, text),
+            Command::BackgroundChat { text } => {
+                shared().lock().behavior.enqueue_background_chat(text)
+            }
+            Command::Configure(cfg) => shared().lock().behavior.update_config(cfg),
+            Command::CleanSpawner => shared().lock().behavior.enqueue_clean_spawner(),
+            Command::PauseAutosell {
+                autosell_pause_after_ms,
+                autosell_resume_after_ms,
+            } => {
+                shared()
+                    .lock()
+                    .behavior
+                    .pause_autosell(autosell_pause_after_ms, autosell_resume_after_ms);
+            }
+            Command::Disconnect => {
+                emit(&OutEvent::Disconnect {
+                    reason: Some("Requested by controller".into()),
+                });
+                flush_stdout();
+                std::process::exit(0);
+            }
+        }
+    }
+}
+
 /// The per-bot Azalea event handler. Translates Azalea events into NDJSON
 /// [`OutEvent`]s, applies queued [`Command`]s and drives behaviors on ticks.
 async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
+    process_pending_commands(&bot);
+    let is_tick = matches!(&event, Event::Tick);
     match event {
         Event::Init => {
             // A small view distance keeps memory/CPU low, which matters on a
@@ -266,6 +302,12 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
             emit(&OutEvent::Chat { sender, message });
         }
         Event::Packet(packet) => match &*packet {
+            ClientboundGamePacket::OpenScreen(packet) => {
+                shared()
+                    .lock()
+                    .behavior
+                    .on_menu_open(packet.container_id, packet.title.to_string());
+            }
             ClientboundGamePacket::ContainerSetContent(packet) => {
                 shared().lock().behavior.on_container_content(&bot, packet);
             }
@@ -284,37 +326,6 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
             shared().lock().behavior.on_login(&bot);
         }
         Event::Tick => {
-            // Drain queued commands first, then run behavior timers.
-            let pending: Vec<Command> = {
-                let mut s = shared().lock();
-                std::mem::take(&mut s.pending)
-            };
-            for cmd in pending {
-                match cmd {
-                    Command::Chat { text } => shared().lock().behavior.enqueue_chat(&bot, text),
-                    Command::BackgroundChat { text } => {
-                        shared().lock().behavior.enqueue_background_chat(text)
-                    }
-                    Command::Configure(cfg) => shared().lock().behavior.update_config(cfg),
-                    Command::CleanSpawner => shared().lock().behavior.enqueue_clean_spawner(),
-                    Command::PauseAutosell {
-                        autosell_pause_after_ms,
-                        autosell_resume_after_ms,
-                    } => {
-                        shared()
-                            .lock()
-                            .behavior
-                            .pause_autosell(autosell_pause_after_ms, autosell_resume_after_ms);
-                    }
-                    Command::Disconnect => {
-                        emit(&OutEvent::Disconnect {
-                            reason: Some("Requested by controller".into()),
-                        });
-                        flush_stdout();
-                        std::process::exit(0);
-                    }
-                }
-            }
             shared().lock().behavior.on_tick(&bot);
             report_health(&bot);
         }
@@ -335,5 +346,54 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
         }
         _ => {}
     }
+    if !is_tick {
+        shared().lock().behavior.on_control_event(&bot);
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use azalea::client_chat::SendChatEvent;
+    use azalea::ecs::prelude::{Messages, World};
+    use azalea::entity::inventory::Inventory;
+    use azalea::InGameState;
+    use parking_lot::RwLock;
+
+    #[test]
+    fn keepalive_dispatches_pending_manual_commands_without_spawn_or_ticks() {
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "host": "localhost", "port": 25565, "auth_type": "offline",
+            "username": "Bot", "cache_dir": "", "autosell_enabled": true,
+            "autosell_resume_after_ms": 300_000,
+        }))
+        .unwrap();
+        assert!(SHARED
+            .set(Arc::new(Mutex::new(Shared {
+                behavior: BehaviorState::new(&config),
+                pending: vec![Command::Chat {
+                    text: "/home farm".into()
+                }],
+                last_health: None,
+            })))
+            .is_ok());
+        let mut world = World::new();
+        world.init_resource::<Messages<SendChatEvent>>();
+        let entity = world.spawn((InGameState, Inventory::default())).id();
+        let bot = Client {
+            entity,
+            ecs: Arc::new(RwLock::new(world)),
+        };
+        futures::executor::block_on(handle(bot.clone(), Event::KeepAlive(1), State)).unwrap();
+        let commands: Vec<_> = bot
+            .ecs
+            .write()
+            .resource_mut::<Messages<SendChatEvent>>()
+            .drain()
+            .map(|event| event.content)
+            .collect();
+        assert_eq!(commands, vec!["/home farm"]);
+        assert!(shared().lock().pending.is_empty());
+    }
 }

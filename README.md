@@ -198,6 +198,13 @@ additional users access afterwards in the account's **Settings** panel):
   Empty or stale local inventory snapshots do not delay the configured interval.
   World-restart countdowns pause automatic selling from 10 seconds before the
   announced restart until 5 minutes afterwards, including bot reconnects.
+  HugoSMP announcements are recognized in both system messages and named chat.
+  Auto-sell only clicks/closes menus belonging to its own sell request. Spawn
+  selectors and manual menus (including `/home` selections) are left open;
+  another explicit command, such as `/home <name>`, can interrupt them.
+  Explicit commands are processed on packet/login events as well as ticks,
+  so they remain usable while a world transfer is waiting for Spawn. A missing
+  tick heartbeat triggers recovery even if chat messages are still arriving.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once
