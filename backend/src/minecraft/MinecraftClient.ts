@@ -293,6 +293,14 @@ export class MinecraftClient extends EventEmitter {
     }
 
     this.subprocess = child;
+    // Pipe failures are asynchronous stream errors, not child-process errors.
+    // Keep this listener after teardown: the final disconnect write can fail
+    // after this.subprocess has already been cleared or replaced.
+    child.stdin?.on("error", (err: Error) => {
+      if (child !== this.subprocess) return;
+      this.log.warn({ err }, "Bot input pipe failed");
+      this.handleConnectionFailure(`Bot input pipe failed: ${err.message}`);
+    });
     this.lastActivityAt = Date.now();
     this.startOnlineWatchdog();
 
@@ -528,7 +536,7 @@ export class MinecraftClient extends EventEmitter {
 
     this.log.debug(reason);
     try {
-      if (child.stdin && !child.stdin.destroyed) {
+      if (child.stdin && !child.stdin.destroyed && !child.stdin.writableEnded && child.stdin.writable) {
         child.stdin.write(JSON.stringify({ type: "disconnect" }) + "\n");
       }
     } catch {
@@ -546,7 +554,7 @@ export class MinecraftClient extends EventEmitter {
 
   private sendToBot(payload: Record<string, unknown>): boolean {
     const input = this.subprocess?.stdin;
-    if (!input || input.destroyed || input.writableEnded) return false;
+    if (!input || input.destroyed || input.writableEnded || !input.writable) return false;
     try {
       // false from write() means backpressure, not rejection: Node still queues
       // those bytes. Only an unavailable pipe or an exception is a failure.

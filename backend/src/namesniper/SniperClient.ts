@@ -147,6 +147,13 @@ export class SniperClient extends EventEmitter {
     }
 
     this.subprocess = child;
+    // A final stop write can emit EPIPE after teardown; its stream listener
+    // must remain attached even when this process is no longer current.
+    child.stdin?.on("error", (err: Error) => {
+      if (child !== this.subprocess) return;
+      this.log.warn({ err }, "Sniper input pipe failed");
+      this.handleFailure(`Sniper input pipe failed: ${err.message}`);
+    });
 
     const rl = readline.createInterface({ input: child.stdout!, crlfDelay: Infinity });
     rl.on("line", (line) => {
@@ -314,7 +321,7 @@ export class SniperClient extends EventEmitter {
 
     this.log.debug(reason);
     try {
-      if (child.stdin && !child.stdin.destroyed) {
+      if (child.stdin && !child.stdin.destroyed && !child.stdin.writableEnded && child.stdin.writable) {
         child.stdin.write(JSON.stringify({ type: "stop" }) + "\n");
       }
     } catch {
@@ -330,8 +337,10 @@ export class SniperClient extends EventEmitter {
   }
 
   private sendToBot(payload: Record<string, unknown>): void {
+    const input = this.subprocess?.stdin;
+    if (!input || input.destroyed || input.writableEnded || !input.writable) return;
     try {
-      this.subprocess?.stdin?.write(JSON.stringify(payload) + "\n");
+      input.write(JSON.stringify(payload) + "\n");
     } catch (err) {
       this.log.debug({ err }, "Failed to write to sniper stdin");
     }

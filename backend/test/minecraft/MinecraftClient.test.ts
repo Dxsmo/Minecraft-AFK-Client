@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 
 /**
  * Fake `azalea-bot` subprocess: an EventEmitter with the child-process surface
@@ -9,7 +9,9 @@ import { PassThrough } from "node:stream";
  * `exit`, without spawning a real process or opening a network connection.
  */
 class FakeChild extends EventEmitter {
-  stdin = { write: vi.fn(), destroyed: false };
+  stdin = Object.assign(new Writable({
+    write(_chunk, _encoding, callback) { callback(); },
+  }), { write: vi.fn<Writable["write"]>() });
   stdout = new PassThrough();
   stderr = new PassThrough();
   killed = false;
@@ -55,7 +57,9 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const { MinecraftClient } = await import("../../src/minecraft/MinecraftClient.js");
+const { SniperClient } = await import("../../src/namesniper/SniperClient.js");
 import type { ClientRuntimeConfig } from "../../src/minecraft/types.js";
+import type { SniperRuntimeConfig } from "../../src/namesniper/types.js";
 
 /** Let readline process any pending stdout lines. */
 const tick = () => new Promise((r) => setImmediate(r));
@@ -94,6 +98,14 @@ function makeClient(overrides: Partial<ClientRuntimeConfig> = {}) {
 function lastChild(): FakeChild {
   return children[children.length - 1];
 }
+function makeSniper(overrides: Partial<SniperRuntimeConfig> = {}) {
+  const client = new SniperClient({
+    id: "sniper-1", email: "sniper@example.com", desiredName: "Steve",
+    cooldownSeconds: 60, rateLimitProtection: true, proxies: [], ...overrides,
+  });
+  active.push({ disconnect: () => client.stop(), dispose: () => client.dispose() });
+  return client;
+}
 
 describe("MinecraftClient (Azalea subprocess) state machine", () => {
   beforeEach(() => {
@@ -104,7 +116,7 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
 
   afterEach(() => {
     // Tear down any clients so their reconnect/kill timers don't dangle.
-    for (const c of active) c.disconnect();
+    for (const c of active) c.dispose();
   });
 
   it("starts OFFLINE, goes CONNECTING on connect, ONLINE on spawn", async () => {
@@ -229,6 +241,77 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     await tick();
     expect(client.getStatus().status).toBe("RECONNECTING");
     expect(client.getStatus().lastError).toContain("Connection refused");
+  });
+
+  it("handles asynchronous EPIPE from the disconnect write without losing the connection failure reason", async () => {
+    const client = makeClient();
+    client.connect();
+    const child = lastChild();
+    child.stdin._write = (_chunk, _encoding, callback) => {
+      queueMicrotask(() => callback(Object.assign(new Error("write EPIPE"), { code: "EPIPE" })));
+    };
+    child.stdin.write.mockImplementation(Writable.prototype.write.bind(child.stdin));
+
+    child.send({ type: "connection_failed", error: "Connection refused" });
+    await tick();
+
+    expect(child.stdin.destroyed).toBe(true);
+    expect(client.getStatus().status).toBe("RECONNECTING");
+    expect(client.getStatus().lastError).toBe("Connection refused");
+  });
+
+  it("handles EPIPE during a live command and reconnects only the affected account", async () => {
+    const client = makeClient();
+    const other = makeClient({ id: "acc-2" });
+    client.connect();
+    const child = lastChild();
+    child.send({ type: "spawn" });
+    other.connect();
+    lastChild().send({ type: "spawn" });
+    await tick();
+    child.stdin._write = (_chunk, _encoding, callback) => {
+      queueMicrotask(() => callback(Object.assign(new Error("write EPIPE"), { code: "EPIPE" })));
+    };
+    child.stdin.write.mockImplementation(Writable.prototype.write.bind(child.stdin));
+
+    client.sendCommand("/home");
+    await tick();
+
+    expect(client.getStatus().status).toBe("RECONNECTING");
+    expect(client.getStatus().lastError).toContain("EPIPE");
+    expect(other.getStatus().status).toBe("ONLINE");
+  });
+
+  it("keeps late errors from a replaced subprocess from disconnecting the new process", () => {
+    const client = makeClient();
+    client.connect();
+    const oldChild = lastChild();
+    client.restart();
+    expect(() => oldChild.stdin.emit("error", new Error("write EPIPE"))).not.toThrow();
+    expect(client.getStatus().status).toBe("CONNECTING");
+    expect(client.getStatus().lastError).toBeUndefined();
+  });
+
+  it("handles a late pipe error after manual disconnect without reconnecting", () => {
+    const client = makeClient();
+    client.connect();
+    const child = lastChild();
+    client.disconnect();
+    expect(() => child.stdin.emit("error", new Error("write EPIPE"))).not.toThrow();
+    expect(client.getStatus().status).toBe("OFFLINE");
+  });
+
+  it("does not send commands or disconnect messages to an ended input stream", async () => {
+    const client = makeClient();
+    client.connect();
+    const child = lastChild();
+    child.send({ type: "spawn" });
+    await tick();
+    child.stdin.end();
+    child.stdin.write.mockClear();
+    expect(client.sendCommand("/home")).toBe(false);
+    client.disconnect();
+    expect(child.stdin.write).not.toHaveBeenCalled();
   });
 
   it("sendCommand returns false and writes nothing while offline", () => {
@@ -383,5 +466,68 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("Name Sniper subprocess pipe isolation", () => {
+    it("handles asynchronous EPIPE during teardown and preserves the original fatal error", async () => {
+      const sniper = makeSniper();
+      const achieved = vi.fn();
+      sniper.on("achieved", achieved);
+      sniper.start();
+      const child = lastChild();
+      child.stdin._write = (_chunk, _encoding, callback) => {
+        queueMicrotask(() => callback(Object.assign(new Error("write EPIPE"), { code: "EPIPE" })));
+      };
+      child.stdin.write.mockImplementation(Writable.prototype.write.bind(child.stdin));
+      child.send({ type: "fatal_error", error: "Authentication failed" });
+      await tick();
+
+      expect(child.stdin.destroyed).toBe(true);
+      expect(sniper.getStatus().status).toBe("ERROR");
+      expect(sniper.getStatus().lastError).toBe("Authentication failed");
+      expect(achieved).not.toHaveBeenCalled();
+    });
+
+    it("handles failure of the current input pipe without automatically restarting", () => {
+      const sniper = makeSniper();
+      sniper.start();
+      expect(() => lastChild().stdin.emit("error", new Error("write EPIPE"))).not.toThrow();
+      expect(sniper.getStatus().status).toBe("ERROR");
+      expect(sniper.getStatus().lastError).toContain("EPIPE");
+      expect(children).toHaveLength(1);
+    });
+
+    it("ignores errors from a stopped process after a proxy change starts a replacement", () => {
+      const sniper = makeSniper();
+      sniper.start();
+      const oldChild = lastChild();
+      sniper.updateConfig({
+        id: "sniper-1", email: "sniper@example.com", desiredName: "Steve",
+        cooldownSeconds: 60, rateLimitProtection: true, proxies: ["http://localhost:8080"],
+      });
+      expect(children).toHaveLength(2);
+      expect(() => oldChild.stdin.emit("error", new Error("write EPIPE"))).not.toThrow();
+      expect(sniper.getStatus().status).toBe("CONNECTING");
+      expect(sniper.getStatus().lastError).toBeUndefined();
+    });
+
+    it("handles late pipe errors after a manual stop without changing the stopped state", () => {
+      const sniper = makeSniper();
+      sniper.start();
+      const child = lastChild();
+      sniper.stop();
+      expect(() => child.stdin.emit("error", new Error("write EPIPE"))).not.toThrow();
+      expect(sniper.getStatus().status).toBe("OFFLINE");
+    });
+
+    it("does not write a stop message to an ended input stream", () => {
+      const sniper = makeSniper();
+      sniper.start();
+      const child = lastChild();
+      child.stdin.end();
+      child.stdin.write.mockClear();
+      sniper.stop();
+      expect(child.stdin.write).not.toHaveBeenCalled();
+    });
   });
 });
