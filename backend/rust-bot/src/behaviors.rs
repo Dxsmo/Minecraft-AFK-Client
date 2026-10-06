@@ -285,14 +285,19 @@ impl BehaviorState {
     }
 
     fn tick_manual_chat(&mut self, bot: &Client, now: Instant) -> bool {
-        if !self.spawned && bot.component::<InGameState>().is_err() {
+        // Spawn may still describe the previous world while a proxy has moved
+        // the connection into configuration. Azalea discards game packets then.
+        if bot.component::<InGameState>().is_err() {
             return false;
         }
         let Some(text) = self.manual_chat_queue.pop_front() else {
             return false;
         };
         self.close_open_menu(bot);
-        self.interrupt_for_transition(bot);
+        // Closing is deferred in Azalea's ECS. Interrupting again before it
+        // settles would send a second close for the same container.
+        self.reset_interactions();
+        bot.ecs.write().flush();
         bot.chat(text.clone());
         self.guard_after_chat(now, is_teleport_command(&text));
         // Manual GUIs stay open until the server closes them, a teleport
@@ -300,7 +305,7 @@ impl BehaviorState {
         self.command_menu_close_at = None;
         self.manual_menu_guard_until = text.starts_with('/').then_some(now + AUTOSELL_MENU_TIMEOUT);
         emit(&OutEvent::BehaviorLog {
-            message: format!("Command sent: {text}"),
+            message: format!("Command queued: {text}"),
         });
         true
     }
@@ -356,6 +361,10 @@ impl BehaviorState {
         } else {
             self.close_sell_menu(bot);
         }
+        self.reset_interactions();
+    }
+
+    fn reset_interactions(&mut self) {
         self.autosell_phase = AutoSellPhase::Idle;
         self.active_task = None;
         self.command_menu_close_at = None;
@@ -477,7 +486,9 @@ impl BehaviorState {
         // Before Spawn, and for a short stabilization period after a spawn or
         // teleport, automatic actions wait for inventory loading. Explicit
         // manual commands above remain responsive once the client has spawned.
-        let automation_ready = self.spawned && now >= self.automation_ready_at;
+        let automation_ready = self.spawned
+            && now >= self.automation_ready_at
+            && bot.component::<InGameState>().is_ok();
 
         // A late sell-menu response used to leave auto-sell in `Idle` with a
         // non-zero container id. Both the foreground queue and auto-sell then
@@ -520,9 +531,10 @@ impl BehaviorState {
         }
         if self.active_task.is_none()
             && self.command_menu_close_at.is_none()
-            && self
-                .last_sell_request_at
-                .is_some_and(|at| now.saturating_duration_since(at) <= AUTOSELL_LATE_MENU_WINDOW)
+            && (is_sell_menu_title(&title)
+                || self.last_sell_request_at.is_some_and(|at| {
+                    now.saturating_duration_since(at) <= AUTOSELL_LATE_MENU_WINDOW
+                }))
         {
             self.sell_menu = Some((id, title));
         } else if self.active_task.is_none() && self.command_menu_close_at.is_none() {
@@ -534,21 +546,34 @@ impl BehaviorState {
 
     fn manual_menu_pending(&self, bot: &Client, now: Instant) -> bool {
         self.manual_menu_guard_until.is_some_and(|at| now < at)
-            || self
-                .manual_menu_id
-                .is_some_and(|id| matches!(bot.get_inventory(), Ok(inv) if inv.id() == id))
+            || self.manual_menu_id.is_some_and(|id| {
+                bot.component::<Inventory>().is_ok_and(|inventory| {
+                    inventory.id == id
+                        && !inventory
+                            .container_menu_title
+                            .as_ref()
+                            .is_some_and(|title| is_sell_menu_title(&title.to_string()))
+                })
+            })
     }
 
     fn owns_sell_menu(&self, bot: &Client) -> bool {
-        let Some((id, title)) = &self.sell_menu else {
-            return false;
-        };
         bot.component::<Inventory>().is_ok_and(|inventory| {
-            inventory.id == *id
+            inventory.id != 0
                 && inventory
                     .container_menu_title
                     .as_ref()
-                    .is_some_and(|current| current.to_string() == *title)
+                    .is_some_and(|current| {
+                        let current = current.to_string();
+                        // Read the authoritative ECS menu as well as the request
+                        // association: packet callbacks can lag behind ECS updates,
+                        // and Spawn/position events clear the previous request.
+                        is_sell_menu_title(&current)
+                            || self
+                                .sell_menu
+                                .as_ref()
+                                .is_some_and(|(id, title)| inventory.id == *id && current == *title)
+                    })
         })
     }
 
@@ -1019,10 +1044,8 @@ impl BehaviorState {
         }
     }
 
-    /// Close a menu that exists while no subsystem owns it. This covers a
-    /// delayed sell GUI arriving after `AUTOSELL_MENU_TIMEOUT` and a close
-    /// acknowledgement that raced with the next tick. Without this recovery,
-    /// `inventory_is_mutable` remains false indefinitely and every queue stalls.
+    /// Recover an identified sell menu after a late reply or a spawn reset.
+    /// Reuse populated menus; close empty shells so retries can proceed.
     fn recover_orphaned_autosell_menu(&mut self, bot: &Client, now: Instant) -> bool {
         if !self.config.autosell_enabled
             || !matches!(self.autosell_phase, AutoSellPhase::Idle)
@@ -1041,6 +1064,20 @@ impl BehaviorState {
             return false;
         }
 
+        if player_item_count(bot) > 0 && !self.sell_paused(now) {
+            // A populated late/initial sell menu is already usable. Sell its
+            // player slots instead of discarding it and requesting it again.
+            self.autosell_phase = AutoSellPhase::WaitingForMenu {
+                since: now,
+                started_empty: false,
+                content_received: None,
+            };
+            self.next_autosell_at = now
+                + Duration::from_secs_f64(self.config.autosell_interval_seconds.max(0.05))
+                    .max(AUTOSELL_MIN_COMMAND_INTERVAL);
+            self.tick_autosell(bot, now);
+            return true;
+        }
         inv.close();
         self.next_autosell_at = now + AUTOSELL_ORPHAN_RECOVERY_DELAY;
         self.log_autosell_failure(now, "verspätetes/offenes Verkaufsmenü zurückgesetzt");
@@ -1112,6 +1149,30 @@ impl BehaviorState {
             });
         }
     }
+}
+
+/// Exact known titles only: a homes/server selector must never be clicked as a
+/// sale merely because it arrived near a command. Custom sell menus still use
+/// the association with the configured sell request above.
+fn is_sell_menu_title(title: &str) -> bool {
+    let mut plain = String::new();
+    let mut chars = title.chars();
+    while let Some(character) = chars.next() {
+        if character == '§' {
+            chars.next();
+        } else {
+            plain.push(character);
+        }
+    }
+    matches!(
+        plain
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+            .as_str(),
+        "items verkaufen" | "sell"
+    )
 }
 
 /// Whether the bot's own inventory is currently mutable, i.e. no external
@@ -1337,7 +1398,9 @@ mod tests {
         let (client, mut state, _) = crouch_client(false);
         let mut world = client.ecs.write();
         world.init_resource::<Messages<SendChatEvent>>();
-        world.entity_mut(client.entity).insert(Inventory::default());
+        world
+            .entity_mut(client.entity)
+            .insert((Inventory::default(), InGameState));
         world.add_observer(handle_client_side_close_container_trigger);
         world.add_observer(handle_set_container_content_trigger);
         world.add_observer(
@@ -1535,9 +1598,19 @@ mod tests {
             state.enqueue_chat(&client, command.into());
         }
         state.spawned = false;
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .remove::<InGameState>();
         state.on_tick(&client);
         assert!(take_commands(&client).is_empty());
         state.spawned = true;
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .insert(InGameState);
         for command in ["/tpahere Steve", "/home", "/homes"] {
             open_empty_sell_menu(&client, &mut state);
             state.autosell_phase = AutoSellPhase::WaitingForMenu {
@@ -1563,11 +1636,209 @@ mod tests {
             contents: Default::default(),
             player: Default::default(),
         });
-        inventory.container_menu_title = Some("Sell".into());
+        inventory.container_menu_title = Some("Items verkaufen".into());
         drop(inventory);
         drop(world);
-        // Some tests install a pending phase directly rather than send /sell.
-        state.sell_menu = Some((7, "Sell".into()));
+        state.on_menu_open(7, "Items verkaufen".into());
+    }
+
+    #[test]
+    fn hugosmp_sell_reply_after_spawn_reset_is_still_sold() {
+        let (client, mut state) = sell_client();
+        let clicks = capture_sell_clicks(&client);
+        let now = Instant::now();
+        tick_sell(&client, &mut state, now);
+        assert_eq!(take_commands(&client), vec!["/sell"]);
+        // Spawn/position events can invalidate the request before its GUI arrives.
+        state.on_spawn(&client);
+        open_foreign_menu(&client, &mut state, "Items verkaufen");
+        let mut slots = vec![ItemStack::Empty; 63];
+        slots[27] = ItemStack::new(ItemKind::Beef, 64);
+        receive_content(&client, &mut state, 7, slots);
+        assert!(state.owns_sell_menu(&client));
+        state.automation_ready_at = Instant::now();
+        state.next_autosell_at = Instant::now();
+        state.on_tick(&client);
+        client.ecs.write().flush();
+        assert_eq!(clicks.lock().len(), 1);
+        assert!(
+            take_commands(&client).is_empty(),
+            "reuse the open sell menu"
+        );
+    }
+
+    #[test]
+    fn hugosmp_sell_menu_does_not_require_an_open_screen_callback() {
+        let (client, mut state) = sell_client();
+        let clicks = capture_sell_clicks(&client);
+        let now = Instant::now();
+        tick_sell(&client, &mut state, now);
+        take_commands(&client);
+        open_foreign_menu(&client, &mut state, "Items verkaufen");
+        // The inventory component can be newer than the queued handler events.
+        state.sell_menu = None;
+        let mut slots = vec![ItemStack::Empty; 63];
+        slots[27] = ItemStack::new(ItemKind::Beef, 64);
+        receive_content(&client, &mut state, 7, slots);
+        tick_sell(&client, &mut state, now + Duration::from_millis(50));
+        assert_eq!(clicks.lock().len(), 1);
+        tick_sell(&client, &mut state, now + Duration::from_millis(100));
+        assert_eq!(client.get_inventory().unwrap().id(), 0);
+    }
+
+    #[test]
+    fn manual_command_survives_configuration_with_a_stale_spawn_flag() {
+        let (client, mut state) = sell_client();
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .remove::<InGameState>();
+        assert!(state.spawned);
+        state.enqueue_chat(&client, "/home".into());
+        state.on_control_event(&client);
+        state.on_tick(&client);
+        assert!(take_commands(&client).is_empty());
+        assert_eq!(state.manual_chat_queue.len(), 1);
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .insert(InGameState);
+        state.on_control_event(&client);
+        assert_eq!(take_commands(&client), vec!["/home"]);
+        assert!(state.manual_chat_queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn hugosmp_sell_and_manual_commands_reach_the_socket_in_order() {
+        use std::io::Cursor;
+
+        use azalea::app::App;
+        use azalea::bevy_tasks::{IoTaskPool, TaskPool};
+        use azalea::client_chat::{
+            handle_send_chat_event,
+            handler::{handle_send_chat_kind_event, SendChatKindEvent},
+        };
+        use azalea::connection::RawConnection;
+        use azalea::inventory::{InventoryPlugin, MenuOpenedEvent};
+        use azalea::packet::game::handle_outgoing_packets_observer;
+        use azalea::protocol::connect::{RawReadConnection, RawWriteConnection};
+        use azalea::protocol::packets::ConnectionProtocol;
+        use azalea::protocol::read::{deserialize_packet, read_raw_packet};
+        use azalea::registry::builtin::MenuKind;
+        use azalea::world::{WorldName, Worlds};
+        use tokio::net::{TcpListener, TcpStream};
+
+        // Use the real Azalea inventory/chat/outgoing handlers and a loopback
+        // socket. A SendChatEvent alone does not prove a command was sent.
+        IoTaskPool::get_or_init(TaskPool::new);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (client_socket, accepted) = tokio::join!(
+            TcpStream::connect(listener.local_addr().unwrap()),
+            listener.accept(),
+        );
+        let (mut server_socket, _) = accepted.unwrap();
+        let (read_stream, write_stream) = client_socket.unwrap().into_split();
+        let connection = RawConnection::new(
+            RawReadConnection {
+                read_stream,
+                buffer: Cursor::new(Vec::new()),
+                compression_threshold: None,
+                dec_cipher: None,
+            },
+            RawWriteConnection {
+                write_stream,
+                compression_threshold: None,
+                enc_cipher: None,
+            },
+            ConnectionProtocol::Game,
+        );
+        let mut app = App::new();
+        app.add_plugins(InventoryPlugin);
+        let mut world = std::mem::take(app.world_mut());
+        world.init_resource::<Messages<SendChatEvent>>();
+        world.init_resource::<Messages<SendChatKindEvent>>();
+        world.add_observer(handle_outgoing_packets_observer);
+        let world_name = WorldName::new("minecraft:overworld");
+        let mut worlds = Worlds::default();
+        let _game_world = worlds.get_or_insert(world_name.clone(), 384, -64, &Default::default());
+        world.insert_resource(worlds);
+        let entity = world
+            .spawn((Inventory::default(), InGameState, connection, world_name))
+            .id();
+        world.trigger(MenuOpenedEvent {
+            entity,
+            window_id: 7,
+            menu_type: MenuKind::Generic9x3,
+            title: "Items verkaufen".into(),
+        });
+        let client = Client {
+            entity,
+            ecs: Arc::new(RwLock::new(world)),
+        };
+        let (_, mut state) = sell_client();
+        let mut slots = vec![ItemStack::Empty; 63];
+        slots[27] = ItemStack::new(ItemKind::Beef, 64);
+        receive_content(&client, &mut state, 7, slots);
+        assert!(state.recover_orphaned_autosell_menu(&client, Instant::now()));
+        assert!(matches!(
+            state.autosell_phase,
+            AutoSellPhase::Closing { .. }
+        ));
+        // Now interrupt the sale with manual commands, without Spawn or Tick,
+        // and even while the world-restart pause is active.
+        state.spawned = false;
+        state.pause_autosell(0, 300_000);
+        let mut schedule = Schedule::default();
+        schedule.add_systems((handle_send_chat_event, handle_send_chat_kind_event).chain());
+        for text in ["/home", "/home farm", "/tpahere Steve"] {
+            state.enqueue_chat(&client, text.into());
+            state.on_control_event(&client);
+            let mut world = client.ecs.write();
+            schedule.run(&mut world);
+            world
+                .get_mut::<RawConnection>(entity)
+                .unwrap()
+                .net_conn()
+                .unwrap()
+                .poll_writer();
+        }
+        let packets = tokio::time::timeout(Duration::from_secs(3), async {
+            let mut packets = Vec::new();
+            let mut buffer = Cursor::new(Vec::new());
+            for _ in 0..5 {
+                let raw = read_raw_packet(&mut server_socket, &mut buffer, None, &mut None)
+                    .await
+                    .unwrap();
+                packets.push(
+                    deserialize_packet::<ServerboundGamePacket>(&mut Cursor::new(raw.as_ref()))
+                        .unwrap(),
+                );
+            }
+            packets
+        })
+        .await
+        .expect("manual commands must actually reach the socket");
+        assert!(
+            matches!(&packets[0], ServerboundGamePacket::ContainerClick(packet)
+            if packet.container_id == 7 && packet.slot_num == 27 && packet.state_id == 18)
+        );
+        assert!(
+            matches!(&packets[1], ServerboundGamePacket::ContainerClose(packet)
+            if packet.container_id == 7)
+        );
+        for (packet, expected) in packets[2..]
+            .iter()
+            .zip(["home", "home farm", "tpahere Steve"])
+        {
+            assert!(
+                matches!(packet, ServerboundGamePacket::ChatCommand(command)
+                if command.command == expected),
+                "expected {expected}, got {packet:?}"
+            );
+        }
+        assert_eq!(client.get_inventory().unwrap().id(), 0);
     }
 
     fn take_commands(client: &Client) -> Vec<String> {
