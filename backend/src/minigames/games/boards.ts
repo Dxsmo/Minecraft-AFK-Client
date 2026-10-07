@@ -64,6 +64,7 @@ function boardEngine(
     maxPlayers: 2,
     usesTimer: false,
     usesGameScreen: true,
+    startCountdownSeconds: 0,
     settings: z
       .object({ ...baseConfig, maxPlayers: z.literal(2).default(2) })
       .strict(),
@@ -83,8 +84,7 @@ function boardEngine(
       };
       // Keep the first starter's index in persistent lobby data for alternating rematches.
       l.data.firstStarter =
-        l.members.findIndex((m) => m.uuid === l.data.turn) ^
-        ((l.round - 1) % 2);
+        l.members.findIndex((m) => m.uuid === l.data.turn) ^ (l.round - 1) % 2;
     },
     handle(l, m, e) {
       ensure(e.type === "MOVE", "UNSUPPORTED_EVENT");
@@ -121,6 +121,7 @@ register({
   maxPlayers: 2,
   usesTimer: false,
   usesGameScreen: true,
+  startCountdownSeconds: 0,
   settings: z
     .object({
       ...baseConfig,
@@ -223,6 +224,7 @@ register({
   maxPlayers: 2,
   usesTimer: false,
   usesGameScreen: true,
+  startCountdownSeconds: 0,
   settings: z
     .object({
       ...baseConfig,

@@ -8,6 +8,7 @@ import {
   type Lobby,
 } from "./protocol.js";
 import { engine, validateConfig } from "./games/index.js";
+import { prepareRound } from "./rounds.js";
 import type { Audit } from "./repository.js";
 import type { MinigameService } from "./service.js";
 
@@ -262,6 +263,8 @@ export async function handleCommand(
               l.preparingAt = service.now();
               for (const m of l.members) m.inventoryAt = undefined;
               audit("GAME_PREPARING");
+              if (engine(l.game).startCountdownSeconds === 0)
+                audit(prepareRound(l, service.context()));
               break;
             case "INVENTORY": {
               service.limit(uuid, "inventory", 300);
@@ -326,6 +329,13 @@ export async function handleCommand(
                 }
                 l.winners = [];
                 audit("REMATCH_ACCEPTED");
+                if (engine(l.game).startCountdownSeconds === 0) {
+                  ensure(
+                    l.members.every((m) => m.connection === "CONNECTED"),
+                    "PLAYERS_NOT_CONNECTED",
+                  );
+                  audit(prepareRound(l, service.context()));
+                }
               }
               break;
             default:

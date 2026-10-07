@@ -135,6 +135,7 @@ export default async function minigameRoutes(app: FastifyInstance) {
         maxPlayers: e.maxPlayers,
         usesTimer: e.usesTimer,
         usesGameScreen: e.usesGameScreen,
+        startCountdownSeconds: e.startCountdownSeconds,
         defaults: validateConfig(e.id, {}),
       })),
     };
@@ -462,6 +463,7 @@ export default async function minigameRoutes(app: FastifyInstance) {
       maxPlayers: e.maxPlayers,
       usesTimer: e.usesTimer,
       usesGameScreen: e.usesGameScreen,
+      startCountdownSeconds: e.startCountdownSeconds,
       defaults: validateConfig(e.id, {}),
     })),
   );

@@ -290,21 +290,26 @@ it("WebSocket authenticates, sends snapshots, validates sequence and starts a cr
         .lobby.members.map((m: any) => m.minecraftVersion),
     ).toEqual(["1.21.11", "26.3"]);
     sockets[0].send(JSON.stringify({ ...event("START"), sequence: 2 }));
-    await waitFor(() => inboxes[0].some((m) => m.lobby?.state === "PREPARING"));
-    for (let i = 0; i < 2; i++)
-      sockets[i].send(
-        JSON.stringify({
-          ...event("INVENTORY", { items: [] }),
-          sequence: i ? 2 : 3,
-        }),
-      );
-    await waitFor(() => inboxes[0].some((m) => m.lobby?.state === "COUNTDOWN"));
-    sockets[0].send(
-      JSON.stringify({ ...event("MOVE", { slot: 0 }), sequence: 4 }),
+    await waitFor(() => inboxes[0].some((m) => m.lobby?.state === "ACTIVE"));
+    const active = inboxes[0].filter((m) => m.lobby).at(-1).lobby;
+    expect(active.countdownEndsAt).toBeUndefined();
+    expect(inboxes.flat().some((m) => m.lobby?.state === "COUNTDOWN")).toBe(
+      false,
+    );
+    const starter = uuids.indexOf(active.data.turn);
+    const sequence = starter === 0 ? 3 : 2;
+    sockets[starter].send(
+      JSON.stringify({ ...event("MOVE", { slot: 0 }), sequence }),
     );
     await waitFor(() =>
-      inboxes[0].some(
-        (m) => m.type === "ERROR" && m.code === "GAME_NOT_ACTIVE",
+      inboxes[starter].some((m) => m.lobby?.data.board?.[0] === uuids[starter]),
+    );
+    sockets[starter].send(
+      JSON.stringify({ ...event("MOVE", { slot: 1 }), sequence: sequence + 1 }),
+    );
+    await waitFor(() =>
+      inboxes[starter].some(
+        (m) => m.type === "ERROR" && m.code === "NOT_YOUR_TURN",
       ),
     );
     sockets[0].send(
@@ -316,7 +321,7 @@ it("WebSocket authenticates, sends snapshots, validates sequence and starts a cr
       ),
     );
   } finally {
-    for (const ws of sockets) ws.close();
+    await closeSockets(sockets, uuids);
   }
 });
 async function waitFor(predicate: () => boolean, timeout = 4000) {
@@ -326,6 +331,32 @@ async function waitFor(predicate: () => boolean, timeout = 4000) {
       throw new Error("Timed out waiting for WebSocket packet");
     await new Promise((r) => setTimeout(r, 10));
   }
+}
+
+async function closeSockets(sockets: WebSocket[], uuids: string[]) {
+  await Promise.all(
+    sockets.map(
+      (socket) =>
+        new Promise<void>((resolve) => {
+          if (socket.readyState === WebSocket.CLOSED) return resolve();
+          socket.once("close", () => resolve());
+          socket.close();
+        }),
+    ),
+  );
+  // Socket closure schedules a serialized database write. Wait for it before
+  // the shared Prisma client is disconnected by the test environment.
+  const deadline = Date.now() + 4000;
+  while (Date.now() < deadline) {
+    const players = await prisma.minigamePlayer.findMany({
+      where: { uuid: { in: uuids } },
+      select: { connectionState: true },
+    });
+    if (players.every((player) => player.connectionState === "DISCONNECTED"))
+      return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for persisted WebSocket disconnects");
 }
 
 it("uploads the exact submission, restricts review access, resolves votes and deletes lobby photos", async () => {
@@ -439,6 +470,6 @@ it("uploads the exact submission, restricts review access, resolves votes and de
       { code: "ENOENT" },
     );
   } finally {
-    for (const socket of sockets) socket.close();
+    await closeSockets(sockets, uuids);
   }
 });

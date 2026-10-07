@@ -1,6 +1,7 @@
 import { logger } from "../logging/logger.js";
 import { ensure, finish, GameError, member } from "./protocol.js";
 import { engine } from "./games/index.js";
+import { activateRound, prepareRound } from "./rounds.js";
 import type { Audit } from "./repository.js";
 import type { MinigameService } from "./service.js";
 
@@ -109,10 +110,7 @@ export async function tickService(service: MinigameService) {
                 m.connection === "CONNECTED",
             )
           ) {
-            engine(l.game).prepare(l, service.context());
-            l.state = "COUNTDOWN";
-            l.countdownEndsAt = now + 5000;
-            audit("COUNTDOWN_STARTED");
+            audit(prepareRound(l, service.context()));
           } else if (now - (l.preparingAt ?? now) > 15000) {
             l.state = "LOBBY";
             audit("PREPARATION_TIMEOUT");
@@ -127,9 +125,7 @@ export async function tickService(service: MinigameService) {
             l.members.every((m) => m.connection === "CONNECTED"),
             "PLAYERS_NOT_CONNECTED",
           );
-          l.state = "ACTIVE";
-          l.startedAt ??= now;
-          engine(l.game).start(l, service.context());
+          activateRound(l, service.context());
           audit("GAME_STARTED");
         } else if (
           (["ACTIVE", "ROUND_END"].includes(l.state) ||

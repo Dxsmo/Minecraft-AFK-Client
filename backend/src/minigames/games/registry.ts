@@ -23,6 +23,7 @@ export interface GameEngine {
   maxPlayers: number;
   usesTimer: boolean;
   usesGameScreen: boolean;
+  startCountdownSeconds: number;
   settings: z.ZodTypeAny;
   prepare(l: Lobby, c: Context): void;
   start(l: Lobby, c: Context): void;
@@ -66,6 +67,7 @@ export function publicData(l: Lobby) {
   return structuredClone(l.data);
 }
 export const defaults = {
+  startCountdownSeconds: 5,
   prepare: () => {},
   start: () => {},
   handle: () => {

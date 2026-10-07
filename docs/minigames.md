@@ -8,6 +8,12 @@ Die Fabric-Mod und vollständige Plattformdokumentation liegen im benachbarten P
 
 Automatisierte Tests: `npm test` im Backend. Vollständige Ingame-Abnahme, echte SMP-Regression und Behebung bestehender Dependency-Advisories sind vor einer Produktionsfreigabe noch erforderlich.
 
+## Fenster-Spiele ohne Start-Countdown
+
+Ab Mod 1.0.3 sind die Menüs kompakter und die Fenster-Spiele in nativen Slotreihen aufgebaut. Die Game Registry legt den Start-Timer über `startCountdownSeconds` fest: TicTacToe, 4 Gewinnt, Memory und Schere Stein Papier starten mit `0` direkt im autorisierten Host-Command. Sie benötigen keine frischen Inventarreports. Ein gemeinsamer Round-Lifecycle initialisiert authoritative Turns, Karten und Scores; Rematches starten nach den erforderlichen Stimmen ebenso direkt. Weltspiele behalten fünf Sekunden Countdown, Schere Stein Papier seinen separaten Drei-Sekunden-Reveal nach beiden Entscheidungen.
+
+Deployment für dieses Verhalten: `git pull --ff-only`, `docker compose build backend`, `docker compose up -d`. Keine neue Migration oder Environment-Variable. Backend-Build und alle 249 Tests bestanden; darunter acht neue Tests für direkte Eingaben/Rematches und eine echte WebSocket-Runde zwischen 1.21.11 und 26.3. Layout- und Ingame-QA: [Kompakte Mod-UI](../../GHGames/docs/compact-ui.md).
+
 
 ## Spieler-Gateway
 

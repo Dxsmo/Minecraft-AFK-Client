@@ -4,6 +4,7 @@ import { prisma } from "../../src/database/prisma.js";
 import { MinigameService } from "../../src/minigames/service.js";
 import { seedContent } from "../../src/minigames/content.js";
 import { finish, gameIds } from "../../src/minigames/protocol.js";
+import { engine } from "../../src/minigames/games/index.js";
 import { hello, event, ids } from "./helpers.js";
 let service: MinigameService, now: number, messages: Map<string, any[]>;
 beforeAll(async () => {
@@ -227,6 +228,79 @@ describe("authoritative lobbies", () => {
   });
 });
 
+describe("instant window game starts", () => {
+  const games = ["tictactoe", "connect_four", "memory", "rps"];
+  it.each(games)(
+    "starts %s and accepts input in the START response without inventory reports",
+    async (game) => {
+      const l = await joined(game);
+      await send(ids[0], "START");
+      expect(l.state).toBe("ACTIVE");
+      expect(l.startedAt).toBe(now);
+      expect(l.countdownEndsAt).toBeUndefined();
+      expect(l.members.every((m) => m.inventoryAt === undefined)).toBe(true);
+      expect(
+        messages
+          .get(ids[0])!
+          .filter((m) => m.type === "SNAPSHOT")
+          .at(-1).lobby.state,
+      ).toBe("ACTIVE");
+      if (game === "rps") {
+        await send(ids[0], "CHOICE", { choice: "rock" });
+        expect(l.data.choices[ids[0]]).toBe("rock");
+        await send(ids[1], "CHOICE", { choice: "scissors" });
+        expect(l.data.revealEndsAt).toBe(now + 3000);
+        expect(service.publicSnapshot(l, ids[1]).data.choices[ids[0]]).toBe(
+          "chosen",
+        );
+      } else {
+        const player = l.data.turn;
+        await send(player, "MOVE", { slot: 0 });
+        if (game === "memory") expect(l.data.revealed).toEqual([0]);
+        else expect(l.data.board.filter(Boolean)).toEqual([player]);
+      }
+      expect(
+        await prisma.minigameEvent.count({
+          where: { lobbyId: l.id, type: "COUNTDOWN_STARTED" },
+        }),
+      ).toBe(0);
+      expect(
+        await prisma.minigameEvent.count({
+          where: { lobbyId: l.id, type: "GAME_STARTED" },
+        }),
+      ).toBe(1);
+    },
+  );
+  it.each(games)(
+    "starts %s rematches immediately after both votes",
+    async (game) => {
+      const l = await joined(game);
+      await send(ids[0], "START");
+      finish(l, [ids[0]]);
+      await service.commit(l, [{ type: "GAME_FINISHED" }]);
+      await send(ids[0], "REMATCH", { accept: true });
+      expect(l.state).toBe("REMATCH");
+      await send(ids[1], "REMATCH", { accept: true });
+      expect(l.state).toBe("ACTIVE");
+      expect(l.round).toBe(2);
+      expect(l.countdownEndsAt).toBeUndefined();
+      expect(
+        l.members.every((m) => m.score === 0 && m.status === "ACTIVE"),
+      ).toBe(true);
+      expect(
+        await prisma.minigameEvent.count({
+          where: { lobbyId: l.id, type: "COUNTDOWN_STARTED" },
+        }),
+      ).toBe(0);
+      expect(
+        await prisma.minigameEvent.count({
+          where: { lobbyId: l.id, type: "GAME_STARTED" },
+        }),
+      ).toBe(2);
+    },
+  );
+});
+
 describe("recovery and durable outcomes", () => {
   it("requires unanimous rematch votes and alternates the initial starter", async () => {
     const l = await started("tictactoe");
@@ -236,11 +310,8 @@ describe("recovery and durable outcomes", () => {
     await send(ids[0], "REMATCH", { accept: true });
     expect(l.state).toBe("REMATCH");
     await send(ids[1], "REMATCH", { accept: true });
-    expect(l.state).toBe("PREPARING");
-    for (const m of l.members) await send(m.uuid, "INVENTORY", { items: [] });
-    await service.tick();
-    now += 5001;
-    await service.tick();
+    expect(l.state).toBe("ACTIVE");
+    expect(l.countdownEndsAt).toBeUndefined();
     expect(l.round).toBe(2);
     expect(l.data.turn).not.toBe(first);
     expect(l.matchScores[first]).toBe(1);
@@ -342,10 +413,11 @@ it.each(gameIds)(
     await send(ids[0], "START");
     for (const m of l.members) await send(m.uuid, "INVENTORY", { items: [] });
     await service.tick();
-    expect(l.state).toBe("COUNTDOWN");
+    const instant = engine(game).startCountdownSeconds === 0;
+    expect(l.state).toBe(instant ? "ACTIVE" : "COUNTDOWN");
     now += 1000;
     await service.tick();
-    expect(l.state).toBe("COUNTDOWN");
+    expect(l.state).toBe(instant ? "ACTIVE" : "COUNTDOWN");
     now += 4001;
     await service.tick();
     expect(l.state).toBe("ACTIVE");
