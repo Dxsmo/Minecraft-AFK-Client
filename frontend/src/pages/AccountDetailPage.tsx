@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useAccountConsole } from "../lib/sockets";
@@ -12,6 +12,7 @@ export function AccountDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [account, setAccount] = useState<MinecraftAccount | null>(null);
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +21,10 @@ export function AccountDetailPage() {
   const [commandError, setCommandError] = useState<string | null>(null);
   const accountIdRef = useRef(id);
   accountIdRef.current = id;
-  const [tab, setTab] = useState<"console" | "settings">("console");
+  const tab = searchParams.get("tab") === "settings" ? "settings" : "console";
+  function setTab(next: "console" | "settings") {
+    setSearchParams((params) => { params.set("tab", next); return params; });
+  }
   const { logs, status, loadOlderLogs, loadingOlderLogs, hasOlderLogs, historyError } = useAccountConsole(id);
   const inputRef = useRef<HTMLInputElement>(null);
   const isAdmin = user?.role === "ADMIN";

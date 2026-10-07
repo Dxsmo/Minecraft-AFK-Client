@@ -120,8 +120,12 @@ export function useAccountConsole(accountId: string | undefined) {
 }
 
 /** Live status snapshots for every account visible to the current user. */
-export function useDashboardSocket() {
+export function useDashboardSocket(onImageUpdated?: (update: { id: string; imageUrl: string }) => void, onRefresh?: () => void) {
   const [statuses, setStatuses] = useState<Record<string, LiveStatus>>({});
+  const imageCallback = useRef(onImageUpdated);
+  const refreshCallback = useRef(onRefresh);
+  imageCallback.current = onImageUpdated;
+  refreshCallback.current = onRefresh;
 
   useEffect(() => {
     let cancelled = false;
@@ -136,13 +140,17 @@ export function useDashboardSocket() {
       };
       socket.onerror = () => socket.close();
       socket.onmessage = (ev) => {
+        if (cancelled) return;
         const msg = JSON.parse(ev.data);
         if (msg.type === "statuses") {
           const map: Record<string, LiveStatus> = {};
           for (const s of msg.statuses as LiveStatus[]) map[s.id] = s;
           setStatuses(map);
+          refreshCallback.current?.();
         } else if (msg.type === "status") {
           setStatuses((prev) => ({ ...prev, [msg.status.id]: msg.status }));
+        } else if (msg.type === "account_image") {
+          imageCallback.current?.({ id: msg.id, imageUrl: msg.imageUrl });
         }
       };
     }

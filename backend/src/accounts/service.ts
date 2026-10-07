@@ -14,9 +14,10 @@ export function parseDailyTimes(raw: string): string[] {
 }
 
 /** Decode the remaining JSON settings for API clients. */
-function present<T extends { spawnerActions: string; spawnerClearTimes: string }>(account: T) {
-  const { spawnerActions, spawnerClearTimes, ...rest } = account;
-  return { ...rest, spawnerActions: parseSpawnerActions(spawnerActions), spawnerClearTimes: parseDailyTimes(spawnerClearTimes) };
+function present<T extends { id: string; image: { revision: string } | null; spawnerActions: string; spawnerClearTimes: string }>(account: T) {
+  const { image, spawnerActions, spawnerClearTimes, ...rest } = account;
+  return { ...rest, imageUrl: image ? `/api/minecraft/accounts/${account.id}/image?v=${image.revision}` : null,
+    spawnerActions: parseSpawnerActions(spawnerActions), spawnerClearTimes: parseDailyTimes(spawnerClearTimes) };
 }
 
 /**
@@ -47,6 +48,7 @@ const publicAccountSelect = {
   dashboardOrder: true,
   createdAt: true,
   updatedAt: true,
+  image: { select: { revision: true } },
   createdBy: { select: { id: true, username: true } },
   assignments: {
     select: { userId: true, user: { select: { id: true, username: true } } },

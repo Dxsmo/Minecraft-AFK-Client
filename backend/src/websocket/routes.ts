@@ -9,6 +9,7 @@ import { executeCommand } from "../commands/service.js";
 import { sniperManager } from "../namesniper/SniperManager.js";
 import { getSniperLogs } from "../logging/sniperLogService.js";
 import { logger } from "../logging/logger.js";
+import { onAccountImageUpdated } from "../accounts/images.js";
 
 function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -89,7 +90,7 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
     const sessionId = cookies[config.session.cookieName];
     const session = sessionId ? await getSession(sessionId) : null;
 
-    if (!session) {
+    if (!session || socket.readyState !== socket.OPEN) {
       socket.close(4401, "Unauthorized");
       return;
     }
@@ -105,8 +106,15 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
       });
     });
 
+    const unsubscribeImages = onAccountImageUpdated((update) => {
+      void isAllowed(update.id).then((allowed) => {
+        if (allowed) safeSend(socket, { type: "account_image", ...update });
+      }).catch((err) => logger.error({ err }, "Failed to authorize account image update"));
+    });
+
     socket.on("close", () => {
       unsubscribeStatus();
+      unsubscribeImages();
     });
   });
 

@@ -88,17 +88,17 @@ export function Layout() {
   return (
     <div className="flex h-screen overflow-hidden" style={{ backgroundColor: "var(--bg)" }}>
       <aside
-        className="flex w-60 shrink-0 flex-col overflow-y-auto px-3 py-5"
+        className="flex w-14 shrink-0 flex-col overflow-y-auto px-2 py-5 sm:w-60 sm:px-3"
         style={{ borderRight: "1px solid var(--border)", backgroundColor: "var(--bg-elev)" }}
       >
-        <div className="flex items-center gap-2.5 px-2">
+        <div className="flex items-center justify-center gap-2.5 sm:justify-start sm:px-2">
           <span
             className="glow-ring flex h-9 w-9 shrink-0 items-center justify-center rounded-lg p-1.5"
             style={{ backgroundColor: "var(--accent-soft)" }}
           >
             <img src="/favicon.png" alt="" className="h-full w-full object-contain" />
           </span>
-          <div className="leading-tight">
+          <div className="hidden leading-tight sm:block">
             <h1 className="text-sm font-semibold" style={{ color: "var(--text)" }}>
               Minecraft AFK
             </h1>
@@ -115,19 +115,21 @@ export function Layout() {
               <NavLink
                 key={item.to}
                 to={item.to}
+                aria-label={item.label}
+                title={item.label}
                 className={({ isActive }) =>
-                  `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-all ${
+                  `flex items-center justify-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-all sm:justify-start ${
                     isActive ? "nav-active" : "nav-idle"
                   }`
                 }
               >
                 <Icon name={item.icon} />
-                {item.label}
+                <span className="hidden sm:inline">{item.label}</span>
               </NavLink>
             ))}
         </nav>
 
-        <div className="mt-auto px-1.5 pt-4">
+        <div className="mt-auto hidden px-1.5 pt-4 sm:block">
           <span className="version-badge">
             <span className="version-dot" />
             <span className="version-text">V1.6.1</span>
@@ -137,7 +139,7 @@ export function Layout() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header
-          className="sticky top-0 z-10 flex items-center justify-end gap-3 px-6 py-3 backdrop-blur"
+          className="sticky top-0 z-10 flex items-center justify-end gap-3 px-3 py-3 backdrop-blur sm:px-6"
           style={{ borderBottom: "1px solid var(--border)", backgroundColor: "rgba(10,10,11,0.75)" }}
         >
           <div className="text-right leading-tight">
@@ -158,7 +160,7 @@ export function Layout() {
             Log out
           </button>
         </header>
-        <main className="min-w-0 flex-1 overflow-y-auto p-6">
+        <main className="min-w-0 flex-1 overflow-y-auto p-3 sm:p-6">
           <div className="mx-auto max-w-6xl">
             <ErrorBoundary resetKey={location.pathname}>
               <Outlet />

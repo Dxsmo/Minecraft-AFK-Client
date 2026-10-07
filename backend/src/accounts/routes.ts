@@ -13,6 +13,8 @@ import { getConsoleLogs } from "../logging/consoleLogService.js";
 import { parseOrReject } from "../utils/validate.js";
 import { recordAuditLog } from "../logging/auditLog.js";
 import { prisma } from "../database/prisma.js";
+import { z } from "zod";
+import { decodeAccountImage, MAX_ACCOUNT_IMAGE_BASE64, replaceAccountImage } from "./images.js";
 
 export default async function accountsRoutes(app: FastifyInstance) {
   app.addHook("preHandler", app.requireAuth);
@@ -42,6 +44,31 @@ export default async function accountsRoutes(app: FastifyInstance) {
       return;
     }
     reply.send({ ...account, live: clientManager.get(id)?.getStatus() });
+  });
+
+  app.get("/api/minecraft/accounts/:id/image", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    reply.header("Cache-Control", "private, no-store");
+    if (!(await accountsService.getAccountForSession(req.session!, id))) {
+      return reply.code(404).send({ error: "Account not found" });
+    }
+    const image = await prisma.accountImage.findUnique({ where: { minecraftAccountId: id } });
+    if (!image) return reply.code(404).send({ error: "Account image not found" });
+    return reply.type("image/png").send(Buffer.from(image.data));
+  });
+
+  app.put("/api/minecraft/accounts/:id/image", { preHandler: app.requireCsrf }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await accountsService.getAccountForSession(req.session!, id))) {
+      return reply.code(404).send({ error: "Account not found" });
+    }
+    const body = parseOrReject(z.object({ image: z.string().max(MAX_ACCOUNT_IMAGE_BASE64) }).strict(), req.body, reply);
+    if (!body) return;
+    const data = decodeAccountImage(body.image);
+    if (!data) return reply.code(400).send({ error: "Invalid account image (PNG, up to 256 × 256 pixels)" });
+    const update = await replaceAccountImage(id, data);
+    await recordAuditLog({ userId: req.session!.user.id, action: "ACCOUNT_IMAGE_UPDATE", targetType: "MinecraftAccount", targetId: id });
+    return reply.send(update);
   });
 
   app.get("/api/minecraft/accounts/:id/logs", async (req, reply) => {

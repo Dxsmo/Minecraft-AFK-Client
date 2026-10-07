@@ -68,6 +68,7 @@ export interface LiveStatus {
 
 export interface MinecraftAccount {
   id: string;
+  imageUrl: string | null;
   name: string;
   displayName: string;
   minecraftVersion: string;

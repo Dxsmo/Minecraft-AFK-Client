@@ -69,6 +69,67 @@ body {
 }
 
 @layer components {
+  .account-row {
+    --account-height: 112px;
+    display: grid;
+    grid-template-columns: 40px var(--account-height) minmax(0, 1fr) auto;
+    column-gap: 16px;
+    height: var(--account-height);
+    align-items: center;
+    padding-right: 16px;
+  }
+  .account-image-control {
+    align-self: stretch;
+  }
+  .account-heading { gap: 10px; }
+  .account-actions { gap: 6px; }
+  .account-sort, .account-actions { pointer-events: none; }
+  .account-sort button, .account-actions button { pointer-events: auto; }
+  .account-image-button {
+    position: absolute;
+    inset: -1px 0;
+    width: var(--account-height);
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    color: var(--text-subtle);
+    background: transparent;
+    cursor: pointer;
+    transition: color 150ms ease, background-color 150ms ease;
+  }
+  .account-image-button:hover { color: var(--text); background-color: var(--surface-hover); }
+  .account-image-button:disabled { cursor: wait; }
+  .account-settings-link:focus-visible, .account-image-button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  @media (max-width: 639px) {
+    .account-row {
+      grid-template-columns: 28px var(--account-height) minmax(0, 1fr);
+      grid-template-rows: minmax(0, 1fr) 24px;
+      column-gap: 8px;
+      padding-right: 8px;
+      padding-bottom: 6px;
+    }
+    .account-sort, .account-image-control { grid-row: 1 / 3; }
+    .account-image-control { margin-bottom: -6px; }
+    .account-summary { grid-column: 3; align-self: center; }
+    .account-heading { flex-wrap: wrap; column-gap: 4px; row-gap: 0; }
+    .account-heading > span:first-child { width: 100%; font-size: 12px; }
+    .account-summary input + span { display: none; }
+    .account-actions { grid-column: 3; gap: 3px; }
+    .account-actions .btn { padding: 4px; min-height: 24px; border-radius: 5px; }
+    .account-sort .btn { padding: 4px; }
+  }
+  @media (max-width: 359px) {
+    .account-row {
+      grid-template-columns: 24px var(--account-height) minmax(0, 1fr);
+      column-gap: 4px;
+      padding-right: 6px;
+    }
+    .account-actions { gap: 2px; }
+    .account-actions .btn { padding: 2px; }
+  }
   .card {
     background-color: var(--surface);
     border: 1px solid var(--border);

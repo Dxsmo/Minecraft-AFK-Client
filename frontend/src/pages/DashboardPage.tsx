@@ -6,6 +6,7 @@ import { useDashboardSocket } from "../lib/sockets";
 import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { CreateAccountDialog } from "../components/CreateAccountDialog";
+import { AccountImageButton } from "../components/AccountImageButton";
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -19,7 +20,10 @@ export function DashboardPage() {
   // screen-sharing. Persisted per admin in localStorage so it survives reloads.
   const blurKey = user ? `afk.blurredAccounts.${user.id}` : null;
   const [blurred, setBlurred] = useState<Set<string>>(new Set());
-  const liveStatuses = useDashboardSocket();
+  function updateImage(update: { id: string; imageUrl: string }) {
+    setAccounts((prev) => prev?.map((account) => account.id === update.id ? { ...account, imageUrl: update.imageUrl } : account) ?? null);
+  }
+  const liveStatuses = useDashboardSocket(updateImage, () => void load());
 
   useEffect(() => {
     if (!blurKey) return;
@@ -67,7 +71,7 @@ export function DashboardPage() {
     };
   }, [merged]);
 
-  async function runAction(id: string, action: "start" | "stop" | "restart") {
+  async function runAction(id: string, action: "start" | "stop") {
     setBusyIds((prev) => new Set(prev).add(id));
     try {
       await api.post(`/minecraft/accounts/${id}/${action}`);
@@ -168,34 +172,36 @@ export function DashboardPage() {
             return (
               <div
                 key={account.id}
-                className="card card-hover flex flex-wrap items-center gap-x-4 gap-y-3 p-4"
+                className="card card-hover account-row relative"
               >
-                <div className="flex items-center gap-2.5">
-                  <div className="mr-0.5 flex shrink-0 flex-col gap-1">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm px-2"
-                      onClick={() => void moveAccount(account.id, -1)}
-                      disabled={reorderBusy || index === 0}
-                      title="Move up"
-                      aria-label="Move up"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm px-2"
-                      onClick={() => void moveAccount(account.id, 1)}
-                      disabled={reorderBusy || index === merged.length - 1}
-                      title="Move down"
-                      aria-label="Move down"
-                    >
-                      ↓
-                    </button>
-                  </div>
+                <Link to={`/accounts/${account.id}?tab=settings`} className="account-settings-link absolute inset-0 z-10 rounded-[inherit]"
+                  aria-label={`Open settings for ${isBlurred ? "account" : label}`} />
+                <div className="account-sort relative z-20 flex flex-col items-center justify-center gap-1">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm px-1 sm:px-2"
+                    onClick={() => void moveAccount(account.id, -1)}
+                    disabled={reorderBusy || index === 0}
+                    title="Move up"
+                    aria-label="Move up"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm px-1 sm:px-2"
+                    onClick={() => void moveAccount(account.id, 1)}
+                    disabled={reorderBusy || index === merged.length - 1}
+                    title="Move down"
+                    aria-label="Move down"
+                  >
+                    ↓
+                  </button>
                 </div>
+                <AccountImageButton accountId={account.id} imageUrl={account.imageUrl} blurred={isBlurred}
+                  onUpdated={updateImage} onError={setError} />
                 <div
-                  className="min-w-0 flex-1"
+                  className="account-summary min-w-0"
                   style={{
                     filter: isBlurred ? "blur(6px)" : undefined,
                     userSelect: isBlurred ? "none" : undefined,
@@ -204,28 +210,28 @@ export function DashboardPage() {
                   }}
                   aria-hidden={isBlurred}
                 >
-                  <div className="flex items-center gap-2.5">
+                  <div className="account-heading flex items-center">
                     <span className="truncate font-medium" style={{ color: "var(--text)" }}>
                       {label}
                     </span>
                     <StatusBadge status={status} />
                     {account.edition === "BEDROCK" ? (
                       <span
-                        className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        className="hidden shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide sm:inline"
                         style={{ backgroundColor: "rgba(245,158,11,0.15)", color: "var(--warning)" }}
                       >
                         Bedrock
                       </span>
                     ) : (
                       <span
-                        className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        className="hidden shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide sm:inline"
                         style={{ backgroundColor: "rgba(96,165,250,0.15)", color: "#60a5fa" }}
                       >
                         Java
                       </span>
                     )}
                     {account.createdBy && (
-                      <span className="shrink-0 text-[11px]" style={{ color: "var(--text-subtle)" }}>
+                      <span className="hidden shrink-0 text-[11px] lg:inline" style={{ color: "var(--text-subtle)" }}>
                         Erstellt von{" "}
                         <span className="font-medium" style={{ color: "var(--text-muted)" }}>
                           {account.createdBy.username}
@@ -233,14 +239,14 @@ export function DashboardPage() {
                       </span>
                     )}
                   </div>
-                  <p className="mt-0.5 truncate text-xs" style={{ color: "var(--text-subtle)" }}>
+                  <p className="truncate text-[10px] sm:mt-0.5 sm:text-xs" style={{ color: "var(--text-subtle)" }}>
                     {account.serverHost}
                     {account.minecraftVersion ? ` · ${account.minecraftVersion}` : " · auto"}
                   </p>
-                  <NotesField accountId={account.id} initial={account.notes ?? ""} />
+                  <NotesField accountId={account.id} initial={account.notes ?? ""} disabled={isBlurred} />
                 </div>
 
-                <div className="flex flex-wrap items-center gap-1.5">
+                <div className="account-actions relative z-20 flex items-center">
                   {isAdmin && (
                     <button
                       onClick={() => toggleBlur(account.id)}
@@ -255,33 +261,28 @@ export function DashboardPage() {
                     disabled={busy || status === "ONLINE" || status === "CONNECTING"}
                     onClick={() => void runAction(account.id, "start")}
                     className="btn btn-secondary btn-sm"
+                    title="Start account" aria-label="Start account"
                   >
-                    Start
+                    <svg className="sm:hidden" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="m8 4 12 8-12 8z" /></svg>
+                    <span className="hidden sm:inline">Start</span>
                   </button>
                   <button
                     disabled={busy || status === "OFFLINE"}
                     onClick={() => void runAction(account.id, "stop")}
                     className="btn btn-secondary btn-sm"
+                    title="Stop account" aria-label="Stop account"
                   >
-                    Stop
+                    <svg className="sm:hidden" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 5h14v14H5z" /></svg>
+                    <span className="hidden sm:inline">Stop</span>
                   </button>
-                  <button
-                    disabled={busy}
-                    onClick={() => void runAction(account.id, "restart")}
-                    className="btn btn-ghost btn-sm"
-                  >
-                    Restart
-                  </button>
-                  <Link to={`/accounts/${account.id}`} className="btn btn-primary btn-sm">
-                    Settings
-                  </Link>
                   <button
                     disabled={busy}
                     onClick={() => void deleteAccount(account.id, label)}
                     className="btn btn-danger btn-sm"
-                    title="Delete account"
+                    title="Delete account" aria-label="Delete account"
                   >
-                    Delete
+                    <svg className="sm:hidden" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" /></svg>
+                    <span className="hidden sm:inline">Delete</span>
                   </button>
                 </div>
               </div>
@@ -304,7 +305,7 @@ export function DashboardPage() {
 }
 
 /** Inline, debounced-autosave note line for an account (no save button). */
-function NotesField({ accountId, initial }: { accountId: string; initial: string }) {
+function NotesField({ accountId, initial, disabled }: { accountId: string; initial: string; disabled: boolean }) {
   const [value, setValue] = useState(initial);
   const [saved, setSaved] = useState(false);
   const savedRef = useRef(initial);
@@ -330,13 +331,15 @@ function NotesField({ accountId, initial }: { accountId: string; initial: string
   }, [value, accountId]);
 
   return (
-    <div className="mt-1.5 flex items-center gap-2">
+    <div className="relative z-20 mt-0.5 flex items-center gap-2 sm:mt-1.5">
       <input
         value={value}
         maxLength={50}
+        disabled={disabled}
+        aria-label="Account note"
         onChange={(e) => setValue(e.target.value)}
         placeholder="Add a note…"
-        className="w-full max-w-xs bg-transparent text-xs outline-none"
+        className="w-full max-w-xs bg-transparent text-[10px] outline-none sm:text-xs"
         style={{ color: "var(--text-muted)" }}
       />
       {saved && (

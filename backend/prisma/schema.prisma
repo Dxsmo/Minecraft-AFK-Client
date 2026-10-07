@@ -164,6 +164,16 @@ model MinecraftAccount {
   assignments  UserMinecraftAccount[]
   consoleLogs  ConsoleLog[]
   sellEarnings SellEarning[]
+  image        AccountImage?
+}
+
+// Shared website image, kept separate so bot configuration reads never load it.
+model AccountImage {
+  minecraftAccountId String           @id
+  account            MinecraftAccount @relation(fields: [minecraftAccountId], references: [id], onDelete: Cascade)
+  data               Bytes
+  revision           String
+  updatedAt          DateTime         @updatedAt
 }
 
 // Progress of the "item worth" price scan. Exactly one row exists (id
