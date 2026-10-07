@@ -23,6 +23,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --pr
 ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /rust-bot
 COPY rust-bot/Cargo.toml rust-bot/Cargo.lock ./
+COPY rust-bot/vendor ./vendor
 COPY rust-bot/src ./src
 # Keep Cargo downloads, checked-out git dependencies and compiled dependency
 # artifacts outside the invalidated image layer. Without these cache mounts,

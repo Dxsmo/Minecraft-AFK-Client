@@ -24,6 +24,10 @@ parking_lot = "0.12"
 regex = "1"
 futures = "0.3"
 
+[patch."https://github.com/azalea-rs/azalea"]
+# The pinned client exposes its packet reader through this small local patch.
+azalea-client = { path = "vendor/azalea-client" }
+
 [profile.dev]
 opt-level = 1
 [profile.dev.package."*"]

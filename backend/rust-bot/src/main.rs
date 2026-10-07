@@ -12,6 +12,7 @@
 //! auto-reconnect is disabled and this process simply exits whenever the
 //! connection ends (or fails). Node observes the exit and reschedules.
 
+mod afk_network;
 mod behaviors;
 mod msauth;
 mod mspassword;
@@ -22,6 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use azalea::app::PluginGroup;
 use azalea::entity::metadata::Health;
 use azalea::prelude::*;
 use azalea::protocol::packets::game::ClientboundGamePacket;
@@ -155,7 +157,14 @@ async fn async_main() -> AppExit {
     // 6. Join the server. `reconnect_after(None)` disables Azalea's built-in
     //    auto-reconnect — Node owns that policy and respawns us on exit.
     let address = format!("{}:{}", config.host, config.port);
-    ClientBuilder::new()
+    ClientBuilder::new_without_plugins()
+        .add_plugins(
+            azalea::DefaultPlugins
+                .build()
+                .disable::<azalea::connection::ConnectionPlugin>(),
+        )
+        .add_plugins(azalea::bot::DefaultBotPlugins)
+        .add_plugins(afk_network::AfkNetworkPlugin)
         .set_handler(handle)
         .set_state(State)
         .reconnect_after(None::<std::time::Duration>)
@@ -281,6 +290,11 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
             let _ = bot.set_client_information(ClientInformation {
                 view_distance: 4,
                 ..Default::default()
+            });
+            emit(&OutEvent::BehaviorLog {
+                message:
+                    "AFK-Netzwerk aktiv: Item-Entities ausgeblendet, Paketverarbeitung begrenzt"
+                        .into(),
             });
         }
         Event::Login => {

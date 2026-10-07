@@ -295,7 +295,6 @@ dependencies = [
 [[package]]
 name = "azalea-client"
 version = "0.16.0+mc26.2"
-source = "git+https://github.com/azalea-rs/azalea?rev=6249c295#6249c295d353b9b3ef68f665b311cba39211fd19"
 dependencies = [
  "async-compat",
  "azalea-auth",

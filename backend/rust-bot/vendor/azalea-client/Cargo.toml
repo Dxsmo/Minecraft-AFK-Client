@@ -1,0 +1,50 @@
+# Vendored from azalea-rs/azalea commit 6249c295; see ../README.md.
+[package]
+name = "azalea-client"
+description = "A headless Minecraft client."
+version = "0.16.0+mc26.2"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/azalea-rs/azalea"
+
+[dependencies]
+async-compat = { version = "0.2.5" }
+azalea-auth = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea-block = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea-buf = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea-chat = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea-core = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea-crypto = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea-entity = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea-inventory = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea-physics = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea-protocol = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295", features = ["connecting", "bevy_ecs"] }
+azalea-registry = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea-world = { version = "0.16.0", default-features = false, git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+bevy_app = { version = "0.19.0" }
+bevy_ecs = { version = "0.19.0", default-features = false, features = ["multi_threaded"] }
+bevy_log = { version = "0.19.0", optional = true }
+bevy_tasks = { version = "0.19.0" }
+bevy_time = { version = "0.19.0" }
+chrono = { version = "0.4.45", default-features = false, features = ["now"] }
+derive_more = { version = "2.1.1", features = ["deref", "deref_mut"] }
+indexmap = { version = "2.14.0" }
+minecraft_folder_path = { version = "0.1.2" }
+parking_lot = { version = "0.12.5" }
+regex = { version = "1.12.4" }
+reqwest = { version = "0.13.4", default-features = false, optional = true, features = ["socks"] }
+simdnbt = { version = "0.10.0" }
+thiserror = { version = "2.0.18" }
+tokio = { version = "1.52.3", features = ["sync"] }
+tracing = { version = "0.1.44" }
+uuid = { version = "1.23.4" }
+bevy_utils = { version = "0.19.0", default-features = false, features = ["debug"] }
+
+[dev-dependencies]
+eyre = { version = "0.6.12" }
+
+[features]
+default = ["log", "packet-event", "online-mode"]
+log = ["bevy_log"]
+packet-event = []
+online-mode = ["azalea-auth/online-mode", "azalea-protocol/online-mode", "dep:reqwest"]

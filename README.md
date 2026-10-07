@@ -210,6 +210,14 @@ additional users access afterwards in the account's **Settings** panel):
   During connection configuration, manual commands stay queued until game
   packets can be sent again. Open menus are closed once before the command;
   `Command queued` records local dispatch, not a server acknowledgement.
+  The native AFK network reader processes at most 256 packets or four
+  milliseconds of incoming work per update, then lets ticks and outgoing
+  commands proceed. Dropped item entities and their visual updates are omitted
+  locally; server-side pickup and player/container inventory updates remain
+  active. Only raw packet callbacks used by selling and world transitions are
+  forwarded to the bot handler. Player physics, other entities, authentication,
+  keepalives, compression and encryption remain handled by Azalea. The startup
+  console line `AFK-Netzwerk aktiv` confirms that this reader is enabled.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once
