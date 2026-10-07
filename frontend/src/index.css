@@ -99,7 +99,7 @@ body {
   }
   .account-image-button:hover { color: var(--text); background-color: var(--surface-hover); }
   .account-image-button:disabled { cursor: wait; }
-  .account-settings-link:focus-visible, .account-image-button:focus-visible {
+  .account-row-link:focus-visible, .account-image-button:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
   }

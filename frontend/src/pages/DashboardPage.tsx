@@ -174,8 +174,8 @@ export function DashboardPage() {
                 key={account.id}
                 className="card card-hover account-row relative"
               >
-                <Link to={`/accounts/${account.id}?tab=settings`} className="account-settings-link absolute inset-0 z-10 rounded-[inherit]"
-                  aria-label={`Open settings for ${isBlurred ? "account" : label}`} />
+                <Link to={`/accounts/${account.id}?tab=console`} className="account-row-link absolute inset-0 z-10 rounded-[inherit]"
+                  aria-label={`Open console for ${isBlurred ? "account" : label}`} />
                 <div className="account-sort relative z-20 flex flex-col items-center justify-center gap-1">
                   <button
                     type="button"
