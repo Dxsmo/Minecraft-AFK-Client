@@ -58,6 +58,23 @@ Generate a strong session secret:
 openssl rand -hex 32
 ```
 
+Set the browser-facing origin explicitly. For example, for
+`https://afk.example.com`, use:
+
+```dotenv
+PUBLIC_ORIGIN=https://afk.example.com
+CORS_ORIGINS=https://afk.example.com
+SESSION_COOKIE_SECURE=true
+TRUSTED_PROXIES=loopback,uniquelocal
+```
+
+Website sockets reject missing/untrusted Origins; browser write requests use
+the same allowlist. Include only actual trusted origins, without wildcards.
+`TRUSTED_PROXIES` applies to the backend's immediate proxies; narrow it to the
+actual internal proxy addresses where practical. Separately configure Caddy's
+trusted proxies for your Cloudflare/tunnel setup and verify that login limits
+see visitor IPs rather than one shared proxy IP. See [SECURITY.md](SECURITY.md).
+
 ## 4. Running with Docker Compose
 
 ```bash
@@ -228,6 +245,10 @@ The migration `20261004190000_reset_sell_earnings_once` clears the old sell
 earnings once, resetting the 5-minute, 1-hour and 24-hour counters for every
 account. New confirmed sales then accumulate normally. Prisma records the
 migration, so subsequent updates and backend restarts do not reset the counters.
+
+V4.2.0 also applies `20261008180000_redact_proxy_audit_secrets`, which removes
+proxy settings from historical Name Sniper update audit records. It preserves
+accounts, notes and settings. Existing backups/exported logs are not rewritten.
 
 The Dockerfiles use persistent BuildKit caches for Cargo's registry/git data,
 compiled Rust dependencies and npm downloads. The first backend build on each

@@ -24,6 +24,13 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 export default fp(async function authPlugin(app: FastifyInstance) {
   app.decorateRequest("session", null);
 
+  app.addHook("onSend", async (req, reply) => {
+    const route = req.routeOptions.url ?? req.url;
+    if (route.startsWith("/api/") && !route.startsWith("/api/assets/")) {
+      reply.header("Cache-Control", "private, no-store");
+    }
+  });
+
   app.addHook("preHandler", async (req) => {
     const sessionId = req.cookies?.[config.session.cookieName];
     req.session = sessionId ? await getSession(sessionId) : null;

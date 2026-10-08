@@ -1,172 +1,94 @@
 import type { FastifyInstance } from "fastify";
-import type { WebSocket } from "ws";
-import { config } from "../config/config.js";
-import { getSession } from "../auth/session.js";
 import { canAccessAccount } from "../accounts/service.js";
 import { clientManager } from "../minecraft/ClientManager.js";
 import { getConsoleLogs } from "../logging/consoleLogService.js";
 import { executeCommand } from "../commands/service.js";
 import { sniperManager } from "../namesniper/SniperManager.js";
 import { getSniperLogs } from "../logging/sniperLogService.js";
-import { logger } from "../logging/logger.js";
 import { onAccountImageUpdated } from "../accounts/images.js";
+import { commandSchema } from "../accounts/schemas.js";
+import { recordAuditLog } from "../logging/auditLog.js";
+import { authorizeSocket } from "./authorization.js";
 
-function parseCookies(header: string | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!header) return out;
-  for (const part of header.split(";")) {
-    const idx = part.indexOf("=");
-    if (idx === -1) continue;
-    out[part.slice(0, idx).trim()] = decodeURIComponent(part.slice(idx + 1).trim());
-  }
-  return out;
-}
-
-function safeSend(socket: WebSocket, data: unknown): void {
-  if (socket.readyState !== socket.OPEN) return;
-  try {
-    socket.send(JSON.stringify(data));
-  } catch (err) {
-    logger.error({ err }, "Failed to send WebSocket message");
-  }
-}
-
-/**
- * Registers WebSocket routes for real-time updates:
- *  - /ws/accounts/:id  -> live console (chat/commands/system events) for one account
- *  - /ws/dashboard     -> live status snapshots for all accounts the user can see
- *
- * Auth is enforced manually here (rather than via the normal preHandler hook)
- * because the WebSocket upgrade request must be validated before accepting
- * the connection, using the same session cookie as regular HTTP requests.
- */
+/** Cookie-authenticated website sockets require a trusted Origin (app.ts). */
 export default async function registerWebsocketRoutes(app: FastifyInstance) {
-  app.get("/ws/accounts/:id", { websocket: true }, async (socket, req) => {
-    const cookies = parseCookies(req.headers.cookie);
-    const sessionId = cookies[config.session.cookieName];
-    const session = sessionId ? await getSession(sessionId) : null;
+  app.get("/ws/accounts/:id", { websocket: true }, (socket, req) => {
     const { id: accountId } = req.params as { id: string };
-
-    if (!session || !(await canAccessAccount(session, accountId))) {
-      socket.close(4401, "Unauthorized");
-      return;
-    }
-
-    const history = await getConsoleLogs(accountId);
-    safeSend(socket, { type: "history", logs: history });
-    const status = clientManager.get(accountId)?.getStatus();
-    if (status) safeSend(socket, { type: "status", status });
-
-    const unsubscribeConsole = clientManager.onConsoleEvent((event) => {
-      if (event.minecraftAccountId === accountId) safeSend(socket, { type: "console", event });
+    const connection = authorizeSocket(socket, req, { accountId });
+    if (!connection) return;
+    const { run, send, subscribe } = connection;
+    run(async () => {
+      const history = await getConsoleLogs(accountId);
+      send({ type: "history", logs: history });
+      const status = clientManager.get(accountId)?.getStatus();
+      if (status) send({ type: "status", status });
     });
-    const unsubscribeStatus = clientManager.onStatusEvent((s) => {
-      if (s.id === accountId) safeSend(socket, { type: "status", status: s });
-    });
-
-    socket.on("message", (raw: Buffer) => {
-      void (async () => {
-        try {
-          const parsed = JSON.parse(raw.toString());
-          if (parsed?.type === "command" && typeof parsed.command === "string") {
-            const result = await executeCommand(session, accountId, parsed.command);
-            if (!result.ok) safeSend(socket, { type: "error", reason: result.reason });
-          }
-        } catch (err) {
-          safeSend(socket, { type: "error", reason: "INVALID_MESSAGE" });
-          logger.debug({ err }, "Invalid websocket message received");
-        }
-      })();
-    });
-
-    socket.on("close", () => {
-      unsubscribeConsole();
-      unsubscribeStatus();
-    });
-  });
-
-  app.get("/ws/dashboard", { websocket: true }, async (socket, req) => {
-    const cookies = parseCookies(req.headers.cookie);
-    const sessionId = cookies[config.session.cookieName];
-    const session = sessionId ? await getSession(sessionId) : null;
-
-    if (!session || socket.readyState !== socket.OPEN) {
-      socket.close(4401, "Unauthorized");
-      return;
-    }
-
-    const isAllowed = (accountId: string) =>
-      session.user.role === "ADMIN" ? Promise.resolve(true) : canAccessAccount(session, accountId);
-
-    safeSend(socket, { type: "statuses", statuses: clientManager.getAllStatuses() });
-
-    const unsubscribeStatus = clientManager.onStatusEvent((s) => {
-      void isAllowed(s.id).then((allowed) => {
-        if (allowed) safeSend(socket, { type: "status", status: s });
+    subscribe(clientManager.onConsoleEvent((event) => {
+      if (event.minecraftAccountId === accountId) run(() => send({ type: "console", event }));
+    }));
+    subscribe(clientManager.onStatusEvent((status) => {
+      if (status.id === accountId) run(() => send({ type: "status", status }));
+    }));
+    let messages = 0, windowStart = Date.now();
+    socket.on("message", (raw, binary) => {
+      if (Date.now() - windowStart > 10_000) { messages = 0; windowStart = Date.now(); }
+      if (++messages > 20) { socket.close(4429, "Command rate limit"); return; }
+      if (binary || Buffer.byteLength(raw as Buffer) > 4096) { socket.close(4400, "Invalid message"); return; }
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw.toString()); } catch { send({ type: "error", reason: "INVALID_MESSAGE" }); return; }
+      run(async (session) => {
+        const message = parsed as { type?: unknown; command?: unknown; csrfToken?: unknown } | null;
+        const body = commandSchema.safeParse(message);
+        if (message?.type !== "command" || !body.success) { send({ type: "error", reason: "INVALID_MESSAGE" }); return; }
+        if (message.csrfToken !== session.csrfToken) { send({ type: "error", reason: "INVALID_CSRF" }); return; }
+        const result = await executeCommand(session, accountId, body.data.command);
+        if (!result.ok) send({ type: "error", reason: result.reason });
+        else await recordAuditLog({ userId: session.user.id, action: "ACCOUNT_COMMAND", targetType: "MinecraftAccount", targetId: accountId,
+          details: { command: body.data.command } });
       });
     });
-
-    const unsubscribeImages = onAccountImageUpdated((update) => {
-      void isAllowed(update.id).then((allowed) => {
-        if (allowed) safeSend(socket, { type: "account_image", ...update });
-      }).catch((err) => logger.error({ err }, "Failed to authorize account image update"));
-    });
-
-    socket.on("close", () => {
-      unsubscribeStatus();
-      unsubscribeImages();
-    });
   });
 
-  // ---- Name Sniper (admin-only) ----
+  app.get("/ws/dashboard", { websocket: true }, (socket, req) => {
+    const connection = authorizeSocket(socket, req);
+    if (!connection) return;
+    const { run, send, subscribe } = connection;
+    run(async (session) => {
+      const statuses = clientManager.getAllStatuses();
+      const allowed = await Promise.all(statuses.map((status) => canAccessAccount(session, status.id)));
+      send({ type: "statuses", statuses: statuses.filter((_, index) => allowed[index]) });
+    });
+    subscribe(clientManager.onStatusEvent((status) => {
+      run(async (session) => { if (await canAccessAccount(session, status.id)) send({ type: "status", status }); });
+    }));
+    subscribe(onAccountImageUpdated((update) => {
+      run(async (session) => { if (await canAccessAccount(session, update.id)) send({ type: "account_image", ...update }); });
+    }));
+  });
 
-  app.get("/ws/namesniper/:id", { websocket: true }, async (socket, req) => {
-    const cookies = parseCookies(req.headers.cookie);
-    const sessionId = cookies[config.session.cookieName];
-    const session = sessionId ? await getSession(sessionId) : null;
+  app.get("/ws/namesniper/:id", { websocket: true }, (socket, req) => {
     const { id: accountId } = req.params as { id: string };
-
-    if (!session || session.user.role !== "ADMIN") {
-      socket.close(4401, "Unauthorized");
-      return;
-    }
-
-    const history = await getSniperLogs(accountId, 200);
-    safeSend(socket, { type: "history", logs: history });
-    const status = sniperManager.get(accountId)?.getStatus();
-    if (status) safeSend(socket, { type: "status", status });
-
-    const unsubscribeConsole = sniperManager.onConsoleEvent((event) => {
-      if (event.sniperAccountId === accountId) safeSend(socket, { type: "console", event });
+    const connection = authorizeSocket(socket, req, { adminOnly: true });
+    if (!connection) return;
+    const { run, send, subscribe } = connection;
+    run(async () => {
+      send({ type: "history", logs: await getSniperLogs(accountId, 200) });
+      const status = sniperManager.get(accountId)?.getStatus();
+      if (status) send({ type: "status", status });
     });
-    const unsubscribeStatus = sniperManager.onStatusEvent((s) => {
-      if (s.id === accountId) safeSend(socket, { type: "status", status: s });
-    });
-
-    socket.on("close", () => {
-      unsubscribeConsole();
-      unsubscribeStatus();
-    });
+    subscribe(sniperManager.onConsoleEvent((event) => {
+      if (event.sniperAccountId === accountId) run(() => send({ type: "console", event }));
+    }));
+    subscribe(sniperManager.onStatusEvent((status) => {
+      if (status.id === accountId) run(() => send({ type: "status", status }));
+    }));
   });
 
-  app.get("/ws/namesniper-dashboard", { websocket: true }, async (socket, req) => {
-    const cookies = parseCookies(req.headers.cookie);
-    const sessionId = cookies[config.session.cookieName];
-    const session = sessionId ? await getSession(sessionId) : null;
-
-    if (!session || session.user.role !== "ADMIN") {
-      socket.close(4401, "Unauthorized");
-      return;
-    }
-
-    safeSend(socket, { type: "statuses", statuses: sniperManager.getAllStatuses() });
-
-    const unsubscribeStatus = sniperManager.onStatusEvent((s) => {
-      safeSend(socket, { type: "status", status: s });
-    });
-
-    socket.on("close", () => {
-      unsubscribeStatus();
-    });
+  app.get("/ws/namesniper-dashboard", { websocket: true }, (socket, req) => {
+    const connection = authorizeSocket(socket, req, { adminOnly: true });
+    if (!connection) return;
+    const { run, send, subscribe } = connection;
+    run(() => send({ type: "statuses", statuses: sniperManager.getAllStatuses() }));
+    subscribe(sniperManager.onStatusEvent((status) => run(() => send({ type: "status", status }))));
   });
 }

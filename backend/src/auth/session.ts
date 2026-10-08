@@ -9,6 +9,16 @@ export interface SessionContext {
   user: Pick<User, "id" | "username" | "role" | "status">;
 }
 
+type Revocation = { sessionId?: string; userId?: string };
+const revocationListeners = new Set<(revocation: Revocation) => void>();
+export function onSessionsRevoked(listener: (revocation: Revocation) => void) {
+  revocationListeners.add(listener);
+  return () => { revocationListeners.delete(listener); };
+}
+function notifyRevocation(revocation: Revocation) {
+  for (const listener of revocationListeners) listener(revocation);
+}
+
 /**
  * Server-side session store backed by SQLite via Prisma. Chosen over JWT so
  * sessions can be revoked instantly (logout, disabled user, admin action)
@@ -62,11 +72,13 @@ export async function getSession(sessionId: string): Promise<SessionContext | nu
 }
 
 export async function destroySession(sessionId: string): Promise<void> {
-  await prisma.session.delete({ where: { id: sessionId } }).catch(() => undefined);
+  await prisma.session.deleteMany({ where: { id: sessionId } });
+  notifyRevocation({ sessionId });
 }
 
 export async function destroyAllUserSessions(userId: string): Promise<void> {
   await prisma.session.deleteMany({ where: { userId } });
+  notifyRevocation({ userId });
 }
 
 /**
@@ -77,6 +89,7 @@ export async function destroyAllUserSessions(userId: string): Promise<void> {
  */
 export async function clearAllSessions(): Promise<void> {
   await prisma.session.deleteMany({});
+  notifyRevocation({});
 }
 
 /** Periodically clears expired sessions to keep the table small on the Pi. */

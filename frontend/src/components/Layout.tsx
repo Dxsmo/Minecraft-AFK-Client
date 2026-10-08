@@ -133,9 +133,10 @@ export function Layout() {
         </nav>
 
         <div className="mt-auto hidden px-1.5 pt-4 sm:block">
-          <span className="version-badge">
-            <span className="version-dot" />
-            <span className="version-text">V1.6.1</span>
+          <span className="version-badge" aria-label="Version V4.2.0">
+            <span className="version-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3ZM4 7.5l8 4.5 8-4.5M12 12v9" /></svg></span>
+            <span className="version-text">V4.2.0</span>
+            <span className="version-spark" aria-hidden="true" />
           </span>
         </div>
       </aside>

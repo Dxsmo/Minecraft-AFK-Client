@@ -23,9 +23,9 @@
     "@fastify/websocket": "^11.0.2",
     "@prisma/client": "^6.2.1",
     "argon2": "^0.41.1",
-    "bedrock-protocol": "^3.58.2",
+    "bedrock-protocol": "3.58.2",
     "dotenv": "^16.4.7",
-    "fastify": "^5.12.1",
+    "fastify": "^5.12.5",
     "fastify-plugin": "^5.0.1",
     "minecraft-assets": "^1.18.0",
     "nanoid": "^5.0.9",
@@ -42,7 +42,7 @@
     "@types/ws": "^8.18.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
-    "vitest": "^3.0.4"
+    "vitest": "^4.1.11"
   },
   "allowScripts": {
     "@prisma/client@6.19.3": true,
@@ -50,5 +50,17 @@
     "prisma@6.19.3": true,
     "@prisma/engines@6.19.3": true,
     "esbuild@0.28.2": true
+  },
+  "overrides": {
+    "cmake-js": {
+      "axios": "^0.34.0",
+      "tar": "^7.5.22"
+    },
+    "@azure/msal-node": {
+      "uuid": "^11.1.1"
+    },
+    "@prisma/config": {
+      "deepmerge-ts": "^8.0.2"
+    }
   }
 }

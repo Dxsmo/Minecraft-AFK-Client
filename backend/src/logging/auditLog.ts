@@ -1,5 +1,6 @@
 import { prisma } from "../database/prisma.js";
 import { logger } from "./logger.js";
+import { redactSecrets } from "./redactSecrets.js";
 
 /**
  * Records a critical admin/security-relevant action for later auditing.
@@ -19,7 +20,7 @@ export async function recordAuditLog(params: {
         action: params.action,
         targetType: params.targetType,
         targetId: params.targetId,
-        details: params.details ? JSON.stringify(params.details) : undefined,
+        details: params.details ? JSON.stringify(redactSecrets(params.details)) : undefined,
       },
     });
   } catch (err) {

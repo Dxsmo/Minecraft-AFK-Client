@@ -58,9 +58,11 @@ header {
 	# HSTS: enforce HTTPS for a year including subdomains. Cloudflare/Caddy
 	# terminate TLS in front of this, so clients only ever see HTTPS.
 	Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-	X-Frame-Options "SAMEORIGIN"
+	X-Frame-Options "DENY"
 	X-Content-Type-Options "nosniff"
 	Referrer-Policy "no-referrer"
+	Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' wss://{host} ws://{host}; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+	Permissions-Policy "camera=(), microphone=(), geolocation=()"
 	# Don't advertise the server software.
 	-Server
 }

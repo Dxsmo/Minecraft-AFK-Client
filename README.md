@@ -389,18 +389,23 @@ older history can be loaded in pages while keeping the reading position.
   logs) survives restarts via the SQLite file in the `backend_data`
   Docker volume; only *sessions* are intentionally cleared on restart.
 - CSRF protection via double-submit cookie (`afk_csrf` cookie +
-  `x-csrf-token` header, enforced on every mutating request)
+  `x-csrf-token` header on authenticated website writes)
+- Explicit trusted Origins for website writes/sockets; live connections
+  recheck current sessions and account/admin rights before queued actions
 - Full RBAC + per-account ownership checks enforced in every API route
   (not just hidden in the UI)
 - Rate limiting: global (200 req/min) + strict login limiter
   (`LOGIN_RATE_LIMIT_MAX` per `LOGIN_RATE_LIMIT_WINDOW`)
-- Security headers via `@fastify/helmet`
+- Security headers via `@fastify/helmet` and Caddy (including frontend CSP)
 - Zod input validation on every request body
 - Audit log for admin-critical actions (user/account CRUD, assignments,
   start/stop/restart, commands executed, logins)
-- Passwords/secrets are redacted from all log output (Pino `redact`)
-  and never returned by any API endpoint
+- Secret-bearing structured log fields and audit details are redacted;
+  public user/account response selectors exclude passwords and tokens
 - Minecraft credentials (`credentialsSecret`) never leave the backend
+
+See [the security overview](docs/SECURITY.md) and
+[the V4.2.0 review](docs/SECURITY_REVIEW.md) for verification and deployment limits.
 
 ---
 
@@ -440,6 +445,8 @@ troubleshooting).
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — Raspberry Pi 5 setup, Docker
   vs systemd, Caddy reverse proxy, Cloudflare DNS/HTTPS, firewall,
   backups, updates, troubleshooting.
+- [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md) — V4.2.0 security findings,
+  fixes, test evidence and unverified deployment boundaries.
 - [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — features that Azalea (Java-only,
   headless) cannot support: Bedrock accounts and rendered Live View / screenshots,
   with the path to add each later.

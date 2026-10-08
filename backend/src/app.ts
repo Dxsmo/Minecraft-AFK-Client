@@ -20,11 +20,12 @@ import { isIpBanned } from "./security/ipBans.js";
 import registerWebsocketRoutes from "./websocket/routes.js";
 import { getItemTexture } from "./assets/itemTextures.js";
 import notesRoutes from "./notes/routes.js";
+import { isTrustedOrigin, isWebsiteSocketPath } from "./security/origins.js";
 
 export async function buildApp() {
   const app = Fastify({
     loggerInstance: logger,
-    trustProxy: true, // required so req.ip is correct behind Caddy/Cloudflare
+    trustProxy: config.trustedProxies,
   });
 
   // ---- Security headers ----
@@ -39,13 +40,23 @@ export async function buildApp() {
       : false,
   });
 
+  // Install upgrade cleanup before any hook can reject a WebSocket request.
+  await app.register(websocket, { options: { maxPayload: 256 * 1024, perMessageDeflate: false } });
+
   // ---- IP ban guard ----
   // Reject any request from a banned IP as early as possible (before auth,
   // rate-limit accounting or route handlers do any work). Uses the in-memory
   // ban cache loaded at startup (see server.ts) for a synchronous lookup.
   app.addHook("onRequest", async (req, reply) => {
     if (isIpBanned(req.ip)) {
-      reply.code(403).send({ error: "Your IP address has been blocked" });
+      return reply.code(403).send({ error: "Your IP address has been blocked" });
+    }
+    const origin = req.headers.origin;
+    // The matched route also covers encoded spellings such as /ws/%64ashboard.
+    const websiteSocket = isWebsiteSocketPath(req.routeOptions.url ?? req.url.split("?", 1)[0]);
+    if ((websiteSocket || (origin !== undefined && !["GET", "HEAD", "OPTIONS"].includes(req.method))) &&
+        !isTrustedOrigin(origin)) {
+      reply.code(403).send({ error: "Untrusted request origin" });
     }
   });
 
@@ -62,7 +73,6 @@ export async function buildApp() {
   });
 
   await app.register(cookie, { secret: config.session.secret });
-  await app.register(websocket);
 
   await app.register(authPlugin);
 

@@ -12,6 +12,7 @@ const envSchema = z.object({
   HOST: z.string().default("0.0.0.0"),
   PORT: z.coerce.number().int().positive().default(4000),
   PUBLIC_ORIGIN: z.string().default("http://localhost:5173"),
+  TRUSTED_PROXIES: z.string().default("loopback,uniquelocal"),
 
   DATABASE_URL: z.string(),
 
@@ -55,6 +56,7 @@ export const config = {
   host: env.HOST,
   port: env.PORT,
   publicOrigin: env.PUBLIC_ORIGIN,
+  trustedProxies: env.TRUSTED_PROXIES.split(",").map((value) => value.trim()).filter(Boolean),
 
   databaseUrl: env.DATABASE_URL,
 

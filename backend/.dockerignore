@@ -4,5 +4,6 @@ data
 *.db
 *.db-journal
 .env
+.env.*
 .git
 rust-bot/target

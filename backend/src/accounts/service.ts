@@ -97,7 +97,7 @@ export async function canManageAssignments(session: SessionContext, id: string):
     where: { id },
     select: { createdById: true },
   });
-  return !!account && account.createdById === session.user.id;
+  return !!account && account.createdById === session.user.id && await canAccessAccount(session, id);
 }
 
 /** Minimal user list (id, username, role) for the account access picker. */

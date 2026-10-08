@@ -8,6 +8,10 @@ import { parseOrReject } from "../utils/validate.js";
 import { recordAuditLog } from "../logging/auditLog.js";
 import { logger } from "../logging/logger.js";
 import { registerFailedLogin, clearFailedLogins } from "../security/ipBans.js";
+import { randomBytes } from "node:crypto";
+
+// Unknown users still perform the same password work as incorrect passwords.
+const dummyPasswordHash = hashPassword(randomBytes(32).toString("hex"));
 
 const loginSchema = z.object({
   username: z.string().min(1).max(64),
@@ -36,17 +40,9 @@ export default async function authRoutes(app: FastifyInstance) {
 
       const user = await prisma.user.findUnique({ where: { username: body.username } });
 
-      // Constant-shape response to avoid leaking whether the username exists.
-      if (!user || user.status === "DISABLED") {
-        logger.warn({ username: body.username }, "Login failed: unknown or disabled user");
-        await registerFailedLogin(req.ip);
-        reply.code(401).send({ error: "Invalid username or password" });
-        return;
-      }
-
-      const valid = await verifyPassword(user.passwordHash, body.password);
-      if (!valid) {
-        logger.warn({ username: body.username }, "Login failed: bad password");
+      const valid = await verifyPassword(user?.passwordHash ?? await dummyPasswordHash, body.password);
+      if (!user || user.status === "DISABLED" || !valid) {
+        logger.warn({ username: body.username }, "Login failed");
         await registerFailedLogin(req.ip);
         reply.code(401).send({ error: "Invalid username or password" });
         return;
@@ -75,7 +71,7 @@ export default async function authRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post("/api/auth/logout", { preHandler: [app.requireAuth] }, async (req, reply) => {
+  app.post("/api/auth/logout", { preHandler: [app.requireAuth, app.requireCsrf] }, async (req, reply) => {
     if (req.session) {
       await destroySession(req.session.sessionId);
       await recordAuditLog({ userId: req.session.user.id, action: "USER_LOGOUT" });

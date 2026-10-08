@@ -103,7 +103,7 @@ it("broadcasts replacement images only to authorized dashboard viewers and honor
   try {
     for (const headers of sessions) {
       const inbox: (typeof inboxes)[number] = [];
-      const socket = new WebSocket(`ws://127.0.0.1:${port}/ws/dashboard`, { headers: { cookie: headers.cookie } });
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/ws/dashboard`, { headers: { cookie: headers.cookie, origin: config.publicOrigin } });
       socket.on("message", (raw) => inbox.push(JSON.parse(raw.toString())));
       sockets.push(socket);
       inboxes.push(inbox);
