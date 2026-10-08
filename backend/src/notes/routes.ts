@@ -3,6 +3,7 @@ import { prisma } from "../database/prisma.js";
 import { parseOrReject } from "../utils/validate.js";
 import { recordAuditLog } from "../logging/auditLog.js";
 import { createNoteSchema, updateNoteSchema, noteAccessSchema } from "./schemas.js";
+import { accessLookupSchema, accessLookupRateLimit, findAccessUser } from "../users/accessLookup.js";
 
 const ownerSelect = { id: true, username: true } as const;
 const summarySelect = { id: true, title: true, ownerId: true, owner: { select: ownerSelect }, revision: true, createdAt: true, updatedAt: true,
@@ -25,7 +26,16 @@ export default async function notesRoutes(app: FastifyInstance) {
     return notes.map((note) => present(note, req.session!.user.id));
   });
 
-  app.get("/api/notes/users", async () => prisma.user.findMany({ where: { status: "ACTIVE" }, select: ownerSelect, orderBy: { username: "asc" } }));
+  app.post("/api/notes/:id/access/lookup", { preHandler: app.requireCsrf, config: { rateLimit: accessLookupRateLimit } }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!await prisma.note.findFirst({ where: { id, ownerId: req.session!.user.id }, select: { id: true } }))
+      return reply.code(404).send({ error: "Nur der Ersteller kann Zugriffsrechte ändern" });
+    const body = parseOrReject(accessLookupSchema, req.body, reply);
+    if (!body) return;
+    const user = await findAccessUser(body.username);
+    if (!user) return reply.code(404).send({ error: "Nicht registrierter Benutzername" });
+    return user;
+  });
 
   app.get("/api/notes/:id", async (req, reply) => {
     const { id } = req.params as { id: string };

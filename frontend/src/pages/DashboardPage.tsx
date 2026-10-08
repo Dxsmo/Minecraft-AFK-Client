@@ -225,7 +225,7 @@ export function DashboardPage() {
                     ) : (
                       <span
                         className="hidden shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide sm:inline"
-                        style={{ backgroundColor: "rgba(96,165,250,0.15)", color: "#60a5fa" }}
+                        style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
                       >
                         Java
                       </span>

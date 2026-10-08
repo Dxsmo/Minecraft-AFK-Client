@@ -166,7 +166,9 @@ Copy `.env.example` to `.env` (repo root) for Docker Compose, or to
 
 Every active user can create notes under **Notizen**. Notes start private,
 including against other admins. The creator uses **Zugriff** to grant individual
-users **Nur lesen** or **Lesen & schreiben**; only the creator can change access
+users **Nur lesen** or **Lesen & schreiben** by entering their exact username;
+only existing recipients are listed. Unknown usernames receive feedback rather
+than suggestions. Only the creator can change access
 or delete the note. Text supports headings, bold, underline, lists and left or
 centered alignment in a dark A4-style editor that grows with the document.
 Changes save automatically. Concurrent edits preserve the unsaved draft instead
@@ -268,8 +270,9 @@ additional users access afterwards in the account's **Settings** panel):
   connection, retried indefinitely as long as the client isn't manually
   stopped; can be disabled per account at any time
 - Any admin or user assigned to the account can edit its settings,
-  start/stop/restart it, and delete it entirely; only admins can grant
-  *other* users access via the assignments list
+  start/stop/restart it, and delete it entirely. Admins and creators who still
+  have access can grant other users access by entering their exact username in
+  **Settings → Access**. This shows existing assignments rather than all users.
 
 The Microsoft account email (`credentialsSecret`) is **never** included in
 any API response sent to the frontend — only account metadata and live

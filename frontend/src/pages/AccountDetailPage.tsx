@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom"
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useAccountConsole } from "../lib/sockets";
-import type { ManagedUser, MinecraftAccount } from "../lib/types";
+import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { ConsoleView } from "../components/ConsoleView";
 import { AccountSettingsPanel } from "../components/AccountSettingsPanel";
@@ -14,7 +14,6 @@ export function AccountDetailPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [account, setAccount] = useState<MinecraftAccount | null>(null);
-  const [users, setUsers] = useState<ManagedUser[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [command, setCommand] = useState("");
   const [sendingCommand, setSendingCommand] = useState(false);
@@ -47,22 +46,6 @@ export function AccountDetailPage() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-
-  // Load the selectable-user list once we know whether the viewer may manage
-  // access: admins use the full users API, an account's creator uses the
-  // scoped assignable-users endpoint.
-  useEffect(() => {
-    if (!account || !user) return;
-    if (user.role === "ADMIN") {
-      void api.get<ManagedUser[]>("/users").then(setUsers).catch(() => undefined);
-    } else if (account.createdBy?.id === user.id) {
-      void api
-        .get<ManagedUser[]>(`/minecraft/accounts/${account.id}/assignable-users`)
-        .then(setUsers)
-        .catch(() => undefined);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [account?.id, user?.id]);
 
   async function runAction(action: "start" | "stop" | "restart") {
     if (!id) return;
@@ -165,7 +148,7 @@ export function AccountDetailPage() {
             ) : (
               <span
                 className="rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-                style={{ backgroundColor: "rgba(96,165,250,0.15)", color: "#60a5fa" }}
+                style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent)" }}
               >
                 Java
               </span>
@@ -297,7 +280,6 @@ export function AccountDetailPage() {
         <div key="settings" className="tab-panel">
           <AccountSettingsPanel
             account={account}
-            users={users}
             canManageAccess={canManageAccess}
             currentUserId={user?.id}
             onUpdated={load}

@@ -92,6 +92,7 @@ it("hides foreign Minecraft accounts and credentials through every operation",as
     ["PATCH","",{notes:"tampered"}],["DELETE","",undefined],["PUT","/assignments",{userIds:[users[0].id]}],
     ["PUT","/image",{image:"fake"}],["POST","/start",undefined],["POST","/stop",undefined],["POST","/restart",undefined],
     ["POST","/clean-spawner",undefined],["POST","/command",{command:"/home"}],
+    ["POST","/assignments/lookup",{username:users[0].username}],
   ] as const) {
     const response=await app.inject({method,url:base+tail,headers:headers(),payload});
     expect([403,404]).toContain(response.statusCode);
@@ -113,8 +114,28 @@ it("prevents a creator with revoked access from granting themselves access again
   await prisma.userMinecraftAccount.deleteMany({where:{minecraftAccountId:accounts[0].id}});
   const base=`/api/minecraft/accounts/${accounts[0].id}`;
   expect((await app.inject({url:base+"/assignable-users",headers:headers()})).statusCode).toBe(404);
+  expect((await app.inject({method:"POST",url:base+"/assignments/lookup",headers:headers(),payload:{username:users[1].username}})).statusCode).toBe(404);
   expect((await app.inject({method:"PUT",url:base+"/assignments",headers:headers(),payload:{userIds:[users[0].id]}})).statusCode).toBe(404);
   expect(await prisma.userMinecraftAccount.count({where:{minecraftAccountId:accounts[0].id}})).toBe(0);
+});
+
+it("looks up a single username for account sharing without listing registered users",async()=>{
+  const base=`/api/minecraft/accounts/${accounts[0].id}`;
+  for(const index of [0,2]) {
+    expect((await app.inject({url:base+"/assignable-users",headers:headers(index)})).statusCode).toBe(404);
+    const found=await app.inject({method:"POST",url:base+"/assignments/lookup",headers:headers(index),payload:{username:` ${users[1].username} `}});
+    expect(found.statusCode).toBe(200);expect(found.json()).toEqual({id:users[1].id,username:users[1].username});
+  }
+  expect(await prisma.userMinecraftAccount.count({where:{minecraftAccountId:accounts[0].id}})).toBe(1);
+  const lookup=(username:string,index=0)=>app.inject({method:"POST",url:base+"/assignments/lookup",headers:headers(index),payload:{username}});
+  expect((await lookup(users[1].username.slice(0,-1))).json()).toEqual({error:"Nicht registrierter Benutzername"});
+  expect((await lookup("unregistered-user")).statusCode).toBe(404);
+  expect((await lookup("")).statusCode).toBe(400);
+  await prisma.userMinecraftAccount.create({data:{userId:users[1].id,minecraftAccountId:accounts[0].id}});
+  expect((await lookup(users[0].username,1)).statusCode).toBe(404);
+  expect((await app.inject({method:"POST",url:base+"/assignments/lookup",headers:headers(0,false),payload:{username:users[1].username}})).statusCode).toBe(403);
+  expect((await app.inject({method:"POST",url:base+"/assignments/lookup",payload:{username:users[1].username}})).statusCode).toBe(401);
+  expect((await app.inject({method:"POST",url:"/api/minecraft/accounts/missing/assignments/lookup",headers:headers(2),payload:{username:users[1].username}})).statusCode).toBe(404);
 });
 
 it("requires CSRF for state changes and rejects requests from untrusted origins",async()=>{

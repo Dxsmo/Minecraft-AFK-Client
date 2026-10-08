@@ -91,7 +91,7 @@ it("honors revoked and downgraded access immediately", async () => {
   expect((await app.inject({ url: "/api/notes", headers: headers[2] })).json()).toEqual([]);
 });
 
-it("validates grants atomically and only lists safe user fields", async () => {
+it("validates grants atomically and does not expose a user directory", async () => {
   const note = await create();
   await share(note.id, [{ userId: users[1], canWrite: false }]);
   for (const selection of [
@@ -102,8 +102,38 @@ it("validates grants atomically and only lists safe user fields", async () => {
     expect((await prisma.noteGrant.findMany({ where: { noteId: note.id } })).map((grant) => grant.userId)).toEqual([users[1]]);
   }
   const response = await app.inject({ url: "/api/notes/users", headers: headers[0] });
-  expect(response.statusCode).toBe(200);
-  for (const user of response.json()) expect(Object.keys(user).sort()).toEqual(["id", "username"]);
+  expect(response.statusCode).toBe(404);
+});
+
+it("looks up one exact active username with only public fields and only for the note owner", async () => {
+  const note = await create();
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: users[1] } });
+  const lookup = (username: string, session = 0) => app.inject({ method: "POST", url: `/api/notes/${note.id}/access/lookup`, headers: headers[session], payload: { username } });
+  const found = await lookup(` ${target.username} `);
+  expect(found.statusCode).toBe(200);
+  expect(found.json()).toEqual({ id: target.id, username: target.username });
+  expect(found.headers["cache-control"]).toBe("private, no-store");
+  expect(await prisma.noteGrant.count({ where: { noteId: note.id } })).toBe(0);
+  for (const username of [target.username.slice(0, -1), "unregistered-user", "' OR 1=1 --", "%"])
+    expect((await lookup(username)).json()).toEqual({ error: "Nicht registrierter Benutzername" });
+  for (const username of ["", " ", "x".repeat(65)]) expect((await lookup(username)).statusCode).toBe(400);
+  await share(note.id, [{ userId: users[1], canWrite: true }, { userId: users[2], canWrite: false }]);
+  for (const session of [1, 2, 3]) expect((await lookup(target.username, session)).statusCode).toBe(404);
+  await prisma.user.update({ where: { id: target.id }, data: { status: "DISABLED" } });
+  try { expect((await lookup(target.username)).json()).toEqual({ error: "Nicht registrierter Benutzername" }); }
+  finally { await prisma.user.update({ where: { id: target.id }, data: { status: "ACTIVE" } }); }
+});
+
+it("rate limits username lookups per user, even when a client changes its IP", async () => {
+  const limitedApp = await buildApp();
+  const note = await create();
+  try {
+    for (let index = 0; index <= 30; index++) {
+      const response = await limitedApp.inject({ method: "POST", url: `/api/notes/${note.id}/access/lookup`, headers: headers[0],
+        remoteAddress: `198.51.100.${index + 1}`, payload: { username: "unregistered-user" } });
+      expect(response.statusCode).toBe(index < 30 ? 404 : 429);
+    }
+  } finally { await limitedApp.close(); }
 });
 
 it("accepts long notes beyond the default HTTP body limit without a word or character cap", async () => {
@@ -175,6 +205,7 @@ it("enforces authentication and CSRF on all note mutations", async () => {
   for (const [method, url, payload] of [
     ["POST", "/api/notes", {}], ["PATCH", `/api/notes/${note.id}`, { revision: 0, title: "Changed" }],
     ["PUT", `/api/notes/${note.id}/access`, { users: [] }], ["DELETE", `/api/notes/${note.id}`, undefined],
+    ["POST", `/api/notes/${note.id}/access/lookup`, { username: "someone" }],
   ] as const) {
     expect((await app.inject({ method, url, payload })).statusCode).toBe(401);
     expect((await app.inject({ method, url, payload, headers: { cookie: headers[0].cookie } })).statusCode).toBe(403);

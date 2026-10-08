@@ -37,8 +37,10 @@ Untersuchung eines tatsächlichen Einbruchs wurde nicht durchgeführt.
 Manipulierte Account-IDs, fremde Konsolen/Bilder, unzulässige Rechteänderungen
 und Admin-Endpunkte werden serverseitig abgewiesen. Admins dürfen absichtlich
 alle Minecraft-Accounts bedienen. Private Notizen haben eigene Freigaben, auch
-gegenüber anderen Admins; Leserechte erlauben kein Schreiben. Die Nutzernamen
-in Freigabe-Auswahllisten sind beabsichtigt sichtbar.
+gegenüber anderen Admins; Leserechte erlauben kein Schreiben. Freigaben zeigen
+nur bereits eingetragene Nutzer und gezielt eingegebene, exakte Benutzernamen.
+Die Suche ist an Freigaberechte gebunden, CSRF-geschützt und auf 30 Anfragen
+pro Minute je Endpunkt und Nutzer begrenzt; die früheren Nutzerlisten-Endpunkte entfallen.
 
 PNG-Uploads werden geprüft und neu kodiert; Notizen verwenden eine Struktur-/
 Link-Allowlist. Die geprüften Anwendungspfade verwenden Prisma-Parameterbindung

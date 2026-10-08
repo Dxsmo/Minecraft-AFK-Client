@@ -15,6 +15,7 @@ import { recordAuditLog } from "../logging/auditLog.js";
 import { prisma } from "../database/prisma.js";
 import { z } from "zod";
 import { decodeAccountImage, MAX_ACCOUNT_IMAGE_BASE64, replaceAccountImage } from "./images.js";
+import { accessLookupSchema, accessLookupRateLimit, findAccessUser } from "../users/accessLookup.js";
 
 export default async function accountsRoutes(app: FastifyInstance) {
   app.addHook("preHandler", app.requireAuth);
@@ -236,15 +237,17 @@ export default async function accountsRoutes(app: FastifyInstance) {
     },
   );
 
-  // Users selectable in the access picker. Restricted to those allowed to manage
-  // the account's access (admin or the account's creator/operator).
-  app.get("/api/minecraft/accounts/:id/assignable-users", async (req, reply) => {
+  app.post("/api/minecraft/accounts/:id/assignments/lookup", { preHandler: app.requireCsrf, config: { rateLimit: accessLookupRateLimit } }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    if (!(await accountsService.canManageAssignments(req.session!, id))) {
+    if (!(await accountsService.canManageAssignments(req.session!, id)) || !(await accountsService.getAccountForSession(req.session!, id))) {
       reply.code(404).send({ error: "Account not found" });
       return;
     }
-    reply.send(await accountsService.listAssignableUsers());
+    const body = parseOrReject(accessLookupSchema, req.body, reply);
+    if (!body) return;
+    const user = await findAccessUser(body.username);
+    if (!user) return reply.code(404).send({ error: "Nicht registrierter Benutzername" });
+    reply.send(user);
   });
 
   // ---- Lifecycle control (assigned users or admin) ----

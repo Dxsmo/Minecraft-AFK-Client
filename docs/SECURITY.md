@@ -23,7 +23,10 @@ deployed server or the absence of all bugs.
   pending work and send buffers have limits.
 - Notes are private until shared, including against other admins. Read-only
   recipients cannot write; only the creator changes sharing or deletes a note.
-  Usernames/IDs are intentionally available in sharing pickers.
+  Sharing shows existing recipients and accepts exact usernames through an
+  owner/admin-authorized, CSRF-protected lookup limited to 30 requests per minute
+  per endpoint and user. These endpoints return only one active user's ID and username, never
+  a list or suggestions. The admin-only user management page remains separate.
 - Minigame players use a separate Minecraft-identity challenge and bearer
   authentication; website admin routes still require an admin session.
 

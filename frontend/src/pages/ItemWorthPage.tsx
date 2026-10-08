@@ -278,7 +278,7 @@ export function ItemWorthPage() {
               value={delay}
               disabled={running}
               onChange={(event) => setDelay(Number(event.target.value))}
-              className="w-full accent-indigo-500"
+              className="w-full accent-[var(--accent)]"
             />
           </label>
 

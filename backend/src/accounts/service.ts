@@ -100,14 +100,6 @@ export async function canManageAssignments(session: SessionContext, id: string):
   return !!account && account.createdById === session.user.id && await canAccessAccount(session, id);
 }
 
-/** Minimal user list (id, username, role) for the account access picker. */
-export async function listAssignableUsers() {
-  return prisma.user.findMany({
-    select: { id: true, username: true, role: true },
-    orderBy: { username: "asc" },
-  });
-}
-
 export async function createAccount(input: CreateAccountInput, creator: SessionContext) {
   const name = input.name.trim();
   const maxOrder = await prisma.minecraftAccount.aggregate({ _max: { dashboardOrder: true } });

@@ -292,7 +292,7 @@ export function SniperAccountDetailPage() {
               type="checkbox"
               checked={rateLimitProtection}
               onChange={(e) => setRateLimitProtection(e.target.checked)}
-              className="accent-blue-500"
+              className="accent-[var(--accent)]"
               style={{ width: 20, height: 20 }}
             />
           </label>

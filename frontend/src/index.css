@@ -1,35 +1,35 @@
 @import "tailwindcss";
 
 /*
- * Restrained dark glass, shared with the release badge: midnight surfaces,
- * fine blue/violet edges and soft highlights. Layout and status colours stay
+ * Restrained dark glass: graphite surfaces, translucent layers and fine
+ * silver highlights. Layout and status colours stay
  * independent of the decorative palette.
  */
 :root {
   color-scheme: dark;
 
-  --bg: #090b10;
-  --bg-elev: #10141d;
-  --surface: #141923;
-  --surface-hover: #1b2330;
-  --border: rgba(148, 163, 184, 0.14);
-  --border-strong: rgba(148, 163, 184, 0.26);
+  --bg: #101011;
+  --bg-elev: #19191b;
+  --surface: #202022;
+  --surface-hover: #2b2b2e;
+  --border: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.20);
 
-  --text: #e8eef7;
-  --text-muted: #a0aabb;
-  --text-subtle: #7d899c;
+  --text: #eeeeef;
+  --text-muted: #b1b1b8;
+  --text-subtle: #8b8b94;
 
-  --accent: #3b82f6; /* blue-500, the brand colour and "active/online" indicator */
-  --accent-light: #38bdf8; /* sky-400, used for extra-vivid glow highlights */
-  --accent-soft: rgba(59, 130, 246, 0.16);
+  --accent: #c5c5cd;
+  --accent-light: #eeeeef;
+  --accent-soft: rgba(255, 255, 255, 0.10);
 
-  --panel-fill: linear-gradient(135deg, #151c28, #11151d 65%, #12151d);
-  --panel-edge: linear-gradient(135deg, rgba(96, 165, 250, 0.28), rgba(139, 92, 246, 0.12) 50%, rgba(56, 189, 248, 0.18));
-  --panel-edge-hover: linear-gradient(135deg, rgba(96, 165, 250, 0.48), rgba(139, 92, 246, 0.25) 50%, rgba(56, 189, 248, 0.32));
-  --panel-shadow: 0 4px 18px rgba(0, 0, 0, 0.2), inset 0 1px rgba(255, 255, 255, 0.035);
-  --control-fill: linear-gradient(135deg, #171f2c, #121720);
-  --active-fill: linear-gradient(115deg, #1b2b43, #1b2133 65%, #142735);
-  --focus-ring: rgba(96, 165, 250, 0.18);
+  --panel-fill: linear-gradient(135deg, rgba(37, 37, 40, 0.92), rgba(23, 23, 25, 0.96) 65%, rgba(28, 28, 30, 0.94));
+  --panel-edge: linear-gradient(135deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.06) 50%, rgba(255, 255, 255, 0.12));
+  --panel-edge-hover: linear-gradient(135deg, rgba(255, 255, 255, 0.38), rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0.22));
+  --panel-shadow: 0 4px 18px rgba(0, 0, 0, 0.2), inset 0 1px rgba(255, 255, 255, 0.065);
+  --control-fill: linear-gradient(135deg, rgba(43, 43, 46, 0.94), rgba(28, 28, 30, 0.97));
+  --active-fill: linear-gradient(115deg, rgba(63, 63, 68, 0.94), rgba(41, 41, 45, 0.97) 65%, rgba(48, 48, 52, 0.95));
+  --focus-ring: rgba(255, 255, 255, 0.12);
 
   --danger: #f87171;
   --warning: #fbbf24;
@@ -47,30 +47,31 @@ body {
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
-::selection { background: rgba(96, 165, 250, 0.25); color: #f0f6ff; }
+::selection { background: rgba(255, 255, 255, 0.25); color: var(--text); }
 
-/* Ambient colour stays on the shell; no expensive blur on scrolling cards. */
+/* Reflections stay subtle; blur is reserved for the fixed shell and dialogs. */
 .app-shell {
   background:
-    radial-gradient(55rem 35rem at 35% -15%, rgba(59, 130, 246, 0.055), transparent 70%),
-    radial-gradient(45rem 30rem at 105% 100%, rgba(139, 92, 246, 0.035), transparent 70%),
+    radial-gradient(55rem 35rem at 35% -15%, rgba(255, 255, 255, 0.055), transparent 70%),
+    radial-gradient(45rem 30rem at 105% 100%, rgba(255, 255, 255, 0.025), transparent 70%),
     var(--bg);
 }
 .app-sidebar {
   border-right: 1px solid var(--border);
-  background: linear-gradient(165deg, #121925, #0e121a 55%, #0d1119);
-  box-shadow: inset -1px 0 rgba(96, 165, 250, 0.025);
+  background: linear-gradient(165deg, rgba(31, 31, 33, 0.80), rgba(21, 21, 23, 0.90) 55%, rgba(23, 23, 25, 0.88));
+  backdrop-filter: blur(16px) saturate(110%);
+  box-shadow: inset -1px 0 rgba(255, 255, 255, 0.035);
 }
 .app-header {
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(110deg, rgba(17, 23, 34, 0.82), rgba(11, 15, 23, 0.86));
+  background: linear-gradient(110deg, rgba(32, 32, 35, 0.72), rgba(20, 20, 22, 0.80));
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
 }
 .brand-mark, .user-avatar {
   border: 1px solid transparent;
   background: var(--control-fill) padding-box, var(--panel-edge-hover) border-box;
-  color: #bcd5f4;
-  box-shadow: var(--panel-shadow), 0 0 20px rgba(59, 130, 246, 0.08);
+  color: var(--text);
+  box-shadow: var(--panel-shadow), 0 0 20px rgba(255, 255, 255, 0.08);
 }
 
 /* Subtle depth for full-page auth screens: layered aurora glow + a faint dot
@@ -79,23 +80,23 @@ body {
 .app-aurora {
   position: relative;
   background:
-    radial-gradient(48rem 32rem at 18% -10%, rgba(59, 130, 246, 0.13), transparent 60%),
-    radial-gradient(40rem 30rem at 100% 10%, rgba(139, 92, 246, 0.075), transparent 65%),
-    radial-gradient(60rem 40rem at 50% 110%, rgba(56, 189, 248, 0.065), transparent 70%),
+    radial-gradient(48rem 32rem at 18% -10%, rgba(255, 255, 255, 0.13), transparent 60%),
+    radial-gradient(40rem 30rem at 100% 10%, rgba(255, 255, 255, 0.075), transparent 65%),
+    radial-gradient(60rem 40rem at 50% 110%, rgba(255, 255, 255, 0.065), transparent 70%),
     var(--bg);
 }
 .app-aurora::before {
   content: "";
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(rgba(148, 163, 184, 0.035) 1px, transparent 1px);
+  background-image: radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
   background-size: 26px 26px;
   mask-image: radial-gradient(60rem 40rem at 50% 20%, black, transparent 75%);
   pointer-events: none;
 }
 
 /* Soft ambient glow ring behind a brand mark / avatar. */
-.glow-ring { box-shadow: var(--panel-shadow), 0 0 26px rgba(59, 130, 246, 0.12); }
+.glow-ring { box-shadow: var(--panel-shadow), 0 0 26px rgba(255, 255, 255, 0.12); }
 
 @layer components {
   .note-list-item {
@@ -109,23 +110,25 @@ body {
     color: var(--text);
     transition: background 150ms ease, box-shadow 150ms ease;
   }
-  .note-list-item:hover { background: var(--panel-fill) padding-box, var(--panel-edge-hover) border-box; box-shadow: var(--panel-shadow), 0 0 20px rgba(59, 130, 246, 0.06); }
+  .note-list-item:hover { background: var(--panel-fill) padding-box, var(--panel-edge-hover) border-box; box-shadow: var(--panel-shadow), 0 0 20px rgba(255, 255, 255, 0.06); }
   .note-list-active, .note-list-active:hover { background: var(--active-fill) padding-box, var(--panel-edge-hover) border-box; color: var(--text); }
   .note-paper {
     width: 100%;
     max-width: 794px;
-    min-height: 500px;
-    aspect-ratio: 210 / 297;
+    min-height: clamp(500px, 80vw, 1123px);
+    height: auto;
+    max-height: none;
+    overflow: visible;
     margin: 0 auto;
     padding: clamp(20px, 4vw, 64px);
     border: 1px solid transparent;
     border-radius: 4px;
-    background: linear-gradient(160deg, #141b26, #121620 45%, #11151d) padding-box, var(--panel-edge) border-box;
+    background: var(--panel-fill) padding-box, var(--panel-edge) border-box;
     box-shadow: var(--panel-shadow), 0 16px 50px rgba(0, 0, 0, 0.22);
   }
   .note-title { width: 100%; margin-bottom: 24px; background: transparent; color: var(--text); font-size: 26px; font-weight: 600; line-height: 1.3; outline: none; overflow-wrap: anywhere; }
   .note-title::placeholder { color: var(--text-subtle); }
-  .note-rich-text { min-height: 300px; outline: none; font-size: 15px; line-height: 1.8; color: var(--text-muted); overflow-wrap: anywhere; }
+  .note-rich-text { min-height: 300px; height: auto; max-height: none; overflow: visible; outline: none; font-size: 15px; line-height: 1.8; color: var(--text-muted); overflow-wrap: anywhere; }
   .note-rich-text p { margin: 0 0 0.8em; }
   .note-rich-text h1, .note-rich-text h2, .note-rich-text h3 { margin: 1.2em 0 0.5em; font-weight: 600; color: var(--text); line-height: 1.35; }
   .note-rich-text h1 { font-size: 1.7em; }
@@ -144,11 +147,11 @@ body {
   .note-toolbar { position: sticky; top: 0; z-index: 30; display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 7px; border: 1px solid transparent; border-radius: 10px; background: var(--control-fill) padding-box, var(--panel-edge) border-box; box-shadow: var(--panel-shadow); }
   .note-format-button { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 5px; color: var(--text-muted); cursor: pointer; }
   .note-format-button:hover { background: var(--surface-hover); color: var(--text); }
-  .note-format-button[aria-pressed="true"] { background: var(--active-fill); color: #bfdbfe; box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.22); }
+  .note-format-button[aria-pressed="true"] { background: var(--active-fill); color: var(--text); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22); }
   .note-format-button:focus-visible, .note-format-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .note-format-select { max-width: 150px; height: 30px; padding: 0 6px; background: var(--bg-elev); border-radius: 5px; font-size: 12px; color: var(--text-muted); }
   .note-toolbar-divider { width: 1px; height: 16px; margin: 0 4px; background: var(--border); }
-  .note-access-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); margin: auto; padding: 0; overflow-y: auto; border: 1px solid transparent; border-radius: 14px; background: var(--panel-fill) padding-box, var(--panel-edge-hover) border-box; color: var(--text); box-shadow: var(--panel-shadow), 0 24px 80px rgba(0, 0, 0, 0.5); }
+  .note-access-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); margin: auto; padding: 0; overflow-y: auto; border: 1px solid transparent; border-radius: 14px; background: var(--panel-fill) padding-box, var(--panel-edge-hover) border-box; color: var(--text); backdrop-filter: blur(16px); box-shadow: var(--panel-shadow), 0 24px 80px rgba(0, 0, 0, 0.5); }
   .note-access-dialog::backdrop { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(3px); }
   .account-row {
     --account-height: 112px;
@@ -223,16 +226,16 @@ body {
   }
   .card-hover:hover {
     background: var(--panel-fill) padding-box, var(--panel-edge-hover) border-box;
-    box-shadow: var(--panel-shadow), 0 0 22px rgba(59, 130, 246, 0.065);
+    box-shadow: var(--panel-shadow), 0 0 22px rgba(255, 255, 255, 0.065);
   }
-  .card thead { background-color: rgba(96, 165, 250, 0.035); }
-  .card tbody tr:hover { background-color: rgba(96, 165, 250, 0.025); }
+  .card thead { background-color: rgba(255, 255, 255, 0.035); }
+  .card tbody tr:hover { background-color: rgba(255, 255, 255, 0.025); }
 
   .input {
     width: 100%;
     border-radius: 0.6rem;
     border: 1px solid var(--border-strong);
-    background: linear-gradient(135deg, #0f151f, #10141c);
+    background: linear-gradient(135deg, rgba(15, 15, 17, 0.72), rgba(23, 23, 25, 0.88));
     box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.12);
     padding: 0.5rem 0.7rem;
     font-size: 0.875rem;
@@ -244,7 +247,7 @@ body {
     color: var(--text-subtle);
   }
   .input:focus {
-    border-color: rgba(96, 165, 250, 0.65);
+    border-color: rgba(255, 255, 255, 0.65);
     box-shadow: 0 0 0 3px var(--focus-ring);
   }
   select.input option {
@@ -269,7 +272,7 @@ body {
     background-color: var(--bg-elev);
   }
   .input-ghost:focus {
-    border-color: rgba(96, 165, 250, 0.65);
+    border-color: rgba(255, 255, 255, 0.65);
     background-color: var(--bg-elev);
     box-shadow: 0 0 0 3px var(--focus-ring);
   }
@@ -308,18 +311,18 @@ body {
   }
   .btn:focus-visible, .nav-idle:focus-visible, .nav-active:focus-visible,
   .note-list-item:focus-visible, .tab-btn:focus-visible, .settings-nav-btn:focus-visible {
-    outline: 2px solid #93c5fd;
+    outline: 2px solid var(--accent);
     outline-offset: 3px;
   }
 
   .btn-primary {
-    background: linear-gradient(135deg, #edf5ff, #dbe8fb 65%, #e4dff6);
-    color: #111a29;
-    box-shadow: inset 0 1px rgba(255, 255, 255, 0.75), 0 3px 12px rgba(59, 130, 246, 0.12);
+    background: linear-gradient(135deg, #f0f0f2, #d9d9de 65%, #e4e4e8);
+    color: #19191c;
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.75), 0 3px 12px rgba(255, 255, 255, 0.12);
   }
   .btn-primary:hover:not(:disabled) {
-    background: linear-gradient(135deg, #ffffff, #e6f0ff 65%, #eee8ff);
-    box-shadow: inset 0 1px rgba(255, 255, 255, 0.85), 0 4px 18px rgba(59, 130, 246, 0.2);
+    background: linear-gradient(135deg, #ffffff, #e8e8eb 65%, #f0f0f3);
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.85), 0 4px 18px rgba(255, 255, 255, 0.2);
   }
 
   .btn-secondary {
@@ -330,7 +333,7 @@ body {
   }
   .btn-secondary:hover:not(:disabled) {
     background: var(--control-fill) padding-box, var(--panel-edge-hover) border-box;
-    color: #dbeafe;
+    color: var(--text);
   }
 
   .btn-ghost {
@@ -368,11 +371,11 @@ body {
   }
   .alert-success {
     border-radius: 0.6rem;
-    border: 1px solid rgba(59, 130, 246, 0.3);
-    background-color: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    background-color: rgba(255, 255, 255, 0.1);
     padding: 0.55rem 0.8rem;
     font-size: 0.85rem;
-    color: #93c5fd;
+    color: var(--accent);
   }
 
   .nav-idle {
@@ -384,12 +387,12 @@ body {
     color: var(--text);
   }
   .nav-active {
-    color: #dbeafe;
+    color: var(--text);
     border: 1px solid transparent;
     background: var(--active-fill) padding-box, var(--panel-edge-hover) border-box;
-    box-shadow: inset 0 1px rgba(255, 255, 255, 0.04), 0 0 18px rgba(59, 130, 246, 0.07);
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.04), 0 0 18px rgba(255, 255, 255, 0.07);
   }
-  .nav-active > svg { color: #93c5fd; }
+  .nav-active > svg { color: var(--accent); }
 
   /* --- Item worth ("Item Wert") tab --------------------------------------- */
 
@@ -460,7 +463,7 @@ body {
     background: var(--control-fill) padding-box, var(--panel-edge-hover) border-box;
   }
   .item-worth-chip[data-active="true"] {
-    color: #dbeafe;
+    color: var(--text);
     background: var(--active-fill) padding-box, var(--panel-edge-hover) border-box;
   }
 
@@ -525,8 +528,8 @@ body {
 
   /* Terminal-style console, intentionally distinct from the rest of the app. */
   .console-output {
-    background: linear-gradient(150deg, #080c13, #090b10);
-    color: #d6dfeb;
+    background: linear-gradient(150deg, #0c0c0e, #101011);
+    color: #dddddf;
     font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
     font-size: 0.82rem;
     line-height: 1.55;
@@ -563,9 +566,9 @@ body {
     color: var(--text-muted);
   }
   .tab-btn[data-active="true"] {
-    color: #dbeafe;
+    color: var(--text);
     background: var(--active-fill);
-    box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.22);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
   }
   .tab-btn .tab-count {
     font-size: 0.68rem;
@@ -595,9 +598,9 @@ body {
     background-color: var(--bg-elev);
   }
   .settings-nav-btn[data-active="true"] {
-    color: #dbeafe;
+    color: var(--text);
     background: var(--active-fill);
-    box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.22);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
   }
   .settings-nav-btn .settings-nav-chevron {
     opacity: 0;
@@ -725,24 +728,24 @@ body {
   padding: 7px 12px 7px 7px;
   border: 1px solid transparent;
   border-radius: 12px;
-  background: linear-gradient(135deg, #141b27, #101115) padding-box,
-    linear-gradient(135deg, rgba(96, 165, 250, 0.6), rgba(139, 92, 246, 0.3), rgba(56, 189, 248, 0.45)) border-box;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3), 0 0 18px rgba(59, 130, 246, 0.1), inset 0 1px rgba(255, 255, 255, 0.05);
+  background: var(--panel-fill) padding-box,
+    var(--panel-edge-hover) border-box;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3), 0 0 18px rgba(255, 255, 255, 0.1), inset 0 1px rgba(255, 255, 255, 0.05);
   transition: box-shadow 180ms ease, border-radius 180ms ease;
 }
-.version-badge:hover { box-shadow: 0 5px 22px rgba(0, 0, 0, 0.35), 0 0 24px rgba(59, 130, 246, 0.2); }
+.version-badge:hover { box-shadow: 0 5px 22px rgba(0, 0, 0, 0.35), 0 0 24px rgba(255, 255, 255, 0.2); }
 .version-icon {
   display: grid;
   place-items: center;
   width: 26px;
   height: 26px;
-  border: 1px solid rgba(96, 165, 250, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 7px;
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.14), rgba(139, 92, 246, 0.12));
-  color: #93c5fd;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.12));
+  color: var(--accent);
 }
-.version-text { color: #dbeafe; font-size: 11px; font-weight: 650; letter-spacing: 0.1em; font-variant-numeric: tabular-nums; }
-.version-spark { width: 4px; height: 4px; margin-left: 4px; border-radius: 50%; background: #7dd3fc; box-shadow: 0 0 8px rgba(125, 211, 252, 0.55); }
+.version-text { color: var(--text); font-size: 11px; font-weight: 650; letter-spacing: 0.1em; font-variant-numeric: tabular-nums; }
+.version-spark { width: 4px; height: 4px; margin-left: 4px; border-radius: 50%; background: var(--accent-light); box-shadow: 0 0 8px rgba(255, 255, 255, 0.55); }
 
 /* Sign-in dialog: fade-in + a small theme-matched spinner. */
 @keyframes fadein {
@@ -768,7 +771,7 @@ body {
   height: 28px;
   border-radius: 50%;
   border: 3px solid var(--surface-hover);
-  border-top-color: var(--accent, #3b82f6);
+  border-top-color: var(--accent);
   animation: spin 0.7s linear infinite;
 }
 .spinner-sm {
@@ -791,13 +794,13 @@ body {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background-color: #293448;
+  background-color: #3b3b41;
   border-radius: 6px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #394a63;
+  background-color: #52525a;
 }
 
 /* ---------------------------------------------------------------------------

@@ -1,22 +1,24 @@
 import { useState, type ReactNode } from "react";
 import { api, ApiError } from "../lib/api";
-import type { ManagedUser, MinecraftAccount } from "../lib/types";
+import type { MinecraftAccount } from "../lib/types";
+import { useAuth } from "../lib/auth";
+import { AccessUsernameInput, type AccessUser } from "./AccessUsernameInput";
 import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
 import { SPAWNER_TYPES, getSpawnerType, spawnerItemTexture, type SpawnerAction } from "../lib/spawners";
 
 export function AccountSettingsPanel({
   account,
-  users,
   canManageAccess,
   currentUserId,
   onUpdated,
 }: {
   account: MinecraftAccount;
-  users: ManagedUser[];
   canManageAccess: boolean;
   currentUserId?: string;
   onUpdated: () => void;
 }) {
+  const { user } = useAuth();
+  const [users, setUsers] = useState<AccessUser[]>(() => account.assignments.map((assignment) => assignment.user));
   const [crouchEnabled, setCrouchEnabled] = useState(account.crouchEnabled);
   const [displayName, setDisplayName] = useState(account.displayName ?? "");
   const [serverHost, setServerHost] = useState(account.serverHost);
@@ -105,9 +107,11 @@ export function AccountSettingsPanel({
     setSpawnerActions((prev) => ({ ...prev, [itemId]: action }));
   }
 
-  function toggleUser(userId: string) {    setAssigned((prev) => {
+  function removeUser(userId: string) {
+    setUsers((prev) => prev.filter((entry) => entry.id !== userId));
+    setAssigned((prev) => {
       const next = new Set(prev);
-      next.has(userId) ? next.delete(userId) : next.add(userId);
+      next.delete(userId);
       return next;
     });
   }
@@ -417,43 +421,38 @@ export function AccountSettingsPanel({
             {activeCat === "users" && canManageAccess && (
               <>
                 <p className="mb-2 text-xs" style={{ color: "var(--text-subtle)" }}>
-                  Choose which users may view and control this account. Admins always
-                  have access.
+                  Gib den Benutzernamen ein, um Zugriff auf diesen Account freizugeben. Admins haben immer Zugriff.
                 </p>
+                <AccessUsernameInput endpoint={`/minecraft/accounts/${account.id}/assignments/lookup`} disabled={saving} onAdd={(entry) => {
+                  if (users.some((existing) => existing.id === entry.id)) return "Dieser Benutzer hat bereits Zugriff.";
+                  setUsers((prev) => [...prev, entry]);
+                  setAssigned((prev) => new Set([...prev, entry.id]));
+                }} />
                 {users.length === 0 && (
                   <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
-                    No users created yet.
+                    Noch keine Freigaben.
                   </p>
                 )}
                 <div className="max-h-64 space-y-1.5 overflow-y-auto">
                   {users.map((u) => {
-                    const viewerIsAdmin = users.some(
-                      (v) => v.id === currentUserId && v.role === "ADMIN",
-                    );
                     const isSelf = u.id === currentUserId;
-                    // A non-admin operator can't drop their own access (shown
-                    // locked & checked). Admins may tick/untick anyone freely.
-                    const locked = isSelf && !viewerIsAdmin;
+                    // A non-admin creator retains their own access. Admins may
+                    // remove any explicit assignment.
+                    const locked = isSelf && user?.role !== "ADMIN";
                     return (
-                      <label
+                      <div
                         key={u.id}
-                        className="flex items-center gap-2"
-                        style={{ color: "var(--text-muted)", cursor: locked ? "default" : "pointer" }}
+                        className="flex items-center justify-between gap-2 py-1"
+                        style={{ color: "var(--text-muted)" }}
                       >
-                        <input
-                          type="checkbox"
-                          checked={locked || assigned.has(u.id)}
-                          disabled={locked}
-                          onChange={() => toggleUser(u.id)}
-                          className="accent-blue-500"
-                        />
-                        <span>{u.username}</span>
+                        <span className="min-w-0 truncate">{u.username}</span>
                         {isSelf && (
                           <span className="text-[10px]" style={{ color: "var(--text-subtle)" }}>
-                            · you
+                            · du
                           </span>
                         )}
-                      </label>
+                        {!locked && <button type="button" className="btn btn-ghost text-xs" aria-label={`Zugriff für ${u.username} entfernen`} disabled={saving} onClick={() => removeUser(u.id)}>Entfernen</button>}
+                      </div>
                     );
                   })}
                 </div>
@@ -619,7 +618,7 @@ function Toggle({
           type="checkbox"
           checked={checked}
           onChange={(e) => onChange(e.target.checked)}
-          className="accent-blue-500"
+          className="accent-[var(--accent)]"
         />
       </label>
       {description && (
