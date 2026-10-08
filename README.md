@@ -167,8 +167,8 @@ Copy `.env.example` to `.env` (repo root) for Docker Compose, or to
 Every active user can create notes under **Notizen**. Notes start private,
 including against other admins. The creator uses **Zugriff** to grant individual
 users **Nur lesen** or **Lesen & schreiben**; only the creator can change access
-or delete the note. Text supports headings, bold, italics, underline, lists,
-quotes and links in a dark A4-style editor that grows with the document.
+or delete the note. Text supports headings, bold, underline, lists and left or
+centered alignment in a dark A4-style editor that grows with the document.
 Changes save automatically. Concurrent edits preserve the unsaved draft instead
 of overwriting a newer version, with options to reload or save a private copy.
 There is no word/character cap; each save request has a 64 MiB transport limit.

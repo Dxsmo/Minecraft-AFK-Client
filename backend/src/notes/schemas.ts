@@ -33,13 +33,17 @@ export function isNoteDocument(value: unknown): value is NoteDocument {
     if (node.attrs !== undefined) {
       if (!object(node.attrs)) return false;
       if (type === "heading") {
-        if (!keys(node.attrs, ["level"]) || ![1, 2, 3].includes(node.attrs.level as number)) return false;
+        if (!keys(node.attrs, ["level", "textAlign"]) || ![1, 2, 3].includes(node.attrs.level as number)) return false;
+      } else if (type === "paragraph") {
+        if (!keys(node.attrs, ["textAlign"])) return false;
       } else if (type === "orderedList") {
         if (!keys(node.attrs, ["start", "type"]) || !Number.isSafeInteger(node.attrs.start) || (node.attrs.start as number) < 1 ||
             (node.attrs.type !== undefined && node.attrs.type !== null && node.attrs.type !== "1")) return false;
       } else if (type === "codeBlock") {
         if (!keys(node.attrs, ["language"]) || (node.attrs.language !== null && typeof node.attrs.language !== "string")) return false;
       } else if (Object.keys(node.attrs).length) return false;
+      if ((type === "heading" || type === "paragraph") && node.attrs.textAlign !== undefined &&
+          node.attrs.textAlign !== null && !["left", "center"].includes(node.attrs.textAlign as string)) return false;
     }
     if (node.marks !== undefined) {
       if (type !== "text" || parent === "codeBlock" || !Array.isArray(node.marks)) return false;

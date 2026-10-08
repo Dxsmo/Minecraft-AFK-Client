@@ -70,14 +70,16 @@ body {
 
 @layer components {
   .note-list-item {
-    max-width: 240px;
-    padding: 12px 14px;
-    border: 1px solid transparent;
-    border-radius: 10px;
+    min-width: 0;
+    min-height: 148px;
+    padding: 20px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
     color: var(--text-muted);
     transition: background-color 150ms ease, border-color 150ms ease;
   }
-  .note-list-item:hover { background: var(--surface); }
+  .note-list-item:hover { background: var(--surface-hover); border-color: var(--border-strong); }
   .note-list-active { background: var(--surface); border-color: var(--border-strong); color: var(--text); }
   .note-paper {
     width: 100%;

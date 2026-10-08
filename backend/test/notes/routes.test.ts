@@ -143,6 +143,32 @@ it("persists editor link attributes and makes external links safe to open", asyn
   ]);
 });
 
+it("persists left and centered paragraphs and headings for shared readers", async () => {
+  const note = await create();
+  await share(note.id, [{ userId: users[2], canWrite: false }]);
+  const document = { type: "doc", content: [
+    { type: "heading", attrs: { level: 2, textAlign: "center" }, content: [{ type: "text", text: "Zentrierte Überschrift" }] },
+    { type: "paragraph", attrs: { textAlign: "center" }, content: [{ type: "text", text: "Mitte", marks: [{ type: "bold" }] }] },
+    { type: "paragraph", attrs: { textAlign: "left" }, content: [{ type: "text", text: "Links" }] },
+  ] };
+  const response = await app.inject({ method: "PATCH", url: `/api/notes/${note.id}`, headers: headers[0], payload: { revision: 0, content: document } });
+  expect(response.statusCode).toBe(200);
+  const read = await app.inject({ url: `/api/notes/${note.id}`, headers: headers[2] });
+  expect(read.json().content).toEqual(document);
+  expect(read.json().canWrite).toBe(false);
+});
+
+it("accepts default alignment but rejects unsupported alignment values and style attributes", async () => {
+  const note = await create();
+  const payload = (attrs: Record<string, unknown>) => ({ revision: 0, content: { type: "doc", content: [{ type: "paragraph", attrs }] } });
+  for (const attrs of [{ textAlign: "right" }, { textAlign: 123 }, { textAlign: "center", style: "position:fixed" }, { textAlign: "center; color:red" }]) {
+    const response = await app.inject({ method: "PATCH", url: `/api/notes/${note.id}`, headers: headers[0], payload: payload(attrs) });
+    expect(response.statusCode).toBe(400);
+  }
+  const response = await app.inject({ method: "PATCH", url: `/api/notes/${note.id}`, headers: headers[0], payload: payload({ textAlign: null }) });
+  expect(response.statusCode).toBe(200);
+});
+
 it("enforces authentication and CSRF on all note mutations", async () => {
   const note = await create();
   for (const url of ["/api/notes", "/api/notes/users", `/api/notes/${note.id}`]) expect((await app.inject({ url })).statusCode).toBe(401);

@@ -2,10 +2,22 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { useNavigate } from "react-router-dom";
 import { EditorContent, useEditor, useEditorState, type JSONContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import TextAlign from "@tiptap/extension-text-align";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import type { Note, NoteGrant, NoteSummary } from "../lib/notes";
 import { NoteAccessDialog } from "./NoteAccessDialog";
+
+// Keep existing notes readable while removing these formats' creation shortcuts.
+const NoteStarterKit = StarterKit.extend({
+  addExtensions() {
+    return (this.parent?.() ?? []).map((extension) =>
+      ["italic", "strike", "blockquote"].includes(extension.name)
+        ? extension.extend({ addKeyboardShortcuts: () => ({}), addInputRules: () => [], addPasteRules: () => [] })
+        : extension,
+    );
+  },
+});
 
 export interface NoteEditorHandle { save: () => Promise<boolean> }
 interface Draft { title: string; content: JSONContent; revision: number }
@@ -40,15 +52,11 @@ function NoteEditor({ note, onSaved, onReload, onDeleted, onCopied }, ref) {
   const [accessOpen, setAccessOpen] = useState(false);
   const [grants, setGrants] = useState(note.grants);
   const [copying, setCopying] = useState(false);
-  const [linkOpen, setLinkOpen] = useState(false);
-  const [linkHref, setLinkHref] = useState("");
-  const [linkError, setLinkError] = useState<string | null>(null);
-  const linkSelection = useRef({ from: 0, to: 0 });
   const editor = useEditor({
-    extensions: [StarterKit.configure({ heading: { levels: [1, 2, 3] }, link: {
-      openOnClick: false, defaultProtocol: "https", protocols: ["http", "https", "mailto"], HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" },
+    extensions: [NoteStarterKit.configure({ heading: { levels: [1, 2, 3] }, link: {
+      autolink: false, linkOnPaste: false, openOnClick: false, defaultProtocol: "https", protocols: ["http", "https", "mailto"], HTMLAttributes: { target: "_blank", rel: "noopener noreferrer" },
       isAllowedUri: (uri) => { try { return ["https:", "http:", "mailto:"].includes(new URL(uri).protocol); } catch { return false; } },
-    } })],
+    } }), TextAlign.configure({ types: ["heading", "paragraph"], alignments: ["left", "center"], defaultAlignment: "left" })],
     content: initial.content,
     editable: canWrite,
     editorProps: { attributes: { class: "note-rich-text", "aria-label": "Notizinhalt", role: "textbox", "aria-multiline": "true" } },
@@ -59,8 +67,9 @@ function NoteEditor({ note, onSaved, onReload, onDeleted, onCopied }, ref) {
     onBlur: () => { void save(); },
   });
   const format = useEditorState({ editor, selector: ({ editor: current }) => current ? {
-    bold: current.isActive("bold"), italic: current.isActive("italic"), underline: current.isActive("underline"), strike: current.isActive("strike"),
-    bulletList: current.isActive("bulletList"), orderedList: current.isActive("orderedList"), blockquote: current.isActive("blockquote"), link: current.isActive("link"),
+    bold: current.isActive("bold"), underline: current.isActive("underline"),
+    bulletList: current.isActive("bulletList"), orderedList: current.isActive("orderedList"),
+    alignLeft: current.isActive({ textAlign: "left" }), alignCenter: current.isActive({ textAlign: "center" }),
     heading: [1, 2, 3].find((level) => current.isActive("heading", { level })) ?? 0,
   } : null });
 
@@ -169,25 +178,6 @@ function NoteEditor({ note, onSaved, onReload, onDeleted, onCopied }, ref) {
     setGrants(value);
     onSaved({ ...note, title: title.trim() || "Neue Notiz", revision: revision.current, grants: value, shared: value.length > 0 });
   }
-  function link() {
-    if (!editor) return;
-    linkSelection.current = { from: editor.state.selection.from, to: editor.state.selection.to };
-    setLinkHref(editor.getAttributes("link").href ?? "https://");
-    setLinkError(null);
-    setLinkOpen(true);
-  }
-  function applyLink() {
-    if (!editor) return;
-    const chain = editor.chain().focus().setTextSelection(linkSelection.current).extendMarkRange("link");
-    if (!linkHref.trim()) { chain.unsetLink().run(); setLinkOpen(false); return; }
-    try {
-      const url = new URL(linkHref);
-      if (!["https:", "http:", "mailto:"].includes(url.protocol)) throw new Error();
-      chain.setLink({ href: url.href }).run();
-      setLinkOpen(false);
-    } catch { setLinkError("Bitte gib eine gültige https-, http- oder mailto-Adresse ein."); }
-  }
-
   return <section className="space-y-3" aria-label="Geöffnete Notiz">
     <div className="flex flex-wrap items-center justify-between gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
       <span>{canWrite ? status : "Nur lesen"} · {note.isOwner ? (grants.length ? "Geteilt" : "Privat") : `Von ${note.owner.username}`}</span>
@@ -207,14 +197,13 @@ function NoteEditor({ note, onSaved, onReload, onDeleted, onCopied }, ref) {
         else editor.chain().focus().toggleHeading({ level: level as 1 | 2 | 3 }).run();
       }}><option value="0">Text</option><option value="1">Überschrift 1</option><option value="2">Überschrift 2</option><option value="3">Überschrift 3</option></select>
       <FormatButton label="Fett" active={format?.bold} onClick={() => editor.chain().focus().toggleBold().run()}><strong>B</strong></FormatButton>
-      <FormatButton label="Kursiv" active={format?.italic} onClick={() => editor.chain().focus().toggleItalic().run()}><em>I</em></FormatButton>
       <FormatButton label="Unterstrichen" active={format?.underline} onClick={() => editor.chain().focus().toggleUnderline().run()}><u>U</u></FormatButton>
-      <FormatButton label="Durchgestrichen" active={format?.strike} onClick={() => editor.chain().focus().toggleStrike().run()}><s>S</s></FormatButton>
+      <span className="note-toolbar-divider" aria-hidden="true" />
+      <FormatButton label="Linksbündig" active={format?.alignLeft} onClick={() => editor.chain().focus().setTextAlign("left").run()}><AlignmentIcon centered={false} /></FormatButton>
+      <FormatButton label="Zentriert" active={format?.alignCenter} onClick={() => editor.chain().focus().setTextAlign("center").run()}><AlignmentIcon centered /></FormatButton>
       <span className="note-toolbar-divider" aria-hidden="true" />
       <FormatButton label="Aufzählung" active={format?.bulletList} onClick={() => editor.chain().focus().toggleBulletList().run()}>• ≡</FormatButton>
       <FormatButton label="Nummerierte Liste" active={format?.orderedList} onClick={() => editor.chain().focus().toggleOrderedList().run()}>1. ≡</FormatButton>
-      <FormatButton label="Zitat" active={format?.blockquote} onClick={() => editor.chain().focus().toggleBlockquote().run()}>“</FormatButton>
-      <FormatButton label="Link" active={format?.link} onClick={link}>↗</FormatButton>
       <span className="note-toolbar-divider" aria-hidden="true" />
       <FormatButton label="Rückgängig" onClick={() => editor.chain().focus().undo().run()}>↶</FormatButton>
       <FormatButton label="Wiederholen" onClick={() => editor.chain().focus().redo().run()}>↷</FormatButton>
@@ -225,21 +214,16 @@ function NoteEditor({ note, onSaved, onReload, onDeleted, onCopied }, ref) {
       <EditorContent editor={editor} />
     </article>
     {accessOpen && <NoteAccessDialog noteId={note.id} grants={grants} onClose={() => setAccessOpen(false)} onSaved={shareSaved} />}
-    {linkOpen && <dialog className="note-access-dialog" aria-label="Link bearbeiten" ref={(element) => { if (element && !element.open) element.showModal(); }}
-      onCancel={(event) => { event.preventDefault(); setLinkOpen(false); }}>
-      <form className="p-6" onSubmit={(event) => { event.preventDefault(); applyLink(); }}>
-        <h2 className="text-lg font-semibold">Link bearbeiten</h2>
-        <label className="label mt-4" htmlFor={`note-link-${note.id}`}>Link-Adresse</label>
-        <input id={`note-link-${note.id}`} className="input" autoFocus value={linkHref} onChange={(event) => setLinkHref(event.target.value)} placeholder="https://…" />
-        <p className="mt-2 text-xs" style={{ color: "var(--text-subtle)" }}>Leere Adresse entfernt den Link.</p>
-        {linkError && <p role="alert" className="alert-error mt-3">{linkError}</p>}
-        <div className="mt-5 flex justify-end gap-2"><button type="button" className="btn btn-ghost" onClick={() => setLinkOpen(false)}>Abbrechen</button><button className="btn btn-primary" type="submit">Übernehmen</button></div>
-      </form>
-    </dialog>}
   </section>;
 });
 
 function FormatButton({ label, active, onClick, children }: { label: string; active?: boolean; onClick: () => void; children: React.ReactNode }) {
   return <button type="button" className="note-format-button" title={label} aria-label={label} aria-pressed={active}
     onMouseDown={(event) => event.preventDefault()} onClick={onClick}>{children}</button>;
+}
+
+function AlignmentIcon({ centered }: { centered: boolean }) {
+  return <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden="true">
+    <path d={centered ? "M2 3h12M5 6h6M2 9h12M5 12h6" : "M2 3h12M2 6h7M2 9h12M2 12h7"} />
+  </svg>;
 }

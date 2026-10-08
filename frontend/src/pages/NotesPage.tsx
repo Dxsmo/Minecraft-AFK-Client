@@ -65,26 +65,25 @@ export function NotesPage() {
         <button type="button" className="btn btn-primary" disabled={creating} onClick={() => void create()}>+ Neue Notiz</button>
       </header>
       {error && <p role="alert" className="alert-error">{error}</p>}
-      <div className="grid min-w-0 gap-5 lg:grid-cols-[200px_minmax(0,1fr)]">
-        <nav aria-label="Notizenliste" className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-visible">
+      <div className={id ? "grid min-w-0 gap-5 lg:grid-cols-[280px_minmax(0,1fr)]" : "min-w-0"}>
+        <nav aria-label="Notizenliste" className={id ? "flex gap-3 overflow-x-auto lg:flex-col lg:overflow-visible" : "grid gap-4 sm:grid-cols-2 xl:grid-cols-3"}>
           {notes.map((entry) => <NavLink key={entry.id} to={`/notes/${entry.id}`}
-            className={({ isActive }) => `note-list-item shrink-0 lg:shrink ${isActive ? "note-list-active" : ""}`}>
-            <span className="block truncate text-sm font-medium">{entry.title}</span>
-            <span className="mt-1 block truncate text-[11px]" style={{ color: "var(--text-subtle)" }}>
-              {entry.isOwner ? (entry.shared ? "Geteilt" : "Privat") : `Von ${entry.owner.username}`} · {entry.canWrite ? "Bearbeiten" : "Nur lesen"}
+            className={({ isActive }) => `note-list-item ${id ? "w-[280px] shrink-0 lg:w-full" : ""} ${isActive ? "note-list-active" : ""}`}>
+            <span className="block min-h-12 line-clamp-2 text-base font-medium" title={entry.title}>{entry.title}</span>
+            <span className="mt-3 block truncate text-xs" style={{ color: "var(--text-muted)" }} title={`Erstellt von ${entry.owner.username}`}>Erstellt von {entry.owner.username}</span>
+            <span className="mt-2 block truncate text-[11px]" style={{ color: "var(--text-subtle)" }}>
+              {entry.shared ? "Geteilt" : "Privat"} · {entry.canWrite ? "Bearbeiten" : "Nur lesen"}
             </span>
           </NavLink>)}
           {!notes.length && <p className="p-3 text-sm" style={{ color: "var(--text-subtle)" }}>Noch keine Notizen.</p>}
         </nav>
-        <div className="min-w-0">
+        {id && <div className="min-w-0">
           {loading ? <div className="card p-10 text-center text-sm">Notiz wird geladen…</div> : note ? (
             <NoteEditor key={note.id} ref={editor} note={note} onSaved={saved} onReload={() => void reload()}
               onDeleted={() => { setNotes((prev) => prev.filter((entry) => entry.id !== note.id)); navigate("/notes"); }}
               onCopied={(created) => { setNotes((prev) => [created, ...prev]); navigate(`/notes/${created.id}`); }} />
-          ) : !error && <div className="card grid min-h-96 place-items-center p-8 text-center">
-            <div><p className="text-base font-medium">Platz für Ideen</p><p className="mt-2 max-w-sm text-sm" style={{ color: "var(--text-muted)" }}>Erstelle eine Notiz oder öffne eine aus der Liste. Neue Notizen sind zunächst nur für dich sichtbar.</p></div>
-          </div>}
-        </div>
+          ) : null}
+        </div>}
       </div>
     </div>
   );
