@@ -97,7 +97,7 @@ export function Layout() {
           <span
             className="brand-mark flex h-9 w-9 shrink-0 items-center justify-center rounded-lg p-1.5"
           >
-            <img src="/favicon.png" alt="" className="h-full w-full object-contain" />
+            <img src="/desmodus-head.svg" alt="" className="h-full w-full object-contain" />
           </span>
           <div className="hidden leading-tight sm:block">
             <h1 className="text-sm font-semibold" style={{ color: "var(--text)" }}>

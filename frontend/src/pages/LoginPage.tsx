@@ -32,7 +32,7 @@ export function LoginPage() {
           <span
             className="brand-mark glow-ring flex h-14 w-14 items-center justify-center rounded-xl p-2.5"
           >
-            <img src="/favicon.png" alt="" className="h-full w-full object-contain" />
+            <img src="/desmodus-head.svg" alt="" className="h-full w-full object-contain" />
           </span>
           <h1 className="mt-3 text-base font-semibold" style={{ color: "var(--text)" }}>
             Minecraft AFK
