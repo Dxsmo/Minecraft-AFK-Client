@@ -27,10 +27,21 @@ deployed server or the absence of all bugs.
   owner/admin-authorized, CSRF-protected lookup limited to 30 requests per minute
   per endpoint and user. These endpoints return only one active user's ID and username, never
   a list or suggestions. The admin-only user management page remains separate.
+- Website usernames match without regard to ASCII letter case; passwords remain
+  case-sensitive. User creation rejects case-only duplicates transactionally.
+  Legacy ambiguous usernames fail login/lookup rather than selecting an arbitrary
+  account. Display spelling and existing user IDs/permissions are preserved.
 - Minigame players use a separate Minecraft-identity challenge and bearer
   authentication; website admin routes still require an admin session.
 
 ## Data and browser protections
+
+The login remember option stores only a username/preference in localStorage.
+Passwords are offered to the browser's password manager after successful login,
+using PasswordCredential on supported secure origins, with standard autocomplete
+as a fallback. Prefilling does not log in automatically. Password-manager storage,
+confirmation and autofill depend on the user's browser/settings; no website-side
+password copy or decryptable local password blob is persisted.
 
 Public response selectors exclude password hashes and legacy Minecraft
 credential fields. React escapes user text. Notes validate document structure,

@@ -1,5 +1,5 @@
 import { prisma } from "../database/prisma.js";
-import { hashPassword } from "./password.js";
+import { createUser } from "../users/service.js";
 import { logger } from "../logging/logger.js";
 import { config } from "../config/config.js";
 
@@ -23,15 +23,7 @@ export async function bootstrapAdmin(): Promise<void> {
     return;
   }
 
-  const passwordHash = await hashPassword(config.initialAdmin.password);
-  await prisma.user.create({
-    data: {
-      username: config.initialAdmin.username,
-      passwordHash,
-      role: "ADMIN",
-      status: "ACTIVE",
-    },
-  });
+  await createUser({ username: config.initialAdmin.username, password: config.initialAdmin.password, role: "ADMIN" });
 
   logger.info({ username: config.initialAdmin.username }, "Bootstrapped initial admin user");
 }

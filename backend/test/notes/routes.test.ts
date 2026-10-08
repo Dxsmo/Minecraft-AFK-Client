@@ -113,6 +113,7 @@ it("looks up one exact active username with only public fields and only for the 
   expect(found.statusCode).toBe(200);
   expect(found.json()).toEqual({ id: target.id, username: target.username });
   expect(found.headers["cache-control"]).toBe("private, no-store");
+  expect((await lookup(target.username.toUpperCase())).json()).toEqual({ id: target.id, username: target.username });
   expect(await prisma.noteGrant.count({ where: { noteId: note.id } })).toBe(0);
   for (const username of [target.username.slice(0, -1), "unregistered-user", "' OR 1=1 --", "%"])
     expect((await lookup(username)).json()).toEqual({ error: "Nicht registrierter Benutzername" });
@@ -122,6 +123,17 @@ it("looks up one exact active username with only public fields and only for the 
   await prisma.user.update({ where: { id: target.id }, data: { status: "DISABLED" } });
   try { expect((await lookup(target.username)).json()).toEqual({ error: "Nicht registrierter Benutzername" }); }
   finally { await prisma.user.update({ where: { id: target.id }, data: { status: "ACTIVE" } }); }
+});
+
+it("does not grant access to an arbitrary user when legacy usernames differ only by case", async () => {
+  const note = await create();
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: users[1] } });
+  const duplicate = await prisma.user.create({ data: { username: target.username.toUpperCase(), passwordHash: "test" } });
+  try {
+    const response = await app.inject({ method: "POST", url: `/api/notes/${note.id}/access/lookup`, headers: headers[0], payload: { username: target.username } });
+    expect(response.statusCode).toBe(404);
+    expect(await prisma.noteGrant.count({ where: { noteId: note.id } })).toBe(0);
+  } finally { await prisma.user.delete({ where: { id: duplicate.id } }); }
 });
 
 it("rate limits username lookups per user, even when a client changes its IP", async () => {

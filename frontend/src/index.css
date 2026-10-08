@@ -171,8 +171,8 @@ body {
   .account-sort button, .account-actions button { pointer-events: auto; }
   .account-image-button {
     position: absolute;
-    inset: -1px 0;
-    width: var(--account-height);
+    inset: 5px 6px;
+    border-radius: 8px;
     display: grid;
     place-items: center;
     overflow: hidden;

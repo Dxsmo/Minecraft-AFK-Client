@@ -175,6 +175,13 @@ Changes save automatically. Concurrent edits preserve the unsaved draft instead
 of overwriting a newer version, with options to reload or save a private copy.
 There is no word/character cap; each save request has a 64 MiB transport limit.
 
+Website login and sharing match usernames regardless of letter case; passwords
+remain case-sensitive. **Anmeldedaten speichern** remembers the username locally
+and offers the password to the browser's password manager after a successful
+login. Browser confirmation/settings control password saving and autofill;
+the website never persists the password in localStorage. Press **Enter** in the
+login form to sign in.
+
 ---
 
 ## 6. Minecraft account configuration

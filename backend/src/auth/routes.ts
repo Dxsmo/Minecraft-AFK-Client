@@ -9,12 +9,13 @@ import { recordAuditLog } from "../logging/auditLog.js";
 import { logger } from "../logging/logger.js";
 import { registerFailedLogin, clearFailedLogins } from "../security/ipBans.js";
 import { randomBytes } from "node:crypto";
+import { findUsernameMatches } from "../users/username.js";
 
 // Unknown users still perform the same password work as incorrect passwords.
 const dummyPasswordHash = hashPassword(randomBytes(32).toString("hex"));
 
 const loginSchema = z.object({
-  username: z.string().min(1).max(64),
+  username: z.string().trim().min(1).max(64),
   password: z.string().min(1).max(256),
 });
 
@@ -38,7 +39,8 @@ export default async function authRoutes(app: FastifyInstance) {
       const body = parseOrReject(loginSchema, req.body, reply);
       if (!body) return;
 
-      const user = await prisma.user.findUnique({ where: { username: body.username } });
+      const matches = await findUsernameMatches(body.username);
+      const user = matches.length === 1 ? await prisma.user.findUnique({ where: { id: matches[0].id } }) : null;
 
       const valid = await verifyPassword(user?.passwordHash ?? await dummyPasswordHash, body.password);
       if (!user || user.status === "DISABLED" || !valid) {

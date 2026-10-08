@@ -104,7 +104,7 @@ export function Layout() {
               Minecraft AFK
             </h1>
             <p className="text-[11px] font-medium" style={{ color: "var(--text-subtle)" }}>
-              Hosted by Desmodus
+              Hosted by Desmo
             </p>
           </div>
         </div>

@@ -123,7 +123,7 @@ it("looks up a single username for account sharing without listing registered us
   const base=`/api/minecraft/accounts/${accounts[0].id}`;
   for(const index of [0,2]) {
     expect((await app.inject({url:base+"/assignable-users",headers:headers(index)})).statusCode).toBe(404);
-    const found=await app.inject({method:"POST",url:base+"/assignments/lookup",headers:headers(index),payload:{username:` ${users[1].username} `}});
+    const found=await app.inject({method:"POST",url:base+"/assignments/lookup",headers:headers(index),payload:{username:` ${users[1].username.toUpperCase()} `}});
     expect(found.statusCode).toBe(200);expect(found.json()).toEqual({id:users[1].id,username:users[1].username});
   }
   expect(await prisma.userMinecraftAccount.count({where:{minecraftAccountId:accounts[0].id}})).toBe(1);
@@ -136,6 +136,29 @@ it("looks up a single username for account sharing without listing registered us
   expect((await app.inject({method:"POST",url:base+"/assignments/lookup",headers:headers(0,false),payload:{username:users[1].username}})).statusCode).toBe(403);
   expect((await app.inject({method:"POST",url:base+"/assignments/lookup",payload:{username:users[1].username}})).statusCode).toBe(401);
   expect((await app.inject({method:"POST",url:"/api/minecraft/accounts/missing/assignments/lookup",headers:headers(2),payload:{username:users[1].username}})).statusCode).toBe(404);
+});
+
+it("ignores username case during login while keeping password case significant",async()=>{
+  const renamed="MiXeD-"+randomUUID().slice(0,8);
+  await prisma.user.update({where:{id:users[0].id},data:{username:renamed}});
+  const signIn=(username:string,password:string,index:number)=>app.inject({method:"POST",url:"/api/auth/login",remoteAddress:`198.51.100.${60+index}`,payload:{username,password}});
+  for(const [index,username] of [renamed.toLowerCase(),renamed.toUpperCase(),` ${renamed} `].entries()) {
+    const response=await signIn(username,"security-test-password",index);
+    expect(response.statusCode).toBe(200);expect(response.json()).toMatchObject({id:users[0].id,username:renamed});
+  }
+  expect((await signIn(renamed,"SECURITY-TEST-PASSWORD",4)).statusCode).toBe(401);
+  expect((await signIn("' OR 1=1 --","security-test-password",5)).statusCode).toBe(401);
+  await prisma.user.update({where:{id:users[0].id},data:{status:"DISABLED"}});
+  expect((await signIn(renamed.toLowerCase(),"security-test-password",6)).statusCode).toBe(401);
+});
+
+it("rejects ambiguous legacy usernames instead of selecting another user's account",async()=>{
+  const duplicate=await prisma.user.create({data:{username:users[0].username.toUpperCase(),passwordHash}});
+  try {
+    const response=await app.inject({method:"POST",url:"/api/auth/login",remoteAddress:"198.51.100.70",payload:{username:users[0].username,password:"security-test-password"}});
+    expect(response.statusCode).toBe(401);expect(response.json()).toEqual({error:"Invalid username or password"});
+    expect(response.headers["set-cookie"]).toBeUndefined();
+  } finally {await prisma.user.delete({where:{id:duplicate.id}});}
 });
 
 it("requires CSRF for state changes and rejects requests from untrusted origins",async()=>{

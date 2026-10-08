@@ -24,6 +24,24 @@ describe("users service", () => {
     expect((found as any).passwordHash).toBeUndefined();
   });
 
+  it("preserves display spelling but rejects usernames differing only by case, including disabled users", async () => {
+    const user = await usersService.createUser({ username: "MixedCase", password: "supersecret1", role: "USER" });
+    expect(user.username).toBe("MixedCase");
+    for (const username of ["mixedcase", "MIXEDCASE", "mIxEdCaSe"]) {
+      await expect(usersService.createUser({ username, password: "otherpassword1", role: "USER" })).rejects.toMatchObject({ code: "P2002" });
+    }
+    await usersService.updateUser(user.id, { status: "DISABLED" });
+    await expect(usersService.createUser({ username: "mixedcase", password: "otherpassword1", role: "USER" })).rejects.toMatchObject({ code: "P2002" });
+    expect(await prisma.user.count()).toBe(1);
+  });
+
+  it("does not create case-only duplicates during concurrent registrations", async () => {
+    const results = await Promise.allSettled(["ConcurrentCase", "concurrentcase"].map((username) =>
+      usersService.createUser({ username, password: "supersecret1", role: "USER" })));
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(await prisma.user.count()).toBe(1);
+  });
+
   it("destroys all sessions when a user's password is changed", async () => {
     const user = await usersService.createUser({ username: "sessionKill", password: "supersecret1", role: "USER" });
     const { sessionId } = await createSession(user.id, {});

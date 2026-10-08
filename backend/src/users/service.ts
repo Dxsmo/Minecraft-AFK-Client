@@ -2,6 +2,8 @@ import { prisma } from "../database/prisma.js";
 import { hashPassword } from "../auth/password.js";
 import { destroyAllUserSessions } from "../auth/session.js";
 import type { CreateUserInput, UpdateUserInput } from "./schemas.js";
+import { Prisma } from "@prisma/client";
+import { findUsernameMatches } from "./username.js";
 
 const publicUserSelect = {
   id: true,
@@ -22,9 +24,16 @@ export async function getUserById(id: string) {
 
 export async function createUser(input: CreateUserInput) {
   const passwordHash = await hashPassword(input.password);
-  return prisma.user.create({
-    data: { username: input.username, passwordHash, role: input.role },
-    select: publicUserSelect,
+  return prisma.$transaction(async (tx) => {
+    if ((await findUsernameMatches(input.username, tx)).length) {
+      throw new Prisma.PrismaClientKnownRequestError("Username already exists", {
+        code: "P2002", clientVersion: Prisma.prismaVersion.client, meta: { target: ["username"] },
+      });
+    }
+    return tx.user.create({
+      data: { username: input.username, passwordHash, role: input.role },
+      select: publicUserSelect,
+    });
   });
 }
 
