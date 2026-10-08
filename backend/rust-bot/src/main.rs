@@ -391,20 +391,24 @@ mod tests {
             .is_ok());
         let mut world = World::new();
         world.init_resource::<Messages<SendChatEvent>>();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let captured = sent.clone();
+        world.add_observer(
+            move |event: azalea::ecs::prelude::On<azalea::packet::game::SendGamePacketEvent>| {
+                if let azalea::protocol::packets::game::ServerboundGamePacket::ChatCommand(packet) =
+                    &event.packet
+                {
+                    captured.lock().push(format!("/{}", packet.command));
+                }
+            },
+        );
         let entity = world.spawn((InGameState, Inventory::default())).id();
         let bot = Client {
             entity,
             ecs: Arc::new(RwLock::new(world)),
         };
         futures::executor::block_on(handle(bot.clone(), Event::KeepAlive(1), State)).unwrap();
-        let commands: Vec<_> = bot
-            .ecs
-            .write()
-            .resource_mut::<Messages<SendChatEvent>>()
-            .drain()
-            .map(|event| event.content)
-            .collect();
-        assert_eq!(commands, vec!["/home farm"]);
+        assert_eq!(*sent.lock(), vec!["/home farm"]);
         assert!(shared().lock().pending.is_empty());
     }
 }

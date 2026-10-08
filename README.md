@@ -224,11 +224,21 @@ additional users access afterwards in the account's **Settings** panel):
   Spawn selectors and manual menus (including `/home` selections) are left open;
   another explicit command, such as `/home <name>`, can interrupt them.
   Explicit commands are processed on packet/login events as well as ticks,
-  so they remain usable while a world transfer is waiting for Spawn. A missing
-  tick heartbeat triggers recovery even if chat messages are still arriving.
+  so they remain usable while a world transfer is waiting for Spawn. Manual
+  commands cancel queued automatic sell commands, flush through the actual
+  packet handlers immediately, and pause automation for five seconds. A delayed
+  sell-menu response to an interrupted sale is closed without clicking its slots;
+  manual menus remain open until another explicit command or world transition.
+  A missing tick heartbeat triggers recovery even if chat messages are still arriving.
   During connection configuration, manual commands stay queued until game
   packets can be sent again. Open menus are closed once before the command;
-  `Command queued` records local dispatch, not a server acknowledgement.
+  `Command dispatched` records packet dispatch, not a server acknowledgement.
+  Each Java world login/respawn clears the previous loaded-chunk/client-loaded
+  markers, so the new server receives its own `PlayerLoaded` acknowledgement
+  after the destination chunk loads. Position packets alone cannot start selling
+  in an unloaded destination. Spawn adds a bounded two-second stabilization
+  guard; continuous pickups do not extend it. Inventory-loading rejections delay
+  the next attempt by one second without releasing manual command priority.
   The native AFK network reader processes at most 256 packets or four
   milliseconds of incoming work per update, then lets ticks and outgoing
   commands proceed. Dropped item entities and their visual updates are omitted
@@ -237,6 +247,10 @@ additional users access afterwards in the account's **Settings** panel):
   forwarded to the bot handler. Player physics, other entities, authentication,
   keepalives, compression and encryption remain handled by Azalea. The startup
   console line `AFK-Netzwerk aktiv` confirms that this reader is enabled.
+  Empty framed/decompressed payloads have no packet ID and are skipped with one
+  diagnostic per connection. Valid one-byte bundle delimiters remain intact.
+  Other parse warnings include the payload length and protocol state, are limited
+  to one per 30 seconds, and do not prevent processing subsequent packets.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once

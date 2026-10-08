@@ -156,8 +156,26 @@ describe("Bedrock crouch after world transitions", () => {
     expect(sender.command).not.toHaveBeenCalled();
     vi.advanceTimersByTime(800);
     behavior.onTick();
+    expect(sender.send).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(4200);
+    behavior.onTick();
     expect(sender.send).toHaveBeenLastCalledWith("/background");
     expect(sender.setSneak).toHaveBeenCalledWith(true);
+  });
+
+  it("keeps auto-sell paused for five seconds after a manual command despite teleport or inventory-loading replies", () => {
+    const { sender, behavior } = setup();
+    behavior.updateConfig({ crouch_enabled: true, autosell_enabled: true, autosell_interval_seconds: 0.25 });
+    behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
+    expect(sender.command).toHaveBeenCalledTimes(1);
+    behavior.enqueueChat("/tpa Steve"); behavior.onTick();
+    expect(sender.send).toHaveBeenCalledWith("/tpa Steve");
+    behavior.markTeleported();
+    behavior.onChat("HugoSMP", "Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird.");
+    vi.advanceTimersByTime(4999); behavior.onTick();
+    expect(sender.command).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1); behavior.onTick();
+    expect(sender.command).toHaveBeenCalledTimes(2);
   });
 
   it("never accepts teleport requests automatically, even with legacy settings", () => {

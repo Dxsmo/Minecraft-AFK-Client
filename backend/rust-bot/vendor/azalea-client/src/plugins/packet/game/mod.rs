@@ -9,8 +9,8 @@ use azalea_core::{
     position::{ChunkPos, Vec3},
 };
 use azalea_entity::{
-    Dead, EntityBundle, EntityKindComponent, HasClientLoaded, LoadedBy, LocalEntity, LookDirection,
-    Physics, PlayerAbilities, Position,
+    Dead, EntityBundle, EntityKindComponent, HasClientLoaded, InLoadedChunk, LoadedBy, LocalEntity,
+    LookDirection, Physics, PlayerAbilities, Position,
     effect_events::{AddEffectEvent, RemoveEffectsEvent},
     indexing::{EntityIdIndex, EntityUuidIndex},
     inventory::Inventory,
@@ -209,6 +209,11 @@ pub struct GamePacketHandler<'a> {
 }
 impl GamePacketHandler<'_> {
     pub fn login(&mut self, p: &ClientboundLogin) {
+        // A proxy login creates a new destination world without Respawn. Its
+        // loading acknowledgement must be sent again after fresh chunks arrive.
+        self.ecs
+            .entity_mut(self.player)
+            .remove::<(HasClientLoaded, InLoadedChunk)>();
         debug!("Got login packet");
 
         as_system::<(
@@ -1409,7 +1414,7 @@ impl GamePacketHandler<'_> {
 
                 commands
                     .entity(self.player)
-                    .remove::<(Dead, HasClientLoaded)>();
+                    .remove::<(Dead, HasClientLoaded, InLoadedChunk)>();
             },
         )
     }

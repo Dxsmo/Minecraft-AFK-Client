@@ -47,6 +47,7 @@ export class BehaviorState {
   private sender: BotSender;
   readonly inventory: BedrockInventory;
   private nextCrouchCheckAt = 0;
+  private manualAutosellPauseUntil = 0;
   private cfg: BehaviorConfig;
 
   private spawned = false;
@@ -157,10 +158,10 @@ export class BehaviorState {
     if (this.spawned) this.sender.tickInput();
 
     if (this.spawned && this.manualQueue.length) {
-      this.runForeground(this.manualQueue.shift()!, now);
+      this.runForeground(this.manualQueue.shift()!, now, true);
       return;
     }
-    if (!this.spawned || now < this.automationReadyAt) return;
+    if (!this.spawned || now < this.automationReadyAt || now < this.manualAutosellPauseUntil) return;
 
     // Run at most one foreground task per tick.
     const task = this.queue.shift();
@@ -185,10 +186,11 @@ export class BehaviorState {
     }
   }
 
-  private runForeground(task: ForegroundTask, now: number): void {
+  private runForeground(task: ForegroundTask, now: number, manual = false): void {
     switch (task.kind) {
       case "command":
-        this.inventory.interrupt(true);
+        if (manual) this.manualAutosellPauseUntil = now + 5000;
+        this.inventory.interrupt(true, task.text.trim() === (this.cfg.autosell_command ?? "/sell").trim());
         this.sender.send(task.text);
         this.postponeAutomation(
           now + (isTeleportCommand(task.text) ? TELEPORT_COMMAND_GUARD_MS : CHAT_COMMAND_GUARD_MS),

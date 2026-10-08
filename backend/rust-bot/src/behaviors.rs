@@ -39,7 +39,7 @@ const AUTOSELL_ORPHAN_RECOVERY_DELAY: Duration = Duration::from_millis(100);
 /// Wait after a full spawn before sending automation commands. `Spawn` means
 /// the chunk is usable, but proxy networks may still be restoring the player
 /// inventory for a brief moment (the attached HugoSMP log showed exactly this).
-const SPAWN_STABILIZE_DELAY: Duration = Duration::from_millis(250);
+const SPAWN_STABILIZE_DELAY: Duration = Duration::from_secs(2);
 /// Position sync packets are emitted for /home, accepted TPAs and other
 /// same-world teleports. Let the destination and inventory settle before the
 /// next sell cycle starts.
@@ -58,7 +58,7 @@ const COMMAND_MENU_CLOSE_DELAY: Duration = Duration::from_millis(750);
 const AUTOSELL_LATE_MENU_WINDOW: Duration = Duration::from_secs(10);
 /// Retry delay when the server explicitly says the inventory is still being
 /// saved/loaded. This is a transient lifecycle state, not an auto-sell failure.
-const INVENTORY_BUSY_DELAY: Duration = Duration::from_millis(250);
+const INVENTORY_BUSY_DELAY: Duration = Duration::from_secs(1);
 /// Repeated menu failures are logged at most this often. Retrying itself still
 /// follows the configured interval and is never slowed down by logging.
 const AUTOSELL_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(30);
@@ -198,6 +198,8 @@ pub struct BehaviorState {
     /// A manual command can open a GUI even when it looks like a teleport.
     manual_menu_guard_until: Option<Instant>,
     manual_menu_id: Option<i32>,
+    manual_priority_until: Option<Instant>,
+    cancelled_sell_until: Option<Instant>,
     /// Only a response to our own sell request may be clicked or recovered.
     last_sell_request_at: Option<Instant>,
     sell_menu: Option<(i32, String)>,
@@ -241,6 +243,8 @@ impl BehaviorState {
             command_menu_close_at: None,
             manual_menu_guard_until: None,
             manual_menu_id: None,
+            manual_priority_until: None,
+            cancelled_sell_until: None,
             last_sell_request_at: None,
             sell_menu: None,
             task_queue: VecDeque::new(),
@@ -293,21 +297,95 @@ impl BehaviorState {
         let Some(text) = self.manual_chat_queue.pop_front() else {
             return false;
         };
+        let manual_sell = text.trim() == self.config.autosell_command.trim();
+        if !manual_sell
+            && (self.last_sell_request_at.is_some()
+                || !matches!(self.autosell_phase, AutoSellPhase::Idle)
+                || self.owns_sell_menu(bot))
+        {
+            self.cancelled_sell_until = Some(now + AUTOSELL_LATE_MENU_WINDOW);
+        } else if manual_sell {
+            self.cancelled_sell_until = None;
+        }
+        self.manual_priority_until = Some(now + AUTOSELL_MENU_TIMEOUT);
         self.close_open_menu(bot);
         // Closing is deferred in Azalea's ECS. Interrupting again before it
         // settles would send a second close for the same container.
         self.reset_interactions();
         bot.ecs.write().flush();
-        bot.chat(text.clone());
+        if !self.send_manual_chat_now(bot, &text) {
+            self.manual_chat_queue.push_front(text);
+            return false;
+        }
         self.guard_after_chat(now, is_teleport_command(&text));
         // Manual GUIs stay open until the server closes them, a teleport
         // completes, or the user issues another command. /home may open a GUI.
         self.command_menu_close_at = None;
         self.manual_menu_guard_until = text.starts_with('/').then_some(now + AUTOSELL_MENU_TIMEOUT);
         emit(&OutEvent::BehaviorLog {
-            message: format!("Command queued: {text}"),
+            message: format!("Command dispatched: {text}"),
         });
         true
+    }
+
+    /// Drain the pending chat messages through the real Azalea packet handlers
+    /// now. Waiting for Update can leave a manual command behind a queued sell.
+    /// Drain consumed messages afterwards so Update cannot send them twice.
+    fn send_manual_chat_now(&self, bot: &Client, text: &str) -> bool {
+        use azalea::client_chat::{
+            handle_send_chat_event,
+            handler::{handle_send_chat_kind_event, SendChatKindEvent},
+            SendChatEvent,
+        };
+        use azalea::ecs::prelude::Messages;
+        use azalea::ecs::system::RunSystemOnce;
+        let mut ecs = bot.ecs.write();
+        let pending: Vec<_> = ecs
+            .resource_mut::<Messages<SendChatEvent>>()
+            .drain()
+            .filter(|event| {
+                event.entity != bot.entity
+                    || event.content.trim() != self.config.autosell_command.trim()
+            })
+            .collect();
+        ecs.write_message(SendChatEvent {
+            entity: bot.entity,
+            content: text.to_owned(),
+        });
+        ecs.write_message_batch(pending);
+        ecs.init_resource::<Messages<SendChatKindEvent>>();
+        let result = ecs
+            .run_system_once(handle_send_chat_event)
+            .and_then(|_| ecs.run_system_once(handle_send_chat_kind_event));
+        if let Err(error) = &result {
+            emit(&OutEvent::Warning {
+                message: format!("Command-Paket konnte nicht erstellt werden: {error}"),
+            });
+        }
+        ecs.resource_mut::<Messages<SendChatEvent>>()
+            .drain()
+            .for_each(drop);
+        ecs.resource_mut::<Messages<SendChatKindEvent>>()
+            .drain()
+            .for_each(drop);
+        ecs.flush();
+        if result.is_ok() {
+            if let Some(mut connection) =
+                ecs.get_mut::<azalea::connection::RawConnection>(bot.entity)
+            {
+                if let Some(network) = connection.net_conn() {
+                    network.poll_writer();
+                }
+            }
+        }
+        result.is_ok()
+    }
+
+    fn close_cancelled_sell_menu(&self, bot: &Client, now: Instant) {
+        if self.cancelled_sell_until.is_some_and(|until| now < until) && self.owns_sell_menu(bot) {
+            self.close_sell_menu(bot);
+            bot.ecs.write().flush();
+        }
     }
 
     /// Enqueue a clean-spawner run as a foreground one-shot task. Coalesces with
@@ -405,19 +483,24 @@ impl BehaviorState {
     /// another Login/Spawn pair.
     pub fn on_position_sync(&mut self, bot: &Client) {
         if self.awaiting_respawn_position {
+            // A position packet alone does not mean the destination chunk or
+            // the player inventory has finished loading.
+            if bot.component::<InLoadedChunk>().is_err() {
+                return;
+            }
             self.spawned = true;
             self.awaiting_respawn_position = false;
             self.transition_recovery_at = None;
+            self.postpone_automation_until(Instant::now() + SPAWN_STABILIZE_DELAY);
         }
         if !self.spawned {
             return;
         }
         let now = Instant::now();
         self.interrupt_for_transition(bot);
-        // The position packet is the authoritative completion signal. Replace
-        // the provisional command timeout so /home does not always cost the
-        // full guard duration after it has already completed.
-        self.automation_ready_at = now + TELEPORT_STABILIZE_DELAY;
+        // A position acknowledgement must not shorten a spawn/loading guard
+        // or erase the separate manual-command pause.
+        self.postpone_automation_until(now + TELEPORT_STABILIZE_DELAY);
         self.next_autosell_at = self.automation_ready_at;
         self.crouch_resync_pending = true;
     }
@@ -488,6 +571,7 @@ impl BehaviorState {
             }
         }
 
+        self.close_cancelled_sell_menu(bot, now);
         let manual_ran = self.tick_manual_chat(bot, now);
 
         if self.command_menu_close_at.is_some_and(|at| now >= at) {
@@ -528,7 +612,9 @@ impl BehaviorState {
     /// Keep explicit commands responsive on login/packet events even when no
     /// world Tick is being emitted. This must not run automatic selling.
     pub fn on_control_event(&mut self, bot: &Client) {
-        self.tick_manual_chat(bot, Instant::now());
+        let now = Instant::now();
+        self.close_cancelled_sell_menu(bot, now);
+        self.tick_manual_chat(bot, now);
     }
 
     pub fn on_menu_open(&mut self, id: i32, title: String) {
@@ -557,7 +643,8 @@ impl BehaviorState {
     }
 
     fn manual_menu_pending(&self, bot: &Client, now: Instant) -> bool {
-        self.manual_menu_guard_until.is_some_and(|at| now < at)
+        self.manual_priority_until.is_some_and(|at| now < at)
+            || self.manual_menu_guard_until.is_some_and(|at| now < at)
             || self.manual_menu_id.is_some_and(|id| {
                 bot.component::<Inventory>().is_ok_and(|inventory| {
                     inventory.id == id
@@ -601,6 +688,10 @@ impl BehaviorState {
     /// the same tick, while multi-tick tasks (a spawner clear) become the
     /// `active_task` until they finish or time out.
     fn tick_foreground(&mut self, bot: &Client, now: Instant) -> bool {
+        // Scheduled scans/spawner tasks must not close a user's pending GUI.
+        if self.manual_menu_pending(bot, now) {
+            return false;
+        }
         let mut ran = self.active_task.is_some();
         // Advance an in-progress multi-tick task.
         match &self.active_task {
@@ -955,6 +1046,9 @@ impl BehaviorState {
                 let command = if command.is_empty() { "/sell" } else { command };
                 self.next_autosell_at = now + interval;
                 self.last_sell_request_at = Some(now);
+                // A fresh request owns the sell channel again; its response
+                // must not be closed under the previous cancellation guard.
+                self.cancelled_sell_until = None;
                 bot.chat(command.to_string());
                 self.autosell_phase = AutoSellPhase::WaitingForMenu {
                     since: now,
@@ -1133,7 +1227,15 @@ impl BehaviorState {
             // held input afterwards even if the local input cache stays true.
         }
         if is_inventory_busy_message(message) {
-            self.interrupt_for_transition(bot);
+            // A rejected sell/pickup must not erase ownership of a manual GUI
+            // or its independent pause and let AutoSell overtake the command.
+            if !matches!(self.autosell_phase, AutoSellPhase::Idle)
+                || self.last_sell_request_at.is_some()
+            {
+                self.close_sell_menu(bot);
+            }
+            self.autosell_phase = AutoSellPhase::Idle;
+            self.last_sell_request_at = None;
             self.postpone_automation_until(Instant::now() + INVENTORY_BUSY_DELAY);
         }
     }
@@ -1352,6 +1454,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use azalea::client_chat::SendChatEvent;
+    use azalea::ecs as bevy_ecs;
     use azalea::ecs::prelude::*;
     use azalea::entity::PlayerAbilities;
     use azalea::entity::{inventory::Inventory, InLoadedChunk, Jumping};
@@ -1421,9 +1524,17 @@ mod tests {
         let (client, mut state, _) = crouch_client(false);
         let mut world = client.ecs.write();
         world.init_resource::<Messages<SendChatEvent>>();
+        world.init_resource::<SentManualCommands>();
+        world.add_observer(
+            |event: On<SendGamePacketEvent>, mut sent: ResMut<SentManualCommands>| {
+                if let ServerboundGamePacket::ChatCommand(packet) = &event.packet {
+                    sent.0.push(format!("/{}", packet.command));
+                }
+            },
+        );
         world
             .entity_mut(client.entity)
-            .insert((Inventory::default(), InGameState));
+            .insert((Inventory::default(), InGameState, InLoadedChunk));
         world.add_observer(handle_client_side_close_container_trigger);
         world.add_observer(handle_set_container_content_trigger);
         world.add_observer(
@@ -1495,6 +1606,7 @@ mod tests {
         open_foreign_menu(&client, &mut state, "Homes");
         // The old implementation closed this as an orphan after just 750ms.
         state.manual_menu_guard_until = Some(Instant::now() - Duration::from_secs(10));
+        state.manual_priority_until = None;
         state.automation_ready_at = Instant::now();
         state.next_autosell_at = Instant::now();
         state.on_tick(&client);
@@ -1544,6 +1656,7 @@ mod tests {
         take_commands(&client);
         open_foreign_menu(&client, &mut state, "Homes");
         state.manual_menu_guard_until = None;
+        state.manual_priority_until = None;
         assert!(!state.recover_orphaned_autosell_menu(&client, since + Duration::from_secs(10)));
         tick_sell(&client, &mut state, since + Duration::from_secs(10));
         assert_eq!(client.get_inventory().unwrap().id(), 7);
@@ -1649,6 +1762,121 @@ mod tests {
             assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
         }
         assert_eq!(state.task_queue.len(), 1);
+    }
+
+    #[test]
+    fn manual_command_cancels_a_queued_sell_and_keeps_priority_after_teleport() {
+        use azalea::client_chat::{handle_send_chat_event, handler::handle_send_chat_kind_event};
+        let (client, mut state) = sell_client();
+        let now = Instant::now();
+        tick_sell(&client, &mut state, now);
+        // /sell is still in the chat queue; Update has not sent it yet.
+        assert!(state.last_sell_request_at.is_some());
+        state.enqueue_chat(&client, "/tpa Steve".into());
+        state.on_control_event(&client);
+        assert_eq!(take_commands(&client), vec!["/tpa Steve"]);
+        let mut schedule = Schedule::default();
+        schedule.add_systems((handle_send_chat_event, handle_send_chat_kind_event).chain());
+        schedule.run(&mut client.ecs.write());
+        assert!(
+            take_commands(&client).is_empty(),
+            "do not send a cancelled /sell or duplicate the manual command"
+        );
+        state.on_position_sync(&client);
+        let until = state.manual_priority_until.unwrap();
+        tick_sell(&client, &mut state, until - Duration::from_millis(1));
+        assert!(
+            take_commands(&client).is_empty(),
+            "a teleport must not erase manual priority"
+        );
+        tick_sell(&client, &mut state, until);
+        assert_eq!(take_commands(&client), vec!["/sell"]);
+        assert!(
+            state.cancelled_sell_until.is_none(),
+            "a fresh sell response must not be cancelled"
+        );
+    }
+
+    #[test]
+    fn cancelled_sell_reply_is_closed_without_clicking_and_home_menu_is_preserved() {
+        let (client, mut state) = sell_client();
+        let clicks = capture_sell_clicks(&client);
+        tick_sell(&client, &mut state, Instant::now());
+        take_commands(&client);
+        state.enqueue_chat(&client, "/homes".into());
+        state.on_control_event(&client);
+        assert_eq!(take_commands(&client), vec!["/homes"]);
+        open_empty_sell_menu(&client, &mut state);
+        state.on_control_event(&client);
+        assert_eq!(client.get_inventory().unwrap().id(), 0);
+        assert!(clicks.lock().is_empty());
+        open_foreign_menu(&client, &mut state, "Homes");
+        state.on_chat(&client, "<HugoSMP> Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird.");
+        state.on_control_event(&client);
+        state.manual_menu_guard_until = None;
+        state.manual_priority_until = None;
+        state.automation_ready_at = Instant::now();
+        state.on_tick(&client);
+        client.ecs.write().flush();
+        assert_eq!(client.get_inventory().unwrap().id(), 7);
+        assert!(take_commands(&client).is_empty());
+        assert!(clicks.lock().is_empty());
+        // An explicitly requested /sell must escape the cancelled response guard.
+        state.enqueue_chat(&client, "/sell".into());
+        state.on_control_event(&client);
+        assert_eq!(take_commands(&client), vec!["/sell"]);
+        open_empty_sell_menu(&client, &mut state);
+        state.on_chat(&client, "Dein Inventar wird gerade geladen");
+        state.on_control_event(&client);
+        assert_eq!(client.get_inventory().unwrap().id(), 7);
+    }
+
+    #[test]
+    fn position_before_destination_chunk_never_starts_selling() {
+        let (client, mut state) = sell_client();
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .remove::<InLoadedChunk>();
+        state.on_login(&client);
+        state.on_position_sync(&client);
+        assert!(!state.spawned);
+        state.on_tick(&client);
+        assert!(take_commands(&client).is_empty());
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .insert(InLoadedChunk);
+        state.on_spawn(&client);
+        let ready = state.automation_ready_at;
+        state.on_position_sync(&client);
+        assert_eq!(
+            state.automation_ready_at, ready,
+            "a later position packet must preserve the join guard"
+        );
+        tick_sell(&client, &mut state, ready - Duration::from_millis(1));
+        assert!(take_commands(&client).is_empty());
+        // Fresh slot updates during loading do not extend the join deadline.
+        for i in 0..120 {
+            azalea::inventory::apply_container_slot(
+                &mut client
+                    .ecs
+                    .write()
+                    .get_mut::<Inventory>(client.entity)
+                    .unwrap(),
+                &ClientboundContainerSetSlot {
+                    container_id: 0,
+                    state_id: i,
+                    slot: 9,
+                    item_stack: ItemStack::new(ItemKind::Beef, 64),
+                },
+            );
+        }
+        assert_eq!(state.automation_ready_at, ready);
+        tick_sell(&client, &mut state, ready);
+        assert_eq!(take_commands(&client), vec!["/sell"]);
     }
 
     fn open_empty_sell_menu(client: &Client, state: &mut BehaviorState) {
@@ -1815,17 +2043,9 @@ mod tests {
         state.pause_autosell(0, 300_000);
         let mut schedule = Schedule::default();
         schedule.add_systems((handle_send_chat_event, handle_send_chat_kind_event).chain());
-        for text in ["/home", "/home farm", "/tpahere Steve"] {
+        for text in ["/home", "/homes", "/tpa Steve"] {
             state.enqueue_chat(&client, text.into());
             state.on_control_event(&client);
-            let mut world = client.ecs.write();
-            schedule.run(&mut world);
-            world
-                .get_mut::<RawConnection>(entity)
-                .unwrap()
-                .net_conn()
-                .unwrap()
-                .poll_writer();
         }
         let packets = tokio::time::timeout(Duration::from_secs(3), async {
             let mut packets = Vec::new();
@@ -1851,10 +2071,7 @@ mod tests {
             matches!(&packets[1], ServerboundGamePacket::ContainerClose(packet)
             if packet.container_id == 7)
         );
-        for (packet, expected) in packets[2..]
-            .iter()
-            .zip(["home", "home farm", "tpahere Steve"])
-        {
+        for (packet, expected) in packets[2..].iter().zip(["home", "homes", "tpa Steve"]) {
             assert!(
                 matches!(packet, ServerboundGamePacket::ChatCommand(command)
                 if command.command == expected),
@@ -1862,16 +2079,46 @@ mod tests {
             );
         }
         assert_eq!(client.get_inventory().unwrap().id(), 0);
+        {
+            let mut world = client.ecs.write();
+            schedule.run(&mut world);
+            world
+                .get_mut::<RawConnection>(entity)
+                .unwrap()
+                .net_conn()
+                .unwrap()
+                .poll_writer();
+        }
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                read_raw_packet(
+                    &mut server_socket,
+                    &mut Cursor::new(Vec::new()),
+                    None,
+                    &mut None
+                )
+            )
+            .await
+            .is_err(),
+            "regular Update must not duplicate dispatched commands"
+        );
     }
 
+    #[derive(Resource, Default)]
+    struct SentManualCommands(Vec<String>);
+
     fn take_commands(client: &Client) -> Vec<String> {
-        client
-            .ecs
-            .write()
+        let mut ecs = client.ecs.write();
+        let mut sent: Vec<_> = ecs
             .resource_mut::<Messages<SendChatEvent>>()
             .drain()
             .map(|event| event.content)
-            .collect()
+            .collect();
+        if let Some(mut manual) = ecs.get_resource_mut::<SentManualCommands>() {
+            sent.extend(std::mem::take(&mut manual.0));
+        }
+        sent
     }
 
     fn tick_sell(client: &Client, state: &mut BehaviorState, now: Instant) {
@@ -2327,6 +2574,7 @@ mod tests {
             put_player_stack(&client);
             state.automation_ready_at = Instant::now();
             state.manual_menu_guard_until = None;
+            state.manual_priority_until = None;
             state.next_autosell_at = Instant::now();
             state.on_tick(&client);
             let commands = take_commands(&client);
@@ -2354,6 +2602,7 @@ mod tests {
             put_player_stack(&client);
             state.automation_ready_at = Instant::now();
             state.manual_menu_guard_until = None;
+            state.manual_priority_until = None;
             state.next_autosell_at = Instant::now();
             state.on_tick(&client);
             assert_eq!(take_commands(&client), vec!["/sell"]);
@@ -2363,6 +2612,11 @@ mod tests {
     #[test]
     fn missing_spawn_and_position_wait_for_loaded_chunk_then_resume_selling() {
         let (client, mut state) = sell_client();
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .remove::<InLoadedChunk>();
         state.on_login(&client);
         client.ecs.write().flush();
         let after_guard = Instant::now() + Duration::from_secs(6);
@@ -2423,6 +2677,11 @@ mod tests {
     #[test]
     fn respawn_and_position_restore_sneak_without_azalea_spawn_event() {
         let (client, mut state, packets) = crouch_client(true);
+        client
+            .ecs
+            .write()
+            .entity_mut(client.entity)
+            .insert(InLoadedChunk);
         state.spawned = true;
         for _ in 0..2 {
             state.on_respawn(&client);

@@ -22,8 +22,8 @@ impl Plugin for PlayerLoadedPlugin {
     }
 }
 
-// this component is removed on respawn or disconnect
-// (notably, it's not removed on login)
+// This component is removed on login, respawn and disconnect. Proxy logins
+// require a fresh PlayerLoaded acknowledgement for the destination server.
 
 // mojmap interchangeably calls it 'has client loaded' and 'has player loaded',
 // i prefer the client one because it makes it clear that the component is only

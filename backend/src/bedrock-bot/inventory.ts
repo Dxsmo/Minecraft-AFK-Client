@@ -25,22 +25,26 @@ export class BedrockInventory {
   private nextRequestId = -1;
   private openedAt = 0;
   private manualGuardUntil = 0;
+  private cancelledSellUntil = 0;
   private titles = new Map<string, string>();
   private lastFailureAt = -Infinity;
   constructor(private sender: BotSender) {}
 
   get busy(): boolean { return this.requestedAt != null || !!this.container?.owned; }
   get blocked(): boolean { return !!this.container && !this.container.owned; }
-  request(now: number): void { this.requestedAt = now; this.targets = null; }
+  request(now: number): void { this.cancelledSellUntil = 0; this.requestedAt = now; this.targets = null; }
 
   reset(): void {
-    this.titles.clear(); this.manualGuardUntil = 0;
+    this.titles.clear(); this.manualGuardUntil = 0; this.cancelledSellUntil = 0;
     this.player = null; this.container = null; this.requestedAt = null;
     this.targets = null; this.pending = null;
   }
 
-  interrupt(closeForeign = false): void {
-    if (closeForeign) this.manualGuardUntil = Date.now() + 5_000;
+  interrupt(closeForeign = false, manualSell = false): void {
+    if (closeForeign) {
+      this.manualGuardUntil = Date.now() + 5_000;
+      this.cancelledSellUntil = manualSell ? 0 : this.busy ? Date.now() + 10_000 : this.cancelledSellUntil;
+    }
     if (this.container && (this.container.owned || closeForeign)) this.close();
     this.requestedAt = null; this.targets = null; this.pending = null;
   }
@@ -55,6 +59,7 @@ export class BedrockInventory {
     const owned = !manual && packet.window_type === "container" && (recentRequest || (!!title && sellTitle(title)));
     this.container = { id: packet.window_id, type: packet.window_type, items: null, owned, position, manual };
     this.openedAt = now; this.targets = null; this.pending = null;
+    if (title && sellTitle(title) && now < this.cancelledSellUntil) this.close();
   }
 
   /** Geyser carries Java GUI titles in the fake chest's CustomName NBT.
@@ -72,6 +77,7 @@ export class BedrockInventory {
       const recentRequest = this.requestedAt != null && Date.now() - this.requestedAt <= 5_000;
       menu.owned = menu.type === "container" && !menu.manual && (sellTitle(title) || recentRequest);
       this.titles.delete(position);
+      if (sellTitle(title) && Date.now() < this.cancelledSellUntil) this.close();
     }
   }
 

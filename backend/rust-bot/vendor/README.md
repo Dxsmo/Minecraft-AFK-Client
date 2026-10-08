@@ -21,3 +21,12 @@ join-time restoration and farm pickups from leaving stale GUI contents or
 rewinding click revisions. Mirroring one changed slot preserves other predicted
 clicks until the server acknowledges them. Slot packets no longer require a
 second bot callback; their synchronous ECS updates are sufficient.
+
+Login and respawn handlers clear both `HasClientLoaded` and `InLoadedChunk`.
+A proxy can send another game login without a respawn; retaining the old
+client-loaded marker then suppresses `ServerboundPlayerLoaded` for the new
+server. Clearing the chunk marker also prevents a same-batch position callback
+from treating the previous world's chunk as a loaded destination. The existing
+loading plugin sends one acknowledgement once the new chunk is usable.
+Regression tests cover login → respawn → login, without acknowledging unloaded
+chunks or sending the acknowledgement twice.

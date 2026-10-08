@@ -126,6 +126,46 @@ describe("Bedrock automation with the installed wire codec", () => {
     expect(packets.at(-1)!.params.command).toBe("/home farm");
   });
 
+  it("closes delayed sell replies after a manual command and preserves the homes menu", () => {
+    const { sender, packets } = setup();
+    const behavior = new BehaviorState({ host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "", autosell_enabled: true, autosell_interval_seconds: 0.25 }, sender);
+    behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
+    behavior.enqueueChat("/homes"); behavior.onTick();
+    const position = { x: 10, y: 70, z: 20 };
+    behavior.inventory.onOpen({ window_id: "first", window_type: "container", coordinates: position });
+    behavior.inventory.onBlockEntity({ coordinates: position, nbt: { value: { CustomName: { value: "Items verkaufen" } } } });
+    expect(packets.at(-1)!.name).toBe("container_close");
+    expect(behavior.inventory.blocked).toBe(false);
+    behavior.inventory.onBlockEntity({ coordinates: position, nbt: { value: { CustomName: { value: "Homes" } } } });
+    behavior.inventory.onOpen({ window_id: "first", window_type: "container", coordinates: position });
+    const before = packets.filter(p => p.name === "container_close" || p.name === "item_stack_request" || p.name === "command_request").length;
+    vi.advanceTimersByTime(5100); behavior.onTick();
+    expect(behavior.inventory.blocked).toBe(true);
+    expect(packets.filter(p => p.name === "container_close" || p.name === "item_stack_request" || p.name === "command_request")).toHaveLength(before);
+    // Explicit /sell remains manual even inside the late-response guard.
+    behavior.enqueueChat("/sell"); behavior.onTick();
+    behavior.inventory.onBlockEntity({ coordinates: position, nbt: { value: { CustomName: { value: "Items verkaufen" } } } });
+    behavior.inventory.onOpen({ window_id: "first", window_type: "container", coordinates: position });
+    expect(packets.at(-1)!.name).toBe("command_request");
+    expect(behavior.inventory.blocked).toBe(true);
+  });
+
+  it("accepts fresh sell replies again after the manual command pause", () => {
+    const { sender, packets } = setup();
+    const behavior = new BehaviorState({ host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "", autosell_enabled: true, autosell_interval_seconds: 0.25 }, sender);
+    behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
+    behavior.enqueueChat("/tpa Steve"); behavior.onTick();
+    vi.advanceTimersByTime(5000); behavior.onTick();
+    expect(packets.filter(p => p.name === "command_request").map(p => p.params.command)).toEqual(["/sell", "/tpa Steve", "/sell"]);
+    const position = { x: 10, y: 70, z: 20 };
+    behavior.inventory.onBlockEntity({ coordinates: position, nbt: { value: { CustomName: { value: "Items verkaufen" } } } });
+    behavior.inventory.onOpen({ window_id: "first", window_type: "container", coordinates: position });
+    behavior.inventory.onContent({ window_id: "inventory", input: Array.from({ length: 36 }, (_, i) => i === 0 ? stack() : empty()) });
+    behavior.inventory.onContent({ window_id: "first", input: Array.from({ length: 27 }, empty) });
+    behavior.onTick();
+    expect(packets.at(-1)!.name).toBe("item_stack_request");
+  });
+
   it("recovers a named startup sell menu even when its title arrives after opening", () => {
     const { inventory, packets } = setup();
     inventory.onContent({ window_id: "inventory", input: Array.from({ length: 36 }, (_, i) => i === 0 ? stack() : empty()) });

@@ -46,7 +46,9 @@ dashboard) is edition-agnostic.
   use `inventory_transaction` and inventory updates. Armor/offhand and foreign
   GUIs are excluded. Each cycle handles a bounded initial slot list; subsequent
   pickups are handled by the next cycle. Missing data/rejected requests time out,
-  and manual commands can interrupt immediately. Custom form-based sell menus
+  and manual commands can interrupt immediately. Manual commands pause automation
+  for five seconds; named delayed sell replies are closed without touching a
+  subsequently opened home menu. Custom form-based sell menus
   are not implemented.
 - **Regression checks:** real installed Bedrock codecs for 1.21.50 and 1.21.130
   verify sneak, stack transfers, close ordering, timeout recovery, manual command

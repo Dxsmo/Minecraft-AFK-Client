@@ -114,6 +114,7 @@ impl Plugin for AfkNetworkPlugin {
 struct ItemFilter {
     ignored: HashSet<MinecraftEntityId>,
     last_warning_at: Option<Instant>,
+    empty_payloads: u64,
 }
 
 impl ItemFilter {
@@ -176,7 +177,7 @@ impl ItemFilter {
         let now = Instant::now();
         if self
             .last_warning_at
-            .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(5))
+            .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(30))
         {
             self.last_warning_at = Some(now);
             emit(&OutEvent::Warning { message });
@@ -209,6 +210,16 @@ fn process_packet(
         return Ok(false);
     };
     let state = connection.state;
+    // A zero-byte framed/decompressed payload has no packet ID. It is not a
+    // bundle delimiter (that is the valid one-byte packet [0]). Dropping this
+    // frame leaves the next frame aligned and avoids a warning every few seconds.
+    if raw.is_empty() {
+        filter.empty_payloads = filter.empty_payloads.saturating_add(1);
+        if filter.empty_payloads == 1 {
+            emit(&OutEvent::BehaviorLog { message: "AFK: leeres Netzwerkpaket ohne Paket-ID übersprungen; nachfolgende Pakete werden weiter verarbeitet".into() });
+        }
+        return Ok(false);
+    }
     let stream = &mut Cursor::new(raw);
     match state {
         ConnectionProtocol::Game => {
@@ -298,8 +309,14 @@ fn read_packets(ecs: &mut World) {
                     Ok(false) => {}
                     Err(error) => {
                         applied += 1;
+                        let detail = match &*error {
+                            ReadPacketError::ReadPacketId { source } => format!("{source:?}"),
+                            _ => error.to_string(),
+                        };
                         filter.warn(format!(
-                            "AFK: Fehler beim Verarbeiten eines Serverpakets: {error}"
+                            "AFK: ungültiges Serverpaket ({} Bytes, Status {:?}): {detail}",
+                            raw.len(),
+                            ecs.get::<RawConnection>(entity).map(|c| c.state)
                         ));
                     }
                 },
@@ -390,6 +407,125 @@ mod tests {
                 },
             ]),
         }
+    }
+
+    #[test]
+    fn proxy_login_and_respawn_each_require_a_fresh_player_loaded_acknowledgement() {
+        use azalea::entity::{HasClientLoaded, InLoadedChunk};
+        use azalea::loading::player_loaded_packet;
+        let mut sim = simulation();
+        let sent = SentPackets::new(&mut sim);
+        let entity = sim.entity;
+        let common = default_login_packet().common;
+        let transitions = [
+            default_login_packet().into_variant(),
+            azalea::test_utils::simulation::make_basic_respawn_packet(
+                common.dimension_type,
+                common.dimension,
+            )
+            .into_variant(),
+            default_login_packet().into_variant(),
+        ];
+        for transition in transitions {
+            sim.app
+                .world_mut()
+                .entity_mut(entity)
+                .insert((HasClientLoaded, InLoadedChunk));
+            game::process_packet(sim.app.world_mut(), entity, &transition);
+            assert!(sim.app.world().get::<HasClientLoaded>(entity).is_none());
+            assert!(sim.app.world().get::<InLoadedChunk>(entity).is_none());
+            let mut schedule = Schedule::default();
+            schedule.add_systems(player_loaded_packet);
+            schedule.run(sim.app.world_mut());
+            assert!(
+                sent.next().is_none(),
+                "do not acknowledge an unloaded destination"
+            );
+            sim.app.world_mut().entity_mut(entity).insert(InLoadedChunk);
+            schedule.run(sim.app.world_mut());
+            schedule.run(sim.app.world_mut());
+            let mut packets = Vec::new();
+            while let Some(packet) = sent.next() {
+                packets.push(packet);
+            }
+            assert_eq!(
+                packets
+                    .iter()
+                    .filter(|p| matches!(p, ServerboundGamePacket::PlayerLoaded(_)))
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn empty_frames_do_not_break_the_next_inventory_packet_or_bundle_delimiter() {
+        let mut sim = simulation();
+        for _ in 0..20 {
+            sim.app
+                .world_mut()
+                .get_mut::<RawConnection>(sim.entity)
+                .unwrap()
+                .injected_clientbound_packets
+                .push(Vec::new().into_boxed_slice());
+        }
+        sim.receive_packet(ClientboundBundleDelimiter);
+        sim.receive_packet(ClientboundContainerSetSlot {
+            container_id: 0,
+            state_id: 5,
+            slot: 9,
+            item_stack: ItemStack::new(ItemKind::Beef, 64),
+        });
+        sim.tick();
+        let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
+        assert_eq!(filter.empty_payloads, 20);
+        assert!(filter.last_warning_at.is_none());
+        assert_eq!(
+            sim.app
+                .world()
+                .get::<Inventory>(sim.entity)
+                .unwrap()
+                .inventory_menu
+                .slot(9)
+                .unwrap()
+                .count(),
+            64
+        );
+    }
+
+    #[test]
+    fn truncated_packet_id_is_diagnosed_without_losing_the_next_frame() {
+        let mut sim = simulation();
+        sim.app
+            .world_mut()
+            .get_mut::<RawConnection>(sim.entity)
+            .unwrap()
+            .injected_clientbound_packets
+            .push(vec![0x80].into_boxed_slice());
+        sim.receive_packet(ClientboundContainerSetSlot {
+            container_id: 0,
+            state_id: 6,
+            slot: 9,
+            item_stack: ItemStack::new(ItemKind::Beef, 32),
+        });
+        sim.tick();
+        let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
+        assert_eq!(
+            filter.empty_payloads, 0,
+            "do not confuse an incomplete ID with an empty packet"
+        );
+        assert!(filter.last_warning_at.is_some());
+        assert_eq!(
+            sim.app
+                .world()
+                .get::<Inventory>(sim.entity)
+                .unwrap()
+                .inventory_menu
+                .slot(9)
+                .unwrap()
+                .count(),
+            32
+        );
     }
 
     #[test]
@@ -549,7 +685,7 @@ mod tests {
             };
             behavior.on_spawn(&client);
             *simulation.app.world_mut() = std::mem::take(&mut *client.ecs.write());
-            tokio::time::sleep(Duration::from_millis(260)).await;
+            tokio::time::sleep(Duration::from_millis(2100)).await;
             let mut items = vec![ItemStack::Empty; 63];
             items[27] = ItemStack::new(ItemKind::Beef, 64);
             let mut packets: Vec<ClientboundGamePacket> = vec![
@@ -560,7 +696,8 @@ mod tests {
                 packets.push(make_basic_add_entity(EntityKind::Item, id, azalea::Vec3::ZERO).into_variant());
                 packets.push(item_metadata(id).into_variant());
             }
-            let mut bytes = Vec::new();
+            // An empty compressed frame must not disturb the next GUI frame.
+            let mut bytes = encode_to_network_packet(&[], Some(64), &mut None).to_vec();
             for packet in packets {
                 bytes.extend(encode_to_network_packet(&serialize_packet(&packet).unwrap(), Some(64), &mut None));
             }
@@ -577,6 +714,7 @@ mod tests {
                 }
             }
             assert_eq!(simulation.app.world().get::<Inventory>(simulation.entity).unwrap().id, 7);
+            assert_eq!(simulation.app.world().get::<ItemFilter>(simulation.entity).unwrap().empty_payloads, 1);
             let callbacks: Vec<_> = simulation.app.world_mut().resource_mut::<Messages<game::ReceiveGamePacketEvent>>()
                 .drain().collect();
             let client = azalea::Client {
