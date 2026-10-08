@@ -89,15 +89,13 @@ export function Layout() {
   const initial = user?.username?.charAt(0).toUpperCase() ?? "?";
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ backgroundColor: "var(--bg)" }}>
+    <div className="app-shell flex h-screen overflow-hidden">
       <aside
-        className="flex w-14 shrink-0 flex-col overflow-y-auto px-2 py-5 sm:w-60 sm:px-3"
-        style={{ borderRight: "1px solid var(--border)", backgroundColor: "var(--bg-elev)" }}
+        className="app-sidebar flex w-14 shrink-0 flex-col overflow-y-auto px-2 py-5 sm:w-60 sm:px-3"
       >
         <div className="flex items-center justify-center gap-2.5 sm:justify-start sm:px-2">
           <span
-            className="glow-ring flex h-9 w-9 shrink-0 items-center justify-center rounded-lg p-1.5"
-            style={{ backgroundColor: "var(--accent-soft)" }}
+            className="brand-mark flex h-9 w-9 shrink-0 items-center justify-center rounded-lg p-1.5"
           >
             <img src="/favicon.png" alt="" className="h-full w-full object-contain" />
           </span>
@@ -143,8 +141,7 @@ export function Layout() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header
-          className="sticky top-0 z-10 flex items-center justify-end gap-3 px-3 py-3 backdrop-blur sm:px-6"
-          style={{ borderBottom: "1px solid var(--border)", backgroundColor: "rgba(10,10,11,0.75)" }}
+          className="app-header sticky top-0 z-10 flex items-center justify-end gap-3 px-3 py-3 backdrop-blur sm:px-6"
         >
           <div className="text-right leading-tight">
             <p className="text-sm font-medium" style={{ color: "var(--text)" }}>
@@ -155,8 +152,7 @@ export function Layout() {
             </p>
           </div>
           <span
-            className="flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold"
-            style={{ backgroundColor: "var(--surface-hover)", color: "var(--text-muted)" }}
+            className="user-avatar flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold"
           >
             {initial}
           </span>

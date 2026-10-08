@@ -30,8 +30,7 @@ export function LoginPage() {
       <div className="relative w-full max-w-sm animate-fadein">
         <div className="mb-7 flex flex-col items-center text-center">
           <span
-            className="glow-ring flex h-14 w-14 items-center justify-center rounded-xl p-2.5"
-            style={{ backgroundColor: "var(--accent-soft)" }}
+            className="brand-mark glow-ring flex h-14 w-14 items-center justify-center rounded-xl p-2.5"
           >
             <img src="/favicon.png" alt="" className="h-full w-full object-contain" />
           </span>

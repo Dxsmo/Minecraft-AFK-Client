@@ -1,37 +1,42 @@
 @import "tailwindcss";
 
 /*
- * Design system — a restrained, modern dark theme.
- *
- * Neutral (zinc) base rather than blue-tinted slate, a single near-white
- * primary action for a clean SaaS feel, and colour reserved for meaning
- * (blue = brand/online, amber = connecting, red = error). Everything is driven by
- * the CSS variables below so the palette can be tweaked in one place.
+ * Restrained dark glass, shared with the release badge: midnight surfaces,
+ * fine blue/violet edges and soft highlights. Layout and status colours stay
+ * independent of the decorative palette.
  */
 :root {
   color-scheme: dark;
 
-  --bg: #0a0a0b;
-  --bg-elev: #121214;
-  --surface: #151517;
-  --surface-hover: #1c1c20;
-  --border: #26262a;
-  --border-strong: #33333a;
+  --bg: #090b10;
+  --bg-elev: #10141d;
+  --surface: #141923;
+  --surface-hover: #1b2330;
+  --border: rgba(148, 163, 184, 0.14);
+  --border-strong: rgba(148, 163, 184, 0.26);
 
-  --text: #ececee;
-  --text-muted: #9a9aa3;
-  --text-subtle: #6a6a72;
+  --text: #e8eef7;
+  --text-muted: #a0aabb;
+  --text-subtle: #7d899c;
 
   --accent: #3b82f6; /* blue-500, the brand colour and "active/online" indicator */
   --accent-light: #38bdf8; /* sky-400, used for extra-vivid glow highlights */
   --accent-soft: rgba(59, 130, 246, 0.16);
 
+  --panel-fill: linear-gradient(135deg, #151c28, #11151d 65%, #12151d);
+  --panel-edge: linear-gradient(135deg, rgba(96, 165, 250, 0.28), rgba(139, 92, 246, 0.12) 50%, rgba(56, 189, 248, 0.18));
+  --panel-edge-hover: linear-gradient(135deg, rgba(96, 165, 250, 0.48), rgba(139, 92, 246, 0.25) 50%, rgba(56, 189, 248, 0.32));
+  --panel-shadow: 0 4px 18px rgba(0, 0, 0, 0.2), inset 0 1px rgba(255, 255, 255, 0.035);
+  --control-fill: linear-gradient(135deg, #171f2c, #121720);
+  --active-fill: linear-gradient(115deg, #1b2b43, #1b2133 65%, #142735);
+  --focus-ring: rgba(96, 165, 250, 0.18);
+
   --danger: #f87171;
   --warning: #fbbf24;
 }
 
-* {
-  border-color: var(--border);
+@layer base {
+  * { border-color: var(--border); }
 }
 
 body {
@@ -42,45 +47,70 @@ body {
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
+::selection { background: rgba(96, 165, 250, 0.25); color: #f0f6ff; }
+
+/* Ambient colour stays on the shell; no expensive blur on scrolling cards. */
+.app-shell {
+  background:
+    radial-gradient(55rem 35rem at 35% -15%, rgba(59, 130, 246, 0.055), transparent 70%),
+    radial-gradient(45rem 30rem at 105% 100%, rgba(139, 92, 246, 0.035), transparent 70%),
+    var(--bg);
+}
+.app-sidebar {
+  border-right: 1px solid var(--border);
+  background: linear-gradient(165deg, #121925, #0e121a 55%, #0d1119);
+  box-shadow: inset -1px 0 rgba(96, 165, 250, 0.025);
+}
+.app-header {
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(110deg, rgba(17, 23, 34, 0.82), rgba(11, 15, 23, 0.86));
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
+}
+.brand-mark, .user-avatar {
+  border: 1px solid transparent;
+  background: var(--control-fill) padding-box, var(--panel-edge-hover) border-box;
+  color: #bcd5f4;
+  box-shadow: var(--panel-shadow), 0 0 20px rgba(59, 130, 246, 0.08);
+}
+
 /* Subtle depth for full-page auth screens: layered aurora glow + a faint dot
    grid so the background feels intentional rather than flat, while staying
    restrained (no loud colours, no movement). */
 .app-aurora {
   position: relative;
   background:
-    radial-gradient(48rem 32rem at 18% -10%, rgba(59, 130, 246, 0.16), transparent 60%),
-    radial-gradient(40rem 30rem at 100% 10%, rgba(56, 189, 248, 0.11), transparent 65%),
-    radial-gradient(60rem 40rem at 50% 110%, rgba(59, 130, 246, 0.08), transparent 70%),
+    radial-gradient(48rem 32rem at 18% -10%, rgba(59, 130, 246, 0.13), transparent 60%),
+    radial-gradient(40rem 30rem at 100% 10%, rgba(139, 92, 246, 0.075), transparent 65%),
+    radial-gradient(60rem 40rem at 50% 110%, rgba(56, 189, 248, 0.065), transparent 70%),
     var(--bg);
 }
 .app-aurora::before {
   content: "";
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-image: radial-gradient(rgba(148, 163, 184, 0.035) 1px, transparent 1px);
   background-size: 26px 26px;
   mask-image: radial-gradient(60rem 40rem at 50% 20%, black, transparent 75%);
   pointer-events: none;
 }
 
 /* Soft ambient glow ring behind a brand mark / avatar. */
-.glow-ring {
-  box-shadow: 0 0 0 1px var(--border), 0 0 30px -2px var(--accent), 0 0 54px -10px var(--accent-light);
-}
+.glow-ring { box-shadow: var(--panel-shadow), 0 0 26px rgba(59, 130, 246, 0.12); }
 
 @layer components {
   .note-list-item {
     min-width: 0;
     min-height: 148px;
     padding: 20px;
-    border: 1px solid var(--border);
+    border: 1px solid transparent;
     border-radius: 12px;
-    background: var(--surface);
-    color: var(--text-muted);
-    transition: background-color 150ms ease, border-color 150ms ease;
+    background: var(--panel-fill) padding-box, var(--panel-edge) border-box;
+    box-shadow: var(--panel-shadow);
+    color: var(--text);
+    transition: background 150ms ease, box-shadow 150ms ease;
   }
-  .note-list-item:hover { background: var(--surface-hover); border-color: var(--border-strong); }
-  .note-list-active { background: var(--surface); border-color: var(--border-strong); color: var(--text); }
+  .note-list-item:hover { background: var(--panel-fill) padding-box, var(--panel-edge-hover) border-box; box-shadow: var(--panel-shadow), 0 0 20px rgba(59, 130, 246, 0.06); }
+  .note-list-active, .note-list-active:hover { background: var(--active-fill) padding-box, var(--panel-edge-hover) border-box; color: var(--text); }
   .note-paper {
     width: 100%;
     max-width: 794px;
@@ -88,10 +118,10 @@ body {
     aspect-ratio: 210 / 297;
     margin: 0 auto;
     padding: clamp(20px, 4vw, 64px);
-    border: 1px solid var(--border);
+    border: 1px solid transparent;
     border-radius: 4px;
-    background: var(--surface);
-    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.22);
+    background: linear-gradient(160deg, #141b26, #121620 45%, #11151d) padding-box, var(--panel-edge) border-box;
+    box-shadow: var(--panel-shadow), 0 16px 50px rgba(0, 0, 0, 0.22);
   }
   .note-title { width: 100%; margin-bottom: 24px; background: transparent; color: var(--text); font-size: 26px; font-weight: 600; line-height: 1.3; outline: none; overflow-wrap: anywhere; }
   .note-title::placeholder { color: var(--text-subtle); }
@@ -111,13 +141,14 @@ body {
   .note-rich-text pre { overflow-x: auto; padding: 12px; margin: 1em 0; border-radius: 6px; background: var(--bg); }
   .note-rich-text code { font-family: ui-monospace, monospace; font-size: 0.9em; }
   .note-rich-text hr { margin: 1.5em 0; border-color: var(--border); }
-  .note-toolbar { position: sticky; top: 0; z-index: 30; display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 7px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elev); }
+  .note-toolbar { position: sticky; top: 0; z-index: 30; display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 7px; border: 1px solid transparent; border-radius: 10px; background: var(--control-fill) padding-box, var(--panel-edge) border-box; box-shadow: var(--panel-shadow); }
   .note-format-button { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 5px; color: var(--text-muted); cursor: pointer; }
-  .note-format-button:hover, .note-format-button[aria-pressed="true"] { background: var(--surface-hover); color: var(--text); }
+  .note-format-button:hover { background: var(--surface-hover); color: var(--text); }
+  .note-format-button[aria-pressed="true"] { background: var(--active-fill); color: #bfdbfe; box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.22); }
   .note-format-button:focus-visible, .note-format-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .note-format-select { max-width: 150px; height: 30px; padding: 0 6px; background: var(--bg-elev); border-radius: 5px; font-size: 12px; color: var(--text-muted); }
   .note-toolbar-divider { width: 1px; height: 16px; margin: 0 4px; background: var(--border); }
-  .note-access-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); margin: auto; padding: 0; overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--bg-elev); color: var(--text); box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5); }
+  .note-access-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); margin: auto; padding: 0; overflow-y: auto; border: 1px solid transparent; border-radius: 14px; background: var(--panel-fill) padding-box, var(--panel-edge-hover) border-box; color: var(--text); box-shadow: var(--panel-shadow), 0 24px 80px rgba(0, 0, 0, 0.5); }
   .note-access-dialog::backdrop { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(3px); }
   .account-row {
     --account-height: 112px;
@@ -181,27 +212,28 @@ body {
     .account-actions .btn { padding: 2px; }
   }
   .card {
-    background-color: var(--surface);
-    border: 1px solid var(--border);
+    background: var(--panel-fill) padding-box, var(--panel-edge) border-box;
+    border: 1px solid transparent;
     border-radius: 0.85rem;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 28px -16px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--panel-shadow);
   }
 
   .card-hover {
-    transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
   }
   .card-hover:hover {
-    border-color: var(--border-strong);
-    background-color: var(--surface-hover);
-    transform: translateY(-1px);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.24), 0 16px 32px -16px rgba(0, 0, 0, 0.55);
+    background: var(--panel-fill) padding-box, var(--panel-edge-hover) border-box;
+    box-shadow: var(--panel-shadow), 0 0 22px rgba(59, 130, 246, 0.065);
   }
+  .card thead { background-color: rgba(96, 165, 250, 0.035); }
+  .card tbody tr:hover { background-color: rgba(96, 165, 250, 0.025); }
 
   .input {
     width: 100%;
     border-radius: 0.6rem;
     border: 1px solid var(--border-strong);
-    background-color: var(--bg-elev);
+    background: linear-gradient(135deg, #0f151f, #10141c);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.12);
     padding: 0.5rem 0.7rem;
     font-size: 0.875rem;
     color: var(--text);
@@ -212,8 +244,8 @@ body {
     color: var(--text-subtle);
   }
   .input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft), 0 0 16px -3px var(--accent);
+    border-color: rgba(96, 165, 250, 0.65);
+    box-shadow: 0 0 0 3px var(--focus-ring);
   }
   select.input option {
     background-color: var(--bg-elev);
@@ -237,9 +269,9 @@ body {
     background-color: var(--bg-elev);
   }
   .input-ghost:focus {
-    border-color: var(--accent);
+    border-color: rgba(96, 165, 250, 0.65);
     background-color: var(--bg-elev);
-    box-shadow: 0 0 0 3px var(--accent-soft), 0 0 16px -3px var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-ring);
   }
   .input-ghost::placeholder {
     color: var(--text-subtle);
@@ -274,24 +306,31 @@ body {
   .btn:active:not(:disabled) {
     transform: scale(0.97);
   }
+  .btn:focus-visible, .nav-idle:focus-visible, .nav-active:focus-visible,
+  .note-list-item:focus-visible, .tab-btn:focus-visible, .settings-nav-btn:focus-visible {
+    outline: 2px solid #93c5fd;
+    outline-offset: 3px;
+  }
 
   .btn-primary {
-    background-color: #fafafa;
-    color: #0a0a0b;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15), 0 6px 16px -8px rgba(250, 250, 250, 0.25);
+    background: linear-gradient(135deg, #edf5ff, #dbe8fb 65%, #e4dff6);
+    color: #111a29;
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.75), 0 3px 12px rgba(59, 130, 246, 0.12);
   }
   .btn-primary:hover:not(:disabled) {
-    background-color: #ffffff;
+    background: linear-gradient(135deg, #ffffff, #e6f0ff 65%, #eee8ff);
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.85), 0 4px 18px rgba(59, 130, 246, 0.2);
   }
 
   .btn-secondary {
-    background-color: var(--bg-elev);
-    border: 1px solid var(--border-strong);
+    background: var(--control-fill) padding-box, var(--panel-edge) border-box;
+    border: 1px solid transparent;
     color: var(--text);
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.035);
   }
   .btn-secondary:hover:not(:disabled) {
-    background-color: var(--surface-hover);
-    border-color: #43434c;
+    background: var(--control-fill) padding-box, var(--panel-edge-hover) border-box;
+    color: #dbeafe;
   }
 
   .btn-ghost {
@@ -338,16 +377,19 @@ body {
 
   .nav-idle {
     color: var(--text-muted);
+    border: 1px solid transparent;
   }
   .nav-idle:hover {
     background-color: var(--surface-hover);
     color: var(--text);
   }
   .nav-active {
-    color: var(--text);
-    background: linear-gradient(90deg, var(--accent-soft), transparent);
-    box-shadow: inset 2px 0 0 var(--accent), 0 0 20px -5px var(--accent-light);
+    color: #dbeafe;
+    border: 1px solid transparent;
+    background: var(--active-fill) padding-box, var(--panel-edge-hover) border-box;
+    box-shadow: inset 0 1px rgba(255, 255, 255, 0.04), 0 0 18px rgba(59, 130, 246, 0.07);
   }
+  .nav-active > svg { color: #93c5fd; }
 
   /* --- Item worth ("Item Wert") tab --------------------------------------- */
 
@@ -406,8 +448,8 @@ body {
 
   .item-worth-chip {
     border-radius: 999px;
-    border: 1px solid var(--border);
-    background-color: var(--bg-elev);
+    border: 1px solid transparent;
+    background: var(--control-fill) padding-box, var(--panel-edge) border-box;
     color: var(--text-muted);
     padding: 0.25rem 0.7rem;
     font-size: 0.72rem;
@@ -415,12 +457,11 @@ body {
   }
   .item-worth-chip:hover {
     color: var(--text);
-    border-color: var(--border-strong);
+    background: var(--control-fill) padding-box, var(--panel-edge-hover) border-box;
   }
   .item-worth-chip[data-active="true"] {
-    color: var(--text);
-    border-color: var(--accent);
-    background-color: var(--accent-soft);
+    color: #dbeafe;
+    background: var(--active-fill) padding-box, var(--panel-edge-hover) border-box;
   }
 
   /* Live feed of the items the bots just asked about. */
@@ -484,13 +525,14 @@ body {
 
   /* Terminal-style console, intentionally distinct from the rest of the app. */
   .console-output {
-    background-color: #060607;
-    color: #d4d4d8;
+    background: linear-gradient(150deg, #080c13, #090b10);
+    color: #d6dfeb;
     font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
     font-size: 0.82rem;
     line-height: 1.55;
     border-radius: 0.75rem;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-strong);
+    box-shadow: inset 0 1px 8px rgba(0, 0, 0, 0.15);
     padding: 0.9rem 1rem;
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -502,8 +544,8 @@ body {
     gap: 2px;
     padding: 4px;
     border-radius: 0.75rem;
-    background-color: var(--bg-elev);
-    border: 1px solid var(--border);
+    background: var(--control-fill) padding-box, var(--panel-edge) border-box;
+    border: 1px solid transparent;
   }
   .tab-btn {
     position: relative;
@@ -521,9 +563,9 @@ body {
     color: var(--text-muted);
   }
   .tab-btn[data-active="true"] {
-    color: var(--text);
-    background-color: var(--surface-hover);
-    box-shadow: inset 0 0 0 1px var(--border);
+    color: #dbeafe;
+    background: var(--active-fill);
+    box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.22);
   }
   .tab-btn .tab-count {
     font-size: 0.68rem;
@@ -553,9 +595,9 @@ body {
     background-color: var(--bg-elev);
   }
   .settings-nav-btn[data-active="true"] {
-    color: var(--text);
-    background-color: var(--surface-hover);
-    box-shadow: inset 2px 0 0 var(--accent);
+    color: #dbeafe;
+    background: var(--active-fill);
+    box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.22);
   }
   .settings-nav-btn .settings-nav-chevron {
     opacity: 0;
@@ -582,8 +624,8 @@ body {
     gap: 0.4rem;
     padding: 0.3rem 0.7rem;
     border-radius: 0.6rem;
-    border: 1px solid var(--border);
-    background-color: var(--bg-elev);
+    border: 1px solid transparent;
+    background: var(--control-fill) padding-box, var(--panel-edge) border-box;
     font-size: 0.8rem;
   }
 
@@ -749,13 +791,13 @@ body {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background-color: #2c2c31;
+  background-color: #293448;
   border-radius: 6px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background-color: #3a3a42;
+  background-color: #394a63;
 }
 
 /* ---------------------------------------------------------------------------
@@ -772,9 +814,9 @@ body {
   gap: 0.5rem;
   padding: 0.5rem 0.6rem;
   text-align: left;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 0.6rem;
-  background-color: var(--bg-elev);
+  background: var(--control-fill) padding-box, var(--panel-edge) border-box;
   transition:
     transform 0.15s ease,
     border-color 0.15s ease,
@@ -782,14 +824,13 @@ body {
     box-shadow 0.15s ease;
 }
 .spawner-chip:hover {
-  transform: translateY(-1px);
-  border-color: var(--accent);
+  background: var(--control-fill) padding-box, var(--panel-edge-hover) border-box;
 }
 .spawner-chip-active {
-  border-color: var(--accent);
-  background-color: var(--accent-soft);
-  box-shadow: 0 0 0 1px var(--accent) inset;
+  background: var(--active-fill) padding-box, var(--panel-edge-hover) border-box;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.04);
 }
+.spawner-chip-active:hover { background: var(--active-fill) padding-box, var(--panel-edge-hover) border-box; }
 .spawner-chip-emoji {
   font-size: 1.05rem;
   line-height: 1;
@@ -824,9 +865,9 @@ body {
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.5rem 0.65rem;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 0.6rem;
-  background-color: var(--bg-elev);
+  background: var(--control-fill) padding-box, var(--panel-edge) border-box;
 }
 .spawner-item-icon {
   width: 22px;
@@ -882,6 +923,10 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .btn, .card-hover, .note-list-item, .input, .nav-active, .nav-idle, .version-badge {
+    transition: none;
+  }
+  .btn:active:not(:disabled) { transform: none; }
   .spawner-items {
     animation: none;
   }
