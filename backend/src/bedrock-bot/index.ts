@@ -152,10 +152,13 @@ async function main(): Promise<void> {
   let localRuntimeEntityId: bigint | null = null;
   c.on("start_game", (packet: unknown) => {
     try {
-      const p = packet as { runtime_entity_id?: unknown };
+      const p = packet as { runtime_entity_id?: unknown; player_position?: unknown; rotation?: { x?: number; z?: number }; current_tick?: unknown; server_authoritative_inventory?: boolean };
       const id = toBigIntOrNull(p.runtime_entity_id);
       localRuntimeEntityId = id;
       sender.setRuntimeEntityId(id);
+      sender.updatePosition(p.player_position, p.rotation?.x, p.rotation?.z);
+      sender.setInputTick(toBigIntOrNull(p.current_tick) ?? 0n);
+      sender.authoritativeInventory = p.server_authoritative_inventory !== false;
       if (spawned) behavior.markTeleported();
     } catch {
       /* ignore */
@@ -163,18 +166,33 @@ async function main(): Promise<void> {
   });
 
   // Proxies can switch dimension/world without another high-level spawn.
-  c.on("change_dimension", () => behavior.markTeleported());
+  c.on("change_dimension", (packet: unknown) => {
+    const p = packet as { position?: unknown };
+    sender.updatePosition(p.position, undefined, undefined, true);
+    behavior.markTeleported();
+  });
 
   c.on("move_player", (packet: unknown) => {
     try {
-      const p = packet as { runtime_id?: unknown; mode?: unknown };
+      const p = packet as { runtime_id?: unknown; mode?: unknown; position?: unknown; pitch?: number; yaw?: number };
       const id = toBigIntOrNull(p.runtime_id);
       const teleport = p.mode === "teleport" || p.mode === 2;
-      if (teleport && id != null && id === localRuntimeEntityId) behavior.markTeleported();
+      if (id != null && id === localRuntimeEntityId) {
+        sender.updatePosition(p.position, p.pitch, p.yaw, teleport);
+        if (teleport) behavior.markTeleported();
+      }
     } catch {
       /* ignore malformed movement packet */
     }
   });
+
+  // Apply inventory data in wire order, independently of dropped-item entities.
+  c.on("block_entity_data", p => behavior.inventory.onBlockEntity(p as Parameters<typeof behavior.inventory.onBlockEntity>[0]));
+  c.on("inventory_content", p => behavior.inventory.onContent(p as Parameters<typeof behavior.inventory.onContent>[0]));
+  c.on("inventory_slot", p => behavior.inventory.onSlot(p as Parameters<typeof behavior.inventory.onSlot>[0]));
+  c.on("container_open", p => behavior.inventory.onOpen(p as Parameters<typeof behavior.inventory.onOpen>[0]));
+  c.on("container_close", p => behavior.inventory.onClose(p as Parameters<typeof behavior.inventory.onClose>[0]));
+  c.on("item_stack_response", p => behavior.inventory.onResponse(p as Parameters<typeof behavior.inventory.onResponse>[0]));
 
   c.on("set_health", (packet: unknown) => {
     try {

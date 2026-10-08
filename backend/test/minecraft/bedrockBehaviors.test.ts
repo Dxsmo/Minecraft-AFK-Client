@@ -14,7 +14,7 @@ describe("Bedrock crouch after world transitions", () => {
   });
 
   function setup(crouch = true) {
-    const sender = { setSneak: vi.fn(), command: vi.fn(), send: vi.fn() };
+    const sender = { setSneak: vi.fn(), tickInput: vi.fn(), packet: vi.fn(() => true), command: vi.fn(), send: vi.fn() };
     const config: Config = {
       host: "localhost", port: 19132, auth_type: "offline", username: "Bot",
       cache_dir: "", crouch_enabled: crouch,
@@ -39,7 +39,7 @@ describe("Bedrock crouch after world transitions", () => {
     }
     vi.advanceTimersByTime(60_000);
     behavior.onTick();
-    expect(sender.setSneak).toHaveBeenCalledTimes(3);
+    expect(sender.setSneak).toHaveBeenCalledTimes(4);
     expect(sender.setSneak).not.toHaveBeenCalledWith(false);
   });
 
@@ -129,7 +129,7 @@ describe("Bedrock crouch after world transitions", () => {
   });
 
   it("honors a restart pause supplied when a subprocess is recreated", () => {
-    const sender = { setSneak: vi.fn(), command: vi.fn(), send: vi.fn() };
+    const sender = { setSneak: vi.fn(), tickInput: vi.fn(), packet: vi.fn(() => true), command: vi.fn(), send: vi.fn() };
     const behavior = new BehaviorState({
       host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "",
       autosell_enabled: true, autosell_pause_after_ms: 0, autosell_resume_after_ms: 60_000,

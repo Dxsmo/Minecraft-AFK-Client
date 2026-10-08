@@ -192,7 +192,6 @@ fn needs_callback(packet: &ClientboundGamePacket) -> bool {
         packet,
         ClientboundGamePacket::OpenScreen(_)
             | ClientboundGamePacket::ContainerSetContent(_)
-            | ClientboundGamePacket::ContainerSetSlot(_)
             | ClientboundGamePacket::Respawn(_)
             | ClientboundGamePacket::PlayerPosition(_)
     )

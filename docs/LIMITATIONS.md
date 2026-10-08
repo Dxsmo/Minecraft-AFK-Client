@@ -28,14 +28,29 @@ dashboard) is edition-agnostic.
   `ClientManager` sets `edition` in the runtime config.
 - **Bedrock bot** — `backend/src/bedrock-bot/` (protocol/send/behaviors/index)
   mirrors the Rust bot: lifecycle, reconnect handoff, chat, health,
-  auto-sell (command-based), crouch, centralized sell
-  chat parsing.
+  auto-sell (owned container + acknowledged stack transfers), held crouch
+  input, and centralized sell chat parsing.
 
 ### What works vs. what is limited on Bedrock
 
-- **Works (same as Java):** connect/login (offline + Microsoft device-code),
-  chat/console, commands, interval auto-sell, crouch,
-  health telemetry, sell chat parsing.
+- **Implemented:** connect/login (offline + Microsoft device-code), chat/console,
+  commands, interval auto-sell, crouch, health telemetry, sell chat parsing.
+- **Crouch:** emits `player_auth_input` at 20 Hz with held sneak flags and the
+  server's own player position; acknowledges teleport input and reasserts sneak
+  after transfers and HugoSMP home/TPA confirmations. Packet failures are retryable.
+- **Auto-sell:** associates a chest-style container with its own `/sell` request,
+  waits for container/inventory content, and moves occupied inventory/hotbar
+  slots into empty container slots. Geyser chest titles also identify late or
+  startup sell menus; manual GUIs remain excluded. Authoritative servers use `item_stack_request`
+  with current stack IDs and matching response acknowledgements; legacy servers
+  use `inventory_transaction` and inventory updates. Armor/offhand and foreign
+  GUIs are excluded. Each cycle handles a bounded initial slot list; subsequent
+  pickups are handled by the next cycle. Missing data/rejected requests time out,
+  and manual commands can interrupt immediately. Custom form-based sell menus
+  are not implemented.
+- **Regression checks:** real installed Bedrock codecs for 1.21.50 and 1.21.130
+  verify sneak, stack transfers, close ordering, timeout recovery, manual command
+  priority, and selling during continuous join-time inventory updates.
 - **Not available on Bedrock:** `clean_spawner` (emits a warning) and Live View
   screenshots (headless, same as Java — see §2).
 
@@ -52,6 +67,12 @@ The Bedrock bot compiles, boots inside the arm64 production image, loads native
 RakNet, and fails gracefully (`connection_failed`) against an unreachable host —
 but it has **not** been runtime-tested against a real Bedrock server. A live
 connect should be verified before relying on Bedrock accounts in production.
+
+The Bedrock input/GUI implementation follows Geyser's
+[PlayerAuthInput handling](https://github.com/GeyserMC/Geyser/blob/master/core/src/main/java/org/geysermc/geyser/session/cache/InputCache.java)
+and [container title transport](https://github.com/GeyserMC/Geyser/blob/master/core/src/main/java/org/geysermc/geyser/inventory/holder/BlockInventoryHolder.java).
+The pinned local packet schemas and codec regression tests define the supported
+wire shapes; these checks do not substitute for a live HugoSMP connection.
 
 ## 2. Live View / automatic screenshots (not possible)
 

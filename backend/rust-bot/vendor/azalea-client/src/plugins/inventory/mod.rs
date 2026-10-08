@@ -224,6 +224,82 @@ pub fn handle_container_click_event(
     ));
 }
 
+/// Apply inventory packets in wire order, before asynchronous bot callbacks.
+/// The player slots in both menus represent the same inventory. Keep them in
+/// sync during pickups/loading as well as when a container closes.
+pub fn apply_container_content(
+    inventory: &mut Inv,
+    p: &azalea_protocol::packets::game::ClientboundContainerSetContent,
+) {
+    if p.container_id != 0 && p.container_id != inventory.id {
+        return;
+    }
+    if p.container_id == inventory.id {
+        inventory.state_id = p.state_id;
+        inventory.carried = p.carried_item.clone();
+    }
+    for (i, stack) in p.items.iter().enumerate() {
+        let menu = if p.container_id == 0 {
+            &mut inventory.inventory_menu
+        } else {
+            inventory.menu_mut()
+        };
+        if let Some(slot) = menu.slot_mut(i) {
+            *slot = stack.clone();
+        }
+        sync_player_slot(inventory, i, p.container_id == 0);
+    }
+}
+
+pub fn apply_container_slot(
+    inventory: &mut Inv,
+    p: &azalea_protocol::packets::game::ClientboundContainerSetSlot,
+) {
+    if p.container_id == -1 {
+        inventory.carried = p.item_stack.clone();
+        return;
+    }
+    if p.container_id == 0 || p.container_id == -2 {
+        if let Some(slot) = inventory.inventory_menu.slot_mut(p.slot as usize) {
+            *slot = p.item_stack.clone();
+        }
+        if p.container_id == inventory.id {
+            inventory.state_id = p.state_id;
+        }
+        sync_player_slot(inventory, p.slot as usize, true);
+    } else if p.container_id == inventory.id {
+        if let Some(slot) = inventory.menu_mut().slot_mut(p.slot as usize) {
+            *slot = p.item_stack.clone();
+        }
+        inventory.state_id = p.state_id;
+        sync_player_slot(inventory, p.slot as usize, false);
+    }
+}
+
+fn sync_player_slot(inventory: &mut Inv, slot: usize, from_player: bool) {
+    let Some(container) = inventory.container_menu.as_mut() else {
+        return;
+    };
+    let start = *container.player_slots_range().start();
+    // Only mirror the changed slot: copying the entire old player snapshot on
+    // each pickup would resurrect other stacks already moved by local clicks.
+    if from_player && (9..45).contains(&slot) {
+        if let (Some(source), Some(target)) = (
+            inventory.inventory_menu.slot(slot),
+            container.slot_mut(start + slot - 9),
+        ) {
+            *target = source.clone();
+        }
+    } else if !from_player && (start..start + 36).contains(&slot) {
+        if let (Some(source), Some(target)) = (
+            container.slot(slot),
+            inventory.inventory_menu.slot_mut(9 + slot - start),
+        ) {
+            *target = source.clone();
+        }
+    }
+}
+
 /// Sent from the server when the contents of a container are replaced.
 ///
 /// Usually triggered by the `ContainerSetContent` packet.

@@ -1,0 +1,180 @@
+import { createRequire } from "node:module";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BotSender } from "../../src/bedrock-bot/send.js";
+import { BehaviorState } from "../../src/bedrock-bot/behaviors.js";
+import { BedrockInventory, type BedrockItem } from "../../src/bedrock-bot/inventory.js";
+const require = createRequire(import.meta.url);
+const { createSerializer } = require("bedrock-protocol/src/transforms/serializer");
+
+function setup(version = "1.21.130") {
+  const serializer = createSerializer(version);
+  const packets: Array<{ name: string; params: any }> = [];
+  const queue = vi.fn((name: string, params: object) => {
+    const bytes = serializer.createPacketBuffer({ name, params });
+    packets.push(serializer.proto.parsePacketBuffer("mcpe_packet", bytes).data);
+  });
+  const sender = new BotSender({ queue, write: queue, versionGreaterThanOrEqualTo: v => version === v }, "Bot");
+  sender.setRuntimeEntityId(123n);
+  sender.updatePosition({ x: 12, y: 70.62, z: -4 }, 20, 90);
+  return { sender, packets, queue, inventory: new BedrockInventory(sender) };
+}
+const empty = (): BedrockItem => ({ network_id: 0 });
+const stack = (stackId = 99, count = 64): BedrockItem => ({
+  network_id: 1, count, metadata: 0, has_stack_id: 1, stack_id: stackId, block_runtime_id: 0,
+  extra: { has_nbt: "false", can_place_on: [], can_destroy: [] },
+});
+function open(inventory: BedrockInventory, items = [stack()]) {
+  inventory.onContent({ window_id: "inventory", input: Array.from({ length: 36 }, (_, i) => items[i] ?? empty()) });
+  inventory.request(Date.now());
+  inventory.onOpen({ window_id: "first", window_type: "container" });
+  inventory.onContent({ window_id: "first", input: Array.from({ length: 27 }, empty) });
+}
+function ack(inventory: BedrockInventory, requestId: number, source: number, destination: number, count = 64) {
+  inventory.onResponse({ responses: [{ status: "ok", request_id: requestId, containers: [
+    { slot_type: { container_id: "hotbar_and_inventory" }, slots: [{ slot: source, count: 0, item_stack_id: 0 }] },
+    { slot_type: { container_id: "container" }, slots: [{ slot: destination, count, item_stack_id: 100 + destination }] },
+  ] }] });
+}
+
+describe("Bedrock automation with the installed wire codec", () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.spyOn(process.stdout, "write").mockImplementation(() => true); });
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+  it.each(["1.21.50", "1.21.130"])("holds and releases sneak using auth input in %s", version => {
+    const { sender, packets } = setup(version);
+    sender.setSneak(true);
+    for (let i = 0; i < 4; i++) expect(sender.tickInput()).toBe(true);
+    expect(packets).toHaveLength(4);
+    for (const { params } of packets) {
+      expect(params.input_data.sneak_down).toBe(true);
+      expect(params.position.x).toBe(12);
+      expect(params.move_vector).toEqual({ x: 0, z: 0 });
+    }
+    expect(packets[0].params.input_data.start_sneaking).toBe(true);
+    expect(packets[1].params.input_data.start_sneaking).toBe(false);
+    sender.updatePosition({ x: 100, y: 65.62, z: 30 }, 0, 0, true);
+    sender.setSneak(true); sender.tickInput();
+    expect(packets.at(-1)!.params.input_data.handled_teleport).toBe(true);
+    expect(packets.at(-1)!.params.input_data.start_sneaking).toBe(true);
+    sender.setSneak(false); sender.tickInput();
+    expect(packets.at(-1)!.params.input_data.stop_sneaking).toBe(true);
+    expect(packets.at(-1)!.params.input_data.sneak_down).toBe(false);
+    expect(packets.at(-1)!.params.tick).toBe(6n);
+  });
+
+  it("retries input after a transient serialization failure", () => {
+    const { sender, packets, queue } = setup();
+    sender.setSneak(true);
+    queue.mockImplementationOnce(() => { throw new Error("not ready"); });
+    expect(sender.tickInput()).toBe(false);
+    expect(sender.tickInput()).toBe(true);
+    expect(packets[0].params.input_data.start_sneaking).toBe(true);
+  });
+
+  it.each(["1.21.50", "1.21.130"])("transfers actual stacks and closes only after matching acknowledgements in %s", version => {
+    const { inventory, packets } = setup(version);
+    open(inventory, [stack(99), stack(101, 32)]);
+    inventory.tick(Date.now());
+    const request = packets[0].params.requests[0];
+    expect(request.actions[0]).toMatchObject({ type_id: "place", count: 64,
+      source: { slot_type: { container_id: "hotbar_and_inventory" }, slot: 0, stack_id: 99 }, destination: { slot_type: { container_id: "container" }, slot: 0, stack_id: 0 } });
+    inventory.onResponse({ responses: [{ request_id: -999, status: "ok" }] });
+    inventory.tick(Date.now()); expect(packets).toHaveLength(1);
+    ack(inventory, request.request_id, 0, 0);
+    inventory.tick(Date.now());
+    expect(packets[1].params.requests[0].actions[0].destination.slot).toBe(1);
+    ack(inventory, packets[1].params.requests[0].request_id, 1, 1, 32);
+    inventory.tick(Date.now());
+    expect(packets[2].name).toBe("container_close");
+    expect(inventory.busy).toBe(false);
+  });
+
+  it("uses legacy inventory transactions only when the server advertises them", () => {
+    const { inventory, sender, packets } = setup(); sender.authoritativeInventory = false;
+    open(inventory); inventory.tick(Date.now());
+    expect(packets[0].name).toBe("inventory_transaction");
+    expect(packets[0].params.transaction.actions[0]).toMatchObject({ old_item: { count: 64 }, new_item: { network_id: 0 } });
+    inventory.onSlot({ window_id: "inventory", slot: 0, item: empty() });
+    inventory.tick(Date.now()); expect(packets).toHaveLength(1);
+    inventory.onSlot({ window_id: "first", slot: 0, item: stack(100) });
+    inventory.tick(Date.now()); expect(packets.at(-1)!.name).toBe("container_close");
+  });
+
+  it("keeps the join deadline bounded despite continuous pickups and retries selling", () => {
+    const { sender, packets } = setup();
+    const behavior = new BehaviorState({ host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "", autosell_enabled: true, autosell_interval_seconds: 5 }, sender);
+    behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
+    for (let i = 0; i < 120; i++) {
+      behavior.inventory.onSlot({ window_id: "inventory", slot: i % 36, item: stack(1000 + i) });
+      vi.advanceTimersByTime(50); behavior.onTick();
+    }
+    expect(packets.filter(p => p.name === "command_request")).toHaveLength(2);
+    behavior.inventory.onOpen({ window_id: "first", window_type: "container" });
+    behavior.inventory.onContent({ window_id: "first", input: Array.from({ length: 27 }, empty) });
+    behavior.onTick();
+    expect(packets.some(p => p.name === "item_stack_request")).toBe(true);
+  });
+
+  it("leaves foreign menus untouched and lets manual commands interrupt unacknowledged sells", () => {
+    const { sender, inventory, packets } = setup();
+    inventory.onOpen({ window_id: "first", window_type: "container" }); inventory.tick(Date.now());
+    expect(packets).toHaveLength(0); expect(inventory.blocked).toBe(true);
+    const behavior = new BehaviorState({ host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "", autosell_enabled: true }, sender);
+    behavior.markSpawned(); open(behavior.inventory); behavior.inventory.tick(Date.now());
+    behavior.enqueueChat("/home farm"); behavior.onTick();
+    expect(packets.slice(-2).map(p => p.name)).toEqual(["container_close", "command_request"]);
+    expect(packets.at(-1)!.params.command).toBe("/home farm");
+  });
+
+  it("recovers a named startup sell menu even when its title arrives after opening", () => {
+    const { inventory, packets } = setup();
+    inventory.onContent({ window_id: "inventory", input: Array.from({ length: 36 }, (_, i) => i === 0 ? stack() : empty()) });
+    inventory.onOpen({ window_id: "first", window_type: "container", coordinates: { x: 10, y: 70, z: 20 } });
+    inventory.onContent({ window_id: "first", input: Array.from({ length: 27 }, empty) });
+    inventory.onBlockEntity({ coordinates: { x: 10, y: 70, z: 20 }, nbt: { value: { CustomName: { value: "§aItems verkaufen" } } } });
+    inventory.tick(Date.now());
+    expect(packets[0].name).toBe("item_stack_request");
+  });
+
+  it("does not take over a manually opened named sell GUI", () => {
+    const { inventory, packets } = setup(); inventory.interrupt(true);
+    const coordinates = { x: 10, y: 70, z: 20 };
+    inventory.onBlockEntity({ coordinates, nbt: { value: { CustomName: { value: "Items verkaufen" } } } });
+    inventory.onOpen({ window_id: "first", window_type: "container", coordinates });
+    vi.advanceTimersByTime(10_000); inventory.tick(Date.now());
+    expect(inventory.blocked).toBe(true); expect(packets).toHaveLength(0);
+  });
+
+  it("times out rejected or unconfirmed transfers without repeating a stale click", () => {
+    const { inventory, packets } = setup(); open(inventory); inventory.tick(Date.now());
+    vi.advanceTimersByTime(2000); inventory.tick(Date.now());
+    expect(packets.map(p => p.name)).toEqual(["item_stack_request", "container_close"]);
+    expect(inventory.busy).toBe(false);
+    open(inventory); inventory.tick(Date.now());
+    inventory.onResponse({ responses: [{ request_id: packets.at(-1)!.params.requests[0].request_id, status: "error" }] });
+    inventory.tick(Date.now());
+    expect(inventory.busy).toBe(false);
+  });
+
+  it("continues selling other stacks when a tool/non-sellable slot is rejected", () => {
+    const { inventory, packets } = setup(); open(inventory, [stack(99), stack(101)]);
+    inventory.tick(Date.now());
+    inventory.onResponse({ responses: [{ request_id: -1, status: "error" }] });
+    inventory.tick(Date.now());
+    expect(packets[1].params.requests[0].actions[0].source.slot).toBe(1);
+    ack(inventory, -2, 1, 0); inventory.tick(Date.now());
+    expect(packets.at(-1)!.name).toBe("container_close");
+  });
+
+  it("checks held sneak for both supplied teleport success messages and again later", () => {
+    const { sender, packets } = setup();
+    const behavior = new BehaviorState({ host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "", crouch_enabled: true }, sender);
+    behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
+    for (const message of ["<HugoSMP> Du wurdest zu deinem Home Farm teleportiert!", "[HugoSMP] Steve hat deine Teleportations-Anfrage angenommen!"]) {
+      behavior.onChat(null, message); behavior.onTick();
+      expect(packets.at(-1)!.params.input_data.start_sneaking).toBe(true);
+      vi.advanceTimersByTime(2100); behavior.onTick();
+      expect(packets.at(-1)!.params.input_data.start_sneaking).toBe(true);
+    }
+  });
+});

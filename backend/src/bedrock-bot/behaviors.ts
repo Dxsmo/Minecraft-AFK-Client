@@ -10,6 +10,7 @@
 
 import { emit, type BehaviorConfig, type Config, type OutEvent } from "./protocol.js";
 import { BotSender } from "./send.js";
+import { BedrockInventory } from "./inventory.js";
 
 /** Emit a heartbeat at most this often. */
 const HEARTBEAT_INTERVAL_MS = 15000;
@@ -44,6 +45,8 @@ function isInventoryBusyMessage(message: string): boolean {
 
 export class BehaviorState {
   private sender: BotSender;
+  readonly inventory: BedrockInventory;
+  private nextCrouchCheckAt = 0;
   private cfg: BehaviorConfig;
 
   private spawned = false;
@@ -62,6 +65,7 @@ export class BehaviorState {
 
   constructor(config: Config, sender: BotSender) {
     this.sender = sender;
+    this.inventory = new BedrockInventory(sender);
     this.pauseAutosell(config.autosell_pause_after_ms ?? 0, config.autosell_resume_after_ms ?? 0);
     this.cfg = {
       crouch_enabled: config.crouch_enabled ?? false,
@@ -84,6 +88,7 @@ export class BehaviorState {
       this.cfg.autosell_interval_seconds !== cfg.autosell_interval_seconds ||
       this.cfg.autosell_command !== cfg.autosell_command;
     this.cfg = { ...cfg };
+    if (!cfg.autosell_enabled) this.inventory.interrupt();
     if (autosellChanged && this.cfg.autosell_enabled) {
       this.nextAutosellAt = Math.max(Date.now(), this.automationReadyAt);
     }
@@ -101,12 +106,14 @@ export class BehaviorState {
   }
 
   markJoining(): void {
+    this.inventory.reset();
     this.spawned = false;
     this.crouchResyncPending = true;
     this.automationReadyAt = Number.POSITIVE_INFINITY;
   }
 
   markTeleported(): void {
+    this.inventory.interrupt();
     this.spawned = true;
     this.automationReadyAt = Date.now() + TELEPORT_STABILIZE_MS;
     this.nextAutosellAt = this.automationReadyAt;
@@ -141,10 +148,13 @@ export class BehaviorState {
 
     // World switches/teleports may clear server input while our local value
     // remains true. Re-send start_sneak after the destination has settled.
-    if (this.spawned && now >= this.automationReadyAt && this.cfg.crouch_enabled && (!this.sneaking || this.crouchResyncPending)) {
+    if (this.spawned && now >= this.automationReadyAt && this.cfg.crouch_enabled && (!this.sneaking || this.crouchResyncPending || now >= this.nextCrouchCheckAt)) {
       this.applyCrouch(true);
       this.crouchResyncPending = false;
+      this.nextCrouchCheckAt = now + 2000;
     }
+
+    if (this.spawned) this.sender.tickInput();
 
     if (this.spawned && this.manualQueue.length) {
       this.runForeground(this.manualQueue.shift()!, now);
@@ -161,11 +171,15 @@ export class BehaviorState {
 
     // Continuous auto-sell yields to any foreground task.
     const sellPaused = now >= this.restartPauseStart && now < this.restartPauseEnd;
+    if (sellPaused) this.inventory.interrupt();
     if (this.cfg.autosell_enabled && !actionSentThisTick && !sellPaused) {
+      this.inventory.tick(now);
+      if (this.inventory.busy || this.inventory.blocked) return;
       const interval = Math.max(0.25, this.cfg.autosell_interval_seconds ?? 60) * 1000;
       if (now >= this.nextAutosellAt) {
         this.nextAutosellAt = now + interval;
         const command = (this.cfg.autosell_command ?? "/sell").trim() || "/sell";
+        this.inventory.request(now);
         this.sender.command(command);
       }
     }
@@ -174,6 +188,7 @@ export class BehaviorState {
   private runForeground(task: ForegroundTask, now: number): void {
     switch (task.kind) {
       case "command":
+        this.inventory.interrupt(true);
         this.sender.send(task.text);
         this.postponeAutomation(
           now + (isTeleportCommand(task.text) ? TELEPORT_COMMAND_GUARD_MS : CHAT_COMMAND_GUARD_MS),
@@ -198,7 +213,16 @@ export class BehaviorState {
   onChat(sender: string | null, message: string): void {
     const now = Date.now();
 
+    const plain = message.replace(/§./g, "").replace(/^(?:<HugoSMP>|\[HugoSMP\])\s*/, "").trim();
+    if ((!sender || sender.toLowerCase() === "hugosmp") && (
+      /^Du wurdest zu deinem Home .+ teleportiert!$/.test(plain) ||
+      /^[^:]+ hat deine Teleportations-Anfrage angenommen!$/.test(plain)
+    )) {
+      this.crouchResyncPending = true;
+      this.nextCrouchCheckAt = now;
+    }
     if (isInventoryBusyMessage(message)) {
+      this.inventory.interrupt();
       this.postponeAutomation(now + INVENTORY_BUSY_DELAY_MS);
       return;
     }

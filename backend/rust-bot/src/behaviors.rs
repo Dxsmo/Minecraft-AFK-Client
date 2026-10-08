@@ -12,9 +12,7 @@ use std::time::{Duration, Instant};
 use azalea::container::ContainerHandleRef;
 use azalea::entity::{inventory::Inventory, InLoadedChunk};
 use azalea::movement::LastSentInput;
-use azalea::protocol::packets::game::{
-    ClientboundContainerSetContent, ClientboundContainerSetSlot,
-};
+use azalea::protocol::packets::game::ClientboundContainerSetContent;
 use azalea::registry::builtin::BlockKind;
 use azalea::{BlockPos, Client, InGameState};
 use azalea_inventory::components::{CustomName, Lore};
@@ -210,6 +208,7 @@ pub struct BehaviorState {
     last_heartbeat_at: Instant,
     /// Re-send held crouch after a world/position transition has settled.
     crouch_resync_pending: bool,
+    next_crouch_check_at: Instant,
 }
 
 impl BehaviorState {
@@ -248,6 +247,7 @@ impl BehaviorState {
             active_task: None,
             last_heartbeat_at: now,
             crouch_resync_pending: false,
+            next_crouch_check_at: now,
         }
     }
 
@@ -462,9 +462,21 @@ impl BehaviorState {
         // Only restore input once the destination is ready. Keep the pending
         // flag on failures so missing components during transfer are retried.
         if self.config.crouch_enabled {
-            if self.spawned && self.crouch_resync_pending && now >= self.automation_ready_at {
+            if self.spawned
+                && (self.crouch_resync_pending || now >= self.next_crouch_check_at)
+                && now >= self.automation_ready_at
+            {
                 if Self::resync_crouch(bot) {
                     self.crouch_resync_pending = false;
+                    let server_sneaking = bot
+                        .component::<azalea::entity::metadata::AbstractEntityShiftKeyDown>()
+                        .is_ok_and(|state| state.0);
+                    self.next_crouch_check_at = now
+                        + if server_sneaking {
+                            Duration::from_secs(2)
+                        } else {
+                            Duration::from_millis(500)
+                        };
                 }
             } else if self.spawned && !bot.crouching() {
                 let _ = bot.set_crouching(true);
@@ -1093,20 +1105,15 @@ impl BehaviorState {
         }
     }
 
-    /// Azalea preallocates an empty menu shell on OpenScreen. Remember the
-    /// actual content response rather than treating empty slots as unready.
-    /// Its pinned content handler also omits state_id/carried_item; synchronize
-    /// those fields so clicks use the server's current inventory revision.
+    /// Contents/revisions are applied synchronously by the packet reader.
+    /// Delayed callbacks must never overwrite newer slot revisions.
     pub fn on_container_content(&mut self, bot: &Client, packet: &ClientboundContainerSetContent) {
-        let mut ecs = bot.ecs.write();
-        let Some(mut inventory) = ecs.get_mut::<Inventory>(bot.entity) else {
-            return;
-        };
-        if inventory.id != packet.container_id {
+        if !bot
+            .component::<Inventory>()
+            .is_ok_and(|inv| inv.id == packet.container_id)
+        {
             return;
         }
-        inventory.state_id = packet.state_id;
-        inventory.carried = packet.carried_item.clone();
         if packet.container_id != 0 {
             if let AutoSellPhase::WaitingForMenu {
                 content_received, ..
@@ -1117,19 +1124,14 @@ impl BehaviorState {
         }
     }
 
-    /// Keep subsequent slot revisions in packet order as well; ECS may have
-    /// already applied them before this handler sees the preceding full update.
-    pub fn on_container_slot(&self, bot: &Client, packet: &ClientboundContainerSetSlot) {
-        let mut ecs = bot.ecs.write();
-        if let Some(mut inventory) = ecs.get_mut::<Inventory>(bot.entity) {
-            if inventory.id == packet.container_id {
-                inventory.state_id = packet.state_id;
-            }
-        }
-    }
-
     /// A server inventory-loading reply invalidates the current sell GUI.
     pub fn on_chat(&mut self, bot: &Client, message: &str) {
+        if is_teleport_success_message(message) {
+            self.crouch_resync_pending = true;
+            self.next_crouch_check_at = Instant::now();
+            // The chat can precede the actual position packet. Keep checking
+            // held input afterwards even if the local input cache stays true.
+        }
         if is_inventory_busy_message(message) {
             self.interrupt_for_transition(bot);
             self.postpone_automation_until(Instant::now() + INVENTORY_BUSY_DELAY);
@@ -1213,6 +1215,27 @@ fn is_teleport_command(text: &str) -> bool {
             | "island"
             | "skyblock"
     )
+}
+
+fn is_teleport_success_message(message: &str) -> bool {
+    let mut plain = String::new();
+    let mut chars = message.chars();
+    while let Some(c) = chars.next() {
+        if c == '§' {
+            chars.next();
+        } else {
+            plain.push(c);
+        }
+    }
+    let plain = plain.trim();
+    let plain = plain
+        .strip_prefix("<HugoSMP>")
+        .or_else(|| plain.strip_prefix("[HugoSMP]"))
+        .unwrap_or(plain)
+        .trim();
+    (plain.starts_with("Du wurdest zu deinem Home ") && plain.ends_with(" teleportiert!"))
+        || (plain.ends_with(" hat deine Teleportations-Anfrage angenommen!")
+            && !plain.contains(':'))
 }
 
 /// Server reply emitted while a proxy is persisting/restoring inventory data.
@@ -1335,7 +1358,6 @@ mod tests {
     use azalea::inventory::{
         handle_client_side_close_container_trigger, handle_set_container_content_trigger,
         ClientsideCloseContainerEvent, CloseContainerEvent, ContainerClickEvent,
-        SetContainerContentEvent,
     };
     use azalea::movement::{send_player_input_packet, LastSentInput};
     use azalea::packet::game::SendGamePacketEvent;
@@ -1363,6 +1385,7 @@ mod tests {
                     ..Default::default()
                 },
                 Jumping::default(),
+                azalea::entity::metadata::AbstractEntityShiftKeyDown(true),
                 LastSentInput(ServerboundPlayerInput {
                     shift: true,
                     ..Default::default()
@@ -1865,11 +1888,14 @@ mod tests {
             items,
             carried_item: ItemStack::Empty,
         };
-        client.ecs.write().trigger(SetContainerContentEvent {
-            entity: client.entity,
-            container_id: id,
-            slots: packet.items.clone(),
-        });
+        azalea::inventory::apply_container_content(
+            &mut client
+                .ecs
+                .write()
+                .get_mut::<Inventory>(client.entity)
+                .unwrap(),
+            &packet,
+        );
         state.on_container_content(client, &packet);
     }
 
@@ -1888,6 +1914,189 @@ mod tests {
             },
         );
         clicks
+    }
+
+    #[test]
+    fn delayed_content_callback_cannot_rewind_newer_pickup_revision() {
+        let (client, mut state) = sell_client();
+        let clicks = capture_sell_clicks(&client);
+        let now = Instant::now();
+        tick_sell(&client, &mut state, now);
+        open_empty_sell_menu(&client, &mut state);
+        let full = ClientboundContainerSetContent {
+            container_id: 7,
+            state_id: 18,
+            items: vec![ItemStack::Empty; 63],
+            carried_item: ItemStack::Empty,
+        };
+        let pickup = ClientboundContainerSetSlot {
+            container_id: 7,
+            state_id: 25,
+            slot: 27,
+            item_stack: ItemStack::new(ItemKind::Beef, 64),
+        };
+        {
+            let mut ecs = client.ecs.write();
+            azalea::packet::game::process_packet(
+                &mut ecs,
+                client.entity,
+                &azalea::protocol::packets::game::ClientboundGamePacket::ContainerSetContent(
+                    full.clone(),
+                ),
+            );
+            azalea::packet::game::process_packet(
+                &mut ecs,
+                client.entity,
+                &azalea::protocol::packets::game::ClientboundGamePacket::ContainerSetSlot(
+                    pickup.clone(),
+                ),
+            );
+        }
+        // All packets in a network batch are applied before async bot events.
+        state.on_container_content(&client, &full);
+        tick_sell(&client, &mut state, now + Duration::from_millis(50));
+        assert_eq!(*clicks.lock(), vec![(7, 27, 25)]);
+    }
+
+    #[test]
+    fn player_inventory_loading_and_pickups_update_open_menu_without_changing_its_revision() {
+        let (client, mut state) = sell_client();
+        let clicks = capture_sell_clicks(&client);
+        let now = Instant::now();
+        tick_sell(&client, &mut state, now);
+        open_empty_sell_menu(&client, &mut state);
+        receive_content(&client, &mut state, 7, vec![ItemStack::Empty; 63]);
+        for i in 0..400 {
+            let pickup = ClientboundContainerSetSlot {
+                container_id: 0,
+                state_id: i,
+                slot: 9,
+                item_stack: ItemStack::new(ItemKind::Beef, 1 + (i % 64) as i32),
+            };
+            azalea::inventory::apply_container_slot(
+                &mut client
+                    .ecs
+                    .write()
+                    .get_mut::<Inventory>(client.entity)
+                    .unwrap(),
+                &pickup,
+            );
+        }
+        assert_eq!(client.component::<Inventory>().unwrap().state_id, 18);
+        tick_sell(&client, &mut state, now + Duration::from_millis(50));
+        assert_eq!(*clicks.lock(), vec![(7, 27, 18)]);
+        tick_sell(&client, &mut state, now + Duration::from_millis(100));
+        assert!(client
+            .component::<Inventory>()
+            .unwrap()
+            .inventory_menu
+            .slot(9)
+            .unwrap()
+            .is_empty());
+        tick_sell(&client, &mut state, now + Duration::from_millis(300));
+        assert_eq!(take_commands(&client), vec!["/sell", "/sell"]);
+    }
+
+    #[test]
+    fn full_player_inventory_updates_and_direct_slots_survive_menu_close() {
+        let (client, mut state) = sell_client();
+        open_empty_sell_menu(&client, &mut state);
+        let mut items = vec![ItemStack::Empty; 46];
+        items[9] = ItemStack::new(ItemKind::Beef, 64);
+        items[44] = ItemStack::new(ItemKind::Cobblestone, 32);
+        let full = ClientboundContainerSetContent {
+            container_id: 0,
+            state_id: 30,
+            items,
+            carried_item: ItemStack::Empty,
+        };
+        azalea::inventory::apply_container_content(
+            &mut client
+                .ecs
+                .write()
+                .get_mut::<Inventory>(client.entity)
+                .unwrap(),
+            &full,
+        );
+        let direct = ClientboundContainerSetSlot {
+            container_id: -2,
+            state_id: 0,
+            slot: 9,
+            item_stack: ItemStack::new(ItemKind::Beef, 20),
+        };
+        azalea::inventory::apply_container_slot(
+            &mut client
+                .ecs
+                .write()
+                .get_mut::<Inventory>(client.entity)
+                .unwrap(),
+            &direct,
+        );
+        assert_eq!(client.menu().unwrap().slot(27).unwrap().count(), 20);
+        assert_eq!(client.menu().unwrap().slot(62).unwrap().count(), 32);
+        state.close_sell_menu(&client);
+        client.ecs.write().flush();
+        assert_eq!(client.menu().unwrap().slot(9).unwrap().count(), 20);
+        assert_eq!(client.menu().unwrap().slot(44).unwrap().count(), 32);
+    }
+
+    #[test]
+    fn pickup_during_predicted_clicks_does_not_resurrect_other_sold_slots() {
+        let (client, mut state) = sell_client();
+        capture_sell_clicks(&client);
+        let now = Instant::now();
+        tick_sell(&client, &mut state, now);
+        open_empty_sell_menu(&client, &mut state);
+        let mut items = vec![ItemStack::Empty; 63];
+        items[27] = ItemStack::new(ItemKind::Beef, 64);
+        items[28] = ItemStack::new(ItemKind::Cobblestone, 64);
+        receive_content(&client, &mut state, 7, items);
+        tick_sell(&client, &mut state, now + Duration::from_millis(50));
+        let pickup = ClientboundContainerSetSlot {
+            container_id: 0,
+            state_id: 50,
+            slot: 11,
+            item_stack: ItemStack::new(ItemKind::Beef, 32),
+        };
+        azalea::inventory::apply_container_slot(
+            &mut client
+                .ecs
+                .write()
+                .get_mut::<Inventory>(client.entity)
+                .unwrap(),
+            &pickup,
+        );
+        assert!(client.menu().unwrap().slot(27).unwrap().is_empty());
+        assert!(client.menu().unwrap().slot(28).unwrap().is_empty());
+        assert_eq!(client.menu().unwrap().slot(29).unwrap().count(), 32);
+        tick_sell(&client, &mut state, now + Duration::from_millis(100));
+        assert!(client.menu().unwrap().slot(9).unwrap().is_empty());
+        assert!(client.menu().unwrap().slot(10).unwrap().is_empty());
+        assert_eq!(client.menu().unwrap().slot(11).unwrap().count(), 32);
+    }
+
+    #[test]
+    fn home_and_tpa_success_messages_restore_and_recheck_authoritative_sneak() {
+        let (client, mut state, packets) = crouch_client(true);
+        state.spawned = true;
+        for message in [
+            "<HugoSMP> Du wurdest zu deinem Home Farm teleportiert!",
+            "[HugoSMP] Steve hat deine Teleportations-Anfrage angenommen!",
+        ] {
+            state.on_chat(&client, message);
+            state.on_tick(&client);
+            send_input(&client);
+            client
+                .ecs
+                .write()
+                .entity_mut(client.entity)
+                .insert(azalea::entity::metadata::AbstractEntityShiftKeyDown(false));
+            state.next_crouch_check_at = Instant::now();
+            state.on_tick(&client);
+            send_input(&client);
+        }
+        assert_eq!(*packets.lock(), vec![true, true, true, true]);
+        assert!(client.crouching());
     }
 
     #[test]
@@ -1992,14 +2201,19 @@ mod tests {
             .unwrap()
             .slot_mut(27)
             .unwrap() = ItemStack::new(ItemKind::Beef, 64);
-        state.on_container_slot(
-            &client,
-            &ClientboundContainerSetSlot {
-                container_id: 7,
-                state_id: 19,
-                slot: 27,
-                item_stack: ItemStack::new(ItemKind::Beef, 64),
-            },
+        let packet = ClientboundContainerSetSlot {
+            container_id: 7,
+            state_id: 19,
+            slot: 27,
+            item_stack: ItemStack::new(ItemKind::Beef, 64),
+        };
+        azalea::inventory::apply_container_slot(
+            &mut client
+                .ecs
+                .write()
+                .get_mut::<Inventory>(client.entity)
+                .unwrap(),
+            &packet,
         );
         tick_sell(&client, &mut state, since + Duration::from_millis(100));
         assert_eq!(*clicks.lock(), vec![(7, 27, 19)]);

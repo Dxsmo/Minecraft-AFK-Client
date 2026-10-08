@@ -109,7 +109,13 @@ async function waitForStatus(statuses: string[], timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const scan = await prisma.itemWorthScan.findUnique({ where: { id: "global" } });
-    if (scan && statuses.includes(scan.status)) return scan;
+    if (scan && statuses.includes(scan.status)) {
+      // The live scan is finalized before its history row. Wait for both
+      // writes so assertions cannot race closeRun() under build/CPU load.
+      const historyPending = scan.status === "COMPLETED" && scan.runId &&
+        (await prisma.itemWorthRun.findUnique({ where: { id: scan.runId } }))?.status !== "COMPLETED";
+      if (!historyPending) return scan;
+    }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Scan did not reach ${statuses.join("/")} in time`);

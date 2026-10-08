@@ -325,9 +325,6 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
             ClientboundGamePacket::ContainerSetContent(packet) => {
                 shared().lock().behavior.on_container_content(&bot, packet);
             }
-            ClientboundGamePacket::ContainerSetSlot(packet) => {
-                shared().lock().behavior.on_container_slot(&bot, packet);
-            }
             ClientboundGamePacket::Respawn(_) => shared().lock().behavior.on_respawn(&bot),
             ClientboundGamePacket::PlayerPosition(_) => {
                 shared().lock().behavior.on_position_sync(&bot);

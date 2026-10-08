@@ -343,7 +343,7 @@ stdio, one JSON object per line (see `backend/rust-bot/src/protocol.rs` and
 Behaviors live in the Rust bot (`backend/rust-bot/src/behaviors.rs`) and are
 driven from Azalea's game tick:
 
-- **Crouch** – continuously hold sneak without periodic release/re-press cycles
+- **Crouch** – continuously hold sneak; recheck server input after home/TPA teleports and world changes without releasing the key
 - **Auto-sell** – sell-menu cycle with bounded timeouts and recovery after teleports/world changes
 - **Clean Spawner** – drop/sell the targeted spawner's contents per item type
 

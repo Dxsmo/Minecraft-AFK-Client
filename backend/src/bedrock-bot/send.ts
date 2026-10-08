@@ -1,12 +1,4 @@
-//! Outbound actions for the Bedrock bot: everything that writes packets to the
-//! server. bedrock-protocol is a low-level packet client (no mineflayer-style
-//! helpers), and exact packet schemas vary by protocol version. Since this code
-//! cannot be exercised against a live Bedrock server in development, every send
-//! is wrapped defensively: a schema mismatch emits a single warning and, for
-//! optional sneak actions, self-disables that action
-//! rather than repeatedly throwing. Chat and command sending — the backbone of
-//! console and automation — additionally falls back from the "correct"
-//! command_request packet to plain chat text, which many servers also accept.
+// Outbound Bedrock actions. Packet failures remain retryable and are logged.
 
 import { emit, type OutEvent } from "./protocol.js";
 
@@ -29,8 +21,15 @@ export class BotSender {
   private username: string;
   /** Runtime entity id captured from start_game; needed by some action packets. */
   private runtimeEntityId: bigint | null = null;
-  /** Actions that threw once are disabled to avoid repeated errors/log spam. */
-  private disabled = new Set<string>();
+  private position: { x: number; y: number; z: number } | null = null;
+  private pitch = 0;
+  private yaw = 0;
+  private inputTick = 0n;
+  private sneaking = false;
+  private sneakEdge = true;
+  private handledTeleport = false;
+  private lastWarningAt = new Map<string, number>();
+  authoritativeInventory = true;
 
   constructor(client: AnyClient, username: string) {
     this.client = client;
@@ -107,19 +106,60 @@ export class BotSender {
     }
   }
 
-  /** Start or stop sneaking/crouching (best-effort). */
+  /** Use only the server's own player position, never coordinates of nearby entities. */
+  updatePosition(position: unknown, pitch = 0, yaw = 0, teleport = false): void {
+    const p = position as { x?: number; y?: number; z?: number } | null;
+    if (!p || ![p.x, p.y, p.z].every(Number.isFinite)) return;
+    this.position = { x: p.x!, y: p.y!, z: p.z! };
+    this.pitch = Number.isFinite(pitch) ? pitch : this.pitch;
+    this.yaw = Number.isFinite(yaw) ? yaw : this.yaw;
+    this.handledTeleport ||= teleport;
+    this.sneakEdge ||= teleport;
+  }
+
+  setInputTick(tick: bigint): void { this.inputTick = tick; }
+
   setSneak(sneaking: boolean): void {
-    if (this.disabled.has("sneak") || this.runtimeEntityId == null) return;
-    try {
-      this.client.queue("player_action", {
-        runtime_entity_id: this.runtimeEntityId,
-        action: sneaking ? "start_sneak" : "stop_sneak",
-        position: { x: 0, y: 0, z: 0 },
-        result_position: { x: 0, y: 0, z: 0 },
-        face: 0,
-      });
-    } catch {
-      this.disabled.add("sneak");
+    this.sneaking = sneaking;
+    this.sneakEdge = true;
+  }
+
+  /** Modern Bedrock/Geyser reads held keys from PlayerAuthInput every game tick. */
+  tickInput(): boolean {
+    if (this.runtimeEntityId == null || !this.position) return false;
+    const sent = this.packet("player_auth_input", {
+      pitch: this.pitch, yaw: this.yaw, head_yaw: this.yaw, position: this.position,
+      move_vector: { x: 0, z: 0 }, analogue_move_vector: { x: 0, z: 0 }, raw_move_vector: { x: 0, z: 0 },
+      input_data: {
+        sneaking: this.sneaking, sneak_down: this.sneaking, sneak_current_raw: this.sneaking,
+        start_sneaking: this.sneaking && this.sneakEdge,
+        stop_sneaking: !this.sneaking && this.sneakEdge,
+        sneak_pressed_raw: this.sneaking && this.sneakEdge,
+        sneak_released_raw: !this.sneaking && this.sneakEdge,
+        handled_teleport: this.handledTeleport,
+      },
+      input_mode: "mouse", play_mode: "normal", interaction_model: "crosshair",
+      interact_rotation: { x: this.pitch, z: this.yaw },
+      tick: ++this.inputTick, delta: { x: 0, y: 0, z: 0 },
+      camera_orientation: {
+        x: -Math.sin(this.yaw * Math.PI / 180) * Math.cos(this.pitch * Math.PI / 180),
+        y: -Math.sin(this.pitch * Math.PI / 180),
+        z: Math.cos(this.yaw * Math.PI / 180) * Math.cos(this.pitch * Math.PI / 180),
+      },
+    });
+    if (sent) { this.sneakEdge = false; this.handledTeleport = false; }
+    return sent;
+  }
+
+  packet(name: string, params: object): boolean {
+    try { this.client.queue(name, params); return true; }
+    catch (err) {
+      const now = Date.now();
+      if (now - (this.lastWarningAt.get(name) ?? -Infinity) >= 30_000) {
+        this.lastWarningAt.set(name, now);
+        warn(`Bedrock ${name}: ${err instanceof Error ? err.message : String(err)}; wird erneut versucht`);
+      }
+      return false;
     }
   }
 }
