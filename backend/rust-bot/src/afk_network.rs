@@ -7,10 +7,11 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::io::Cursor;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use azalea::app::{App, Plugin, PreUpdate};
+use azalea::buf::AzBufVar;
 use azalea::connection::RawConnection;
 use azalea::core::entity_id::MinecraftEntityId;
 use azalea::disconnect::DisconnectEvent;
@@ -19,7 +20,7 @@ use azalea::ecs::prelude::*;
 use azalea::packet::{config, game, login};
 use azalea::protocol::packets::{
     config::ClientboundConfigPacket, game::ClientboundGamePacket, login::ClientboundLoginPacket,
-    ConnectionProtocol,
+    ConnectionProtocol, Packet, ProtocolPacket,
 };
 use azalea::protocol::read::{deserialize_packet, ReadPacketError};
 use azalea::registry::builtin::EntityKind;
@@ -27,7 +28,79 @@ use azalea::registry::builtin::EntityKind;
 use crate::{emit, protocol::OutEvent};
 
 const MAX_PACKETS_PER_UPDATE: usize = 256;
+// Cosmetic packets do not consume the ECS packet quota. A farm can continuously
+// send more than 256 * 60 packets/s; counting those would grow a permanent TCP
+// backlog even though ticks and outgoing commands themselves remain responsive.
+const MAX_SCANNED_PACKETS_PER_UPDATE: usize = 8192;
 const READ_BUDGET: Duration = Duration::from_millis(4);
+
+// Derive IDs from the pinned protocol, rather than duplicating wire constants.
+static FAST_ITEM_PACKET_IDS: LazyLock<Vec<u32>> = LazyLock::new(|| {
+    use azalea::protocol::packets::game::*;
+    let position = azalea::protocol::common::movements::PositionMoveRotation {
+        pos: azalea::Vec3::ZERO,
+        delta: azalea::Vec3::ZERO,
+        look_direction: azalea::entity::LookDirection::new(0.0, 0.0),
+    };
+    vec![
+        ClientboundSetEntityData {
+            id: 0.into(),
+            packed_items: azalea::entity::EntityMetadataItems(vec![]),
+        }
+        .into_variant()
+        .id(),
+        ClientboundSetEntityMotion {
+            id: 0.into(),
+            delta: Default::default(),
+        }
+        .into_variant()
+        .id(),
+        ClientboundMoveEntityPos {
+            entity_id: 0.into(),
+            delta: Default::default(),
+            on_ground: false,
+        }
+        .into_variant()
+        .id(),
+        ClientboundMoveEntityPosRot {
+            entity_id: 0.into(),
+            delta: Default::default(),
+            look_direction: Default::default(),
+            on_ground: false,
+        }
+        .into_variant()
+        .id(),
+        ClientboundMoveEntityRot {
+            entity_id: 0.into(),
+            look_direction: Default::default(),
+            on_ground: false,
+        }
+        .into_variant()
+        .id(),
+        ClientboundTakeItemEntity {
+            item_id: 0,
+            player_id: 0.into(),
+            amount: 0,
+        }
+        .into_variant()
+        .id(),
+        ClientboundEntityPositionSync {
+            id: 0.into(),
+            values: position.clone(),
+            on_ground: false,
+        }
+        .into_variant()
+        .id(),
+        ClientboundTeleportEntity {
+            id: 0.into(),
+            change: position,
+            relative: Default::default(),
+            on_ground: false,
+        }
+        .into_variant()
+        .id(),
+    ]
+});
 
 pub struct AfkNetworkPlugin;
 
@@ -44,6 +117,22 @@ struct ItemFilter {
 }
 
 impl ItemFilter {
+    /// Skip already-identified item visuals before decoding their metadata/NBT.
+    /// Spawns, removals and world changes still take the ordered normal path.
+    fn skip_raw(&self, raw: &[u8]) -> bool {
+        let mut stream = Cursor::new(raw);
+        let Ok(packet_id) = u32::azalea_read_var(&mut stream) else {
+            return false;
+        };
+        if !FAST_ITEM_PACKET_IDS.contains(&packet_id) {
+            return false;
+        }
+        let Ok(entity_id) = i32::azalea_read_var(&mut stream) else {
+            return false;
+        };
+        self.ignored.contains(&MinecraftEntityId(entity_id))
+    }
+
     /// Only dropped item visuals are omitted. Inventory/content packets and
     /// the player, mobs, boats, and other collidable entities stay untouched.
     fn keep(&mut self, packet: &mut ClientboundGamePacket) -> bool {
@@ -114,19 +203,22 @@ fn process_packet(
     entity: Entity,
     raw: &[u8],
     filter: &mut ItemFilter,
-) -> Result<(), Box<ReadPacketError>> {
+) -> Result<bool, Box<ReadPacketError>> {
     // Re-read the state for EACH packet. Login, compression and configuration
     // transitions in one incoming batch must affect all subsequent packets.
     let Some(connection) = ecs.get::<RawConnection>(entity) else {
-        return Ok(());
+        return Ok(false);
     };
     let state = connection.state;
     let stream = &mut Cursor::new(raw);
     match state {
         ConnectionProtocol::Game => {
+            if filter.skip_raw(raw) {
+                return Ok(false);
+            }
             let mut packet = deserialize_packet::<ClientboundGamePacket>(stream)?;
             if !filter.keep(&mut packet) {
-                return Ok(());
+                return Ok(false);
             }
             let callback = needs_callback(&packet);
             game::process_packet(ecs, entity, &packet);
@@ -154,7 +246,7 @@ fn process_packet(
             unreachable!("AFK reader before login")
         }
     }
-    Ok(())
+    Ok(true)
 }
 
 fn disconnect(ecs: &mut World, entity: Entity) {
@@ -185,8 +277,9 @@ fn read_packets(ecs: &mut World) {
         )
         .into();
         let started = Instant::now();
-        for _ in 0..MAX_PACKETS_PER_UPDATE {
-            if started.elapsed() >= READ_BUDGET {
+        let mut applied = 0;
+        for _ in 0..MAX_SCANNED_PACKETS_PER_UPDATE {
+            if applied >= MAX_PACKETS_PER_UPDATE || started.elapsed() >= READ_BUDGET {
                 break;
             }
             let Some(mut connection) = ecs.get_mut::<RawConnection>(entity) else {
@@ -201,13 +294,16 @@ fn read_packets(ecs: &mut World) {
             };
             drop(connection);
             match read {
-                Ok(Some(raw)) => {
-                    if let Err(error) = process_packet(ecs, entity, &raw, &mut filter) {
+                Ok(Some(raw)) => match process_packet(ecs, entity, &raw, &mut filter) {
+                    Ok(true) => applied += 1,
+                    Ok(false) => {}
+                    Err(error) => {
+                        applied += 1;
                         filter.warn(format!(
                             "AFK: Fehler beim Verarbeiten eines Serverpakets: {error}"
                         ));
                     }
-                }
+                },
                 Ok(None) => break,
                 Err(error) => {
                     let closed = matches!(
@@ -301,7 +397,7 @@ mod tests {
     fn dense_item_packets_yield_and_preserve_inventory_updates_and_commands() {
         let mut simulation = simulation();
         let commands = SentPackets::new(&mut simulation);
-        for id in 1..=5_000 {
+        for id in 1..=10_000 {
             simulation.receive_packet(make_basic_add_entity(
                 EntityKind::Item,
                 id,
@@ -334,7 +430,7 @@ mod tests {
             .injected_clientbound_packets
             .len();
         assert!(
-            remaining >= 15_100 - MAX_PACKETS_PER_UPDATE,
+            remaining >= 30_200 - MAX_SCANNED_PACKETS_PER_UPDATE,
             "yield instead of draining the entire flood"
         );
         // Send through the same native behavior queue the console uses.
@@ -398,7 +494,7 @@ mod tests {
                 .unwrap()
                 .ignored
                 .len(),
-            5_000
+            10_000
         );
         assert_eq!(
             world
@@ -410,7 +506,7 @@ mod tests {
             &ItemStack::new(ItemKind::Beef, 32)
         );
         eprintln!(
-            "15,100 farm packets, {frames} bounded updates: {:?}",
+            "30,200 farm packets, {frames} bounded updates: {:?}",
             started.elapsed()
         );
     }
@@ -433,7 +529,8 @@ mod tests {
             let (socket, accepted) = tokio::join!(
                 TcpStream::connect(listener.local_addr().unwrap()), listener.accept(),
             );
-            let (mut server, _) = accepted.unwrap();
+            let (server, _) = accepted.unwrap();
+            let (mut server_reader, mut server_writer) = server.into_split();
             let (read_stream, write_stream) = socket.unwrap().into_split();
             let connection = RawConnection::new(
                 RawReadConnection { read_stream, buffer: Cursor::new(Vec::new()), compression_threshold: Some(64), dec_cipher: None },
@@ -460,7 +557,7 @@ mod tests {
                 ClientboundOpenScreen { container_id: 7, menu_type: azalea::registry::builtin::MenuKind::Generic9x3, title: "Items verkaufen".into() }.into_variant(),
                 ClientboundContainerSetContent { container_id: 7, state_id: 18, items, carried_item: ItemStack::Empty }.into_variant(),
             ];
-            for id in 1..=2_000 {
+            for id in 1..=10_000 {
                 packets.push(make_basic_add_entity(EntityKind::Item, id, azalea::Vec3::ZERO).into_variant());
                 packets.push(item_metadata(id).into_variant());
             }
@@ -468,7 +565,9 @@ mod tests {
             for packet in packets {
                 bytes.extend(encode_to_network_packet(&serialize_packet(&packet).unwrap(), Some(64), &mut None));
             }
-            server.write_all(&bytes).await.unwrap();
+            // Keep producing while the client handles packets and sends commands.
+            // A large blocking write would itself wait for the client to drain TCP.
+            let producer = tokio::spawn(async move { server_writer.write_all(&bytes).await.unwrap(); });
             // Wait for socket readiness, rather than assume the reactor has
             // observed the server's write after a single task yield.
             for _ in 0..20 {
@@ -497,13 +596,13 @@ mod tests {
             behavior.on_control_event(&client);
             *simulation.app.world_mut() = std::mem::take(&mut *client.ecs.write());
             simulation.tick();
-            assert!(simulation.app.world().get::<ItemFilter>(simulation.entity).unwrap().ignored.len() < 2_000,
+            assert!(simulation.app.world().get::<ItemFilter>(simulation.entity).unwrap().ignored.len() < 10_000,
                 "commands must run before the incoming item flood has been drained");
             let relevant = tokio::time::timeout(Duration::from_secs(3), async {
                 let mut buffer = Cursor::new(Vec::new());
                 let mut relevant = Vec::new();
                 loop {
-                    let raw = read_raw_packet(&mut server, &mut buffer, Some(64), &mut None).await.unwrap();
+                    let raw = read_raw_packet(&mut server_reader, &mut buffer, Some(64), &mut None).await.unwrap();
                     let packet = deserialize_packet::<ServerboundGamePacket>(&mut Cursor::new(raw.as_ref())).unwrap();
                     let home = matches!(&packet, ServerboundGamePacket::ChatCommand(command) if command.command == "home farm");
                     if matches!(&packet, ServerboundGamePacket::ContainerClick(_) | ServerboundGamePacket::ContainerClose(_) | ServerboundGamePacket::ChatCommand(_)) {
@@ -515,7 +614,83 @@ mod tests {
             assert_eq!(relevant.len(), 3, "one click, one close, then home: {relevant:?}");
             assert!(matches!(&relevant[0], ServerboundGamePacket::ContainerClick(packet) if packet.slot_num == 27 && packet.state_id == 18));
             assert!(matches!(&relevant[1], ServerboundGamePacket::ContainerClose(packet) if packet.container_id == 7));
+            producer.abort();
         });
+    }
+
+    #[test]
+    fn sustained_item_traffic_does_not_delay_menu_or_inventory_replies() {
+        let mut simulation = simulation();
+        for id in 1..=1_024 {
+            simulation.receive_packet(make_basic_add_entity(
+                EntityKind::Item,
+                id,
+                azalea::Vec3::ZERO,
+            ));
+        }
+        while !simulation
+            .app
+            .world()
+            .get::<RawConnection>(simulation.entity)
+            .unwrap()
+            .injected_clientbound_packets
+            .is_empty()
+        {
+            simulation.tick();
+        }
+        for frame in 1..=100 {
+            // 2,048 irrelevant packets EACH update, followed by an urgent GUI
+            // reply. The former 256-packet limit accumulates a permanent queue.
+            for id in 1..=1_024 {
+                simulation.receive_packet(item_metadata(id));
+                simulation.receive_packet(ClientboundMoveEntityPos {
+                    entity_id: id.into(),
+                    delta: Default::default(),
+                    on_ground: true,
+                });
+            }
+            simulation.receive_packet(ClientboundOpenScreen {
+                container_id: frame,
+                menu_type: azalea::registry::builtin::MenuKind::Generic9x3,
+                title: "Items verkaufen".into(),
+            });
+            let mut items = vec![ItemStack::Empty; 63];
+            items[27] = ItemStack::new(ItemKind::Beef, 64);
+            simulation.receive_packet(ClientboundContainerSetContent {
+                container_id: frame,
+                state_id: frame as u32,
+                items,
+                carried_item: ItemStack::Empty,
+            });
+            // Permit a slow test machine a few bounded updates to catch up.
+            // Even two updates exceed the old reader's total packet capacity.
+            for _ in 0..2 {
+                simulation.tick();
+            }
+            let inventory = simulation
+                .app
+                .world()
+                .get::<Inventory>(simulation.entity)
+                .unwrap();
+            assert_eq!(
+                inventory.id, frame,
+                "menu response delayed at frame {frame}"
+            );
+            assert_eq!(
+                inventory.menu().slot(27).unwrap(),
+                &ItemStack::new(ItemKind::Beef, 64)
+            );
+            assert!(
+                simulation
+                    .app
+                    .world()
+                    .get::<RawConnection>(simulation.entity)
+                    .unwrap()
+                    .injected_clientbound_packets
+                    .is_empty(),
+                "sustained item traffic must not accumulate a backlog at frame {frame}"
+            );
+        }
     }
 
     #[test]

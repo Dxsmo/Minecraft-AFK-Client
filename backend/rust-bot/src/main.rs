@@ -293,7 +293,7 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
             });
             emit(&OutEvent::BehaviorLog {
                 message:
-                    "AFK-Netzwerk aktiv: Item-Entities ausgeblendet, Paketverarbeitung begrenzt"
+                    "AFK-Netzwerk aktiv: Item-Pakete vor Dekodierung gefiltert, separate Limits für Item-Fluten und Spielaktionen"
                         .into(),
             });
         }
