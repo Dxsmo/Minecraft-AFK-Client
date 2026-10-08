@@ -19,6 +19,7 @@ import securityRoutes from "./security/routes.js";
 import { isIpBanned } from "./security/ipBans.js";
 import registerWebsocketRoutes from "./websocket/routes.js";
 import { getItemTexture } from "./assets/itemTextures.js";
+import notesRoutes from "./notes/routes.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -68,6 +69,7 @@ export async function buildApp() {
   await app.register(authRoutes);
   await app.register(usersRoutes);
   await app.register(accountsRoutes);
+  await app.register(notesRoutes);
   await app.register(namesniperRoutes);
   await app.register(itemWorthRoutes);
   await app.register(systemRoutes);

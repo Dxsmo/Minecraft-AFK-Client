@@ -2,7 +2,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useAuth } from "../lib/auth";
 
-type IconName = "minigames" | "dashboard" | "sniper" | "worth" | "users" | "logs" | "settings";
+type IconName = "notes" | "minigames" | "dashboard" | "sniper" | "worth" | "users" | "logs" | "settings";
 
 function Icon({ name }: { name: IconName }) {
   const common = {
@@ -16,6 +16,8 @@ function Icon({ name }: { name: IconName }) {
     strokeLinejoin: "round" as const,
   };
   switch (name) {
+    case "notes":
+      return <svg {...common}><path d="M14 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V10zM14 3v7h7M7 14h10M7 17h7" /></svg>;
     case "minigames":
       return <svg {...common}><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M7 10v4M5 12h4M16 10h.01M19 14h.01"/></svg>;
     case "dashboard":
@@ -72,6 +74,7 @@ function Icon({ name }: { name: IconName }) {
 
 const navItems: { to: string; label: string; icon: IconName; adminOnly: boolean }[] = [
   { to: "/dashboard", label: "Dashboard", icon: "dashboard", adminOnly: false },
+  { to: "/notes", label: "Notizen", icon: "notes", adminOnly: false },
   { to: "/namesniper", label: "Name Sniper", icon: "sniper", adminOnly: true },
   { to: "/minigames", label: "Minigames", icon: "minigames", adminOnly: true },
   { to: "/item-worth", label: "Item Wert", icon: "worth", adminOnly: true },

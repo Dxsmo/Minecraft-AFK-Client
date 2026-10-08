@@ -69,6 +69,54 @@ body {
 }
 
 @layer components {
+  .note-list-item {
+    max-width: 240px;
+    padding: 12px 14px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    color: var(--text-muted);
+    transition: background-color 150ms ease, border-color 150ms ease;
+  }
+  .note-list-item:hover { background: var(--surface); }
+  .note-list-active { background: var(--surface); border-color: var(--border-strong); color: var(--text); }
+  .note-paper {
+    width: 100%;
+    max-width: 794px;
+    min-height: 500px;
+    aspect-ratio: 210 / 297;
+    margin: 0 auto;
+    padding: clamp(20px, 4vw, 64px);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    box-shadow: 0 16px 50px rgba(0, 0, 0, 0.22);
+  }
+  .note-title { width: 100%; margin-bottom: 24px; background: transparent; color: var(--text); font-size: 26px; font-weight: 600; line-height: 1.3; outline: none; overflow-wrap: anywhere; }
+  .note-title::placeholder { color: var(--text-subtle); }
+  .note-rich-text { min-height: 300px; outline: none; font-size: 15px; line-height: 1.8; color: var(--text-muted); overflow-wrap: anywhere; }
+  .note-rich-text p { margin: 0 0 0.8em; }
+  .note-rich-text h1, .note-rich-text h2, .note-rich-text h3 { margin: 1.2em 0 0.5em; font-weight: 600; color: var(--text); line-height: 1.35; }
+  .note-rich-text h1 { font-size: 1.7em; }
+  .note-rich-text h2 { font-size: 1.4em; }
+  .note-rich-text h3 { font-size: 1.15em; }
+  .note-rich-text strong { color: var(--text); font-weight: 700; }
+  .note-rich-text ul { list-style: disc; }
+  .note-rich-text ol { list-style: decimal; }
+  .note-rich-text ul, .note-rich-text ol { margin: 0.5em 0 1em; padding-left: 1.6em; }
+  .note-rich-text li p { margin: 0.2em 0; }
+  .note-rich-text blockquote { margin: 1em 0; padding: 0.2em 1em; border-left: 2px solid var(--accent); color: var(--text-subtle); }
+  .note-rich-text a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  .note-rich-text pre { overflow-x: auto; padding: 12px; margin: 1em 0; border-radius: 6px; background: var(--bg); }
+  .note-rich-text code { font-family: ui-monospace, monospace; font-size: 0.9em; }
+  .note-rich-text hr { margin: 1.5em 0; border-color: var(--border); }
+  .note-toolbar { position: sticky; top: 0; z-index: 30; display: flex; flex-wrap: wrap; align-items: center; gap: 3px; padding: 7px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elev); }
+  .note-format-button { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 5px; color: var(--text-muted); cursor: pointer; }
+  .note-format-button:hover, .note-format-button[aria-pressed="true"] { background: var(--surface-hover); color: var(--text); }
+  .note-format-button:focus-visible, .note-format-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .note-format-select { max-width: 150px; height: 30px; padding: 0 6px; background: var(--bg-elev); border-radius: 5px; font-size: 12px; color: var(--text-muted); }
+  .note-toolbar-divider { width: 1px; height: 16px; margin: 0 4px; background: var(--border); }
+  .note-access-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); margin: auto; padding: 0; overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--bg-elev); color: var(--text); box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5); }
+  .note-access-dialog::backdrop { background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(3px); }
   .account-row {
     --account-height: 112px;
     display: grid;

@@ -58,6 +58,33 @@ model User {
   createdAccounts       MinecraftAccount[]     @relation("CreatedAccounts")
   createdSniperAccounts SniperAccount[]        @relation("CreatedSniperAccounts")
   createdIpBans         BannedIp[]             @relation("CreatedIpBans")
+  notes                 Note[]                @relation("OwnedNotes")
+  noteGrants            NoteGrant[]
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  title     String   @default("Neue Notiz")
+  content   String   @default("{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\"}]}")
+  revision  Int      @default(0)
+  ownerId   String
+  owner     User     @relation("OwnedNotes", fields: [ownerId], references: [id], onDelete: Cascade)
+  grants    NoteGrant[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId, updatedAt])
+}
+
+model NoteGrant {
+  noteId   String
+  userId   String
+  canWrite Boolean @default(false)
+  note     Note    @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([noteId, userId])
+  @@index([userId])
 }
 
 model Session {

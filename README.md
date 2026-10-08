@@ -52,6 +52,7 @@ api/            system status, audit log endpoints
 auth/           password hashing, sessions, RBAC middleware, login routes
 users/          user CRUD (admin-only)
 accounts/       Minecraft account CRUD, ownership checks, assignments
+notes/          rich-text notes, owner-managed read/write sharing
 minecraft/      MinecraftClient (state machine + subprocess control), ClientManager
 rust-bot/       Azalea-based Minecraft bot compiled to a native binary (Rust)
 commands/       permission-checked command dispatch
@@ -159,9 +160,18 @@ Copy `.env.example` to `.env` (repo root) for Docker Compose, or to
   remaining active admin, so you can't lock yourself out.
 - Any user can change their own password under **Settings** (requires the
   current password; invalidates all existing sessions on success).
-- Roles: `ADMIN` (sees/manages everything) and `USER` (only sees Minecraft
+- Roles: `ADMIN` (sees/manages all Minecraft accounts) and `USER` (only sees Minecraft
   accounts explicitly assigned to them, enforced **server-side** on every
   API route — not just hidden in the UI).
+
+Every active user can create notes under **Notizen**. Notes start private,
+including against other admins. The creator uses **Zugriff** to grant individual
+users **Nur lesen** or **Lesen & schreiben**; only the creator can change access
+or delete the note. Text supports headings, bold, italics, underline, lists,
+quotes and links in a dark A4-style editor that grows with the document.
+Changes save automatically. Concurrent edits preserve the unsaved draft instead
+of overwriting a newer version, with options to reload or save a private copy.
+There is no word/character cap; each save request has a 64 MiB transport limit.
 
 ---
 
