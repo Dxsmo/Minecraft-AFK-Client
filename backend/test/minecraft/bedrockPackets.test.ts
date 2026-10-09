@@ -5,6 +5,11 @@ import { BehaviorState } from "../../src/bedrock-bot/behaviors.js";
 import { BedrockInventory, type BedrockItem } from "../../src/bedrock-bot/inventory.js";
 const require = createRequire(import.meta.url);
 const { createSerializer } = require("bedrock-protocol/src/transforms/serializer");
+const { Versions } = require("bedrock-protocol/src/options") as { Versions: Record<string, number> };
+
+function inputFlag(params: any, flag: string): boolean {
+  return Array.isArray(params.input_data) ? params.input_data.includes(flag) : params.input_data?.[flag] === true;
+}
 
 function setup(version = "1.21.130") {
   const serializer = createSerializer(version);
@@ -13,7 +18,7 @@ function setup(version = "1.21.130") {
     const bytes = serializer.createPacketBuffer({ name, params });
     packets.push(serializer.proto.parsePacketBuffer("mcpe_packet", bytes).data);
   });
-  const sender = new BotSender({ queue, write: queue, versionGreaterThanOrEqualTo: v => version === v }, "Bot");
+  const sender = new BotSender({ queue, write: queue, versionGreaterThanOrEqualTo: v => Versions[version] >= Versions[v] }, "Bot");
   sender.setRuntimeEntityId(123n);
   sender.updatePosition({ x: 12, y: 70.62, z: -4 }, 20, 90);
   return { sender, packets, queue, inventory: new BedrockInventory(sender) };
@@ -40,44 +45,44 @@ describe("Bedrock automation with the installed wire codec", () => {
   beforeEach(() => { vi.useFakeTimers(); vi.spyOn(process.stdout, "write").mockImplementation(() => true); });
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
-  it.each(["1.21.50", "1.21.130"])("holds and releases sneak using auth input in %s", version => {
+  it.each(["1.21.50", "1.21.130", "1.26.40", "1.26.51"])("holds and releases sneak using auth input in %s", version => {
     const { sender, packets } = setup(version);
     sender.setSneak(true);
     for (let i = 0; i < 4; i++) expect(sender.tickInput()).toBe(true);
     expect(packets).toHaveLength(4);
     for (const { params } of packets) {
-      expect(params.input_data.sneak_down).toBe(true);
+      expect(inputFlag(params, "sneak_down")).toBe(true);
       expect(params.position.x).toBe(12);
       expect(params.move_vector).toEqual({ x: 0, z: 0 });
     }
-    expect(packets[0].params.input_data.start_sneaking).toBe(true);
-    expect(packets[1].params.input_data.start_sneaking).toBe(false);
+    expect(inputFlag(packets[0].params, "start_sneaking")).toBe(true);
+    expect(inputFlag(packets[1].params, "start_sneaking")).toBe(false);
     sender.updatePosition({ x: 100, y: 65.62, z: 30 }, 0, 0, true);
     sender.setSneak(true); sender.tickInput();
-    expect(packets.at(-1)!.params.input_data.handled_teleport).toBe(true);
-    expect(packets.at(-1)!.params.input_data.start_sneaking).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "handled_teleport")).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "start_sneaking")).toBe(true);
     sender.setSneak(false); sender.tickInput();
-    expect(packets.at(-1)!.params.input_data.stop_sneaking).toBe(true);
-    expect(packets.at(-1)!.params.input_data.sneak_down).toBe(false);
+    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "sneak_down")).toBe(false);
     expect(packets.at(-1)!.params.tick).toBe(6n);
   });
 
-  it.each(["1.21.50", "1.21.130"])("resynchronizes Geyser's cached shift across distinct input ticks in %s", version => {
+  it.each(["1.21.50", "1.21.130", "1.26.40", "1.26.51"])("resynchronizes Geyser's cached shift across distinct input ticks in %s", version => {
     const { sender, packets, queue } = setup(version);
     sender.setSneak(true); sender.tickInput();
     sender.setSneak(true, true);
     queue.mockImplementationOnce(() => { throw new Error("temporary failure"); });
     expect(sender.tickInput()).toBe(false);
     expect(sender.tickInput()).toBe(true);
-    expect(packets.at(-1)!.params.input_data.stop_sneaking).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(true);
     // A metadata reply to the release must not keep restarting the release.
     sender.setSneak(true, true); sender.tickInput();
-    expect(packets.at(-1)!.params.input_data.start_sneaking).toBe(true);
-    expect(packets.at(-1)!.params.input_data.sneak_current_raw).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "start_sneaking")).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "sneak_current_raw")).toBe(true);
     const downstream: boolean[] = [];
     let cached = false;
     for (const { params } of packets) {
-      const next = params.input_data.stop_sneaking ? false : params.input_data.start_sneaking ? true : cached;
+      const next = inputFlag(params, "stop_sneaking") ? false : inputFlag(params, "start_sneaking") ? true : cached;
       if (next !== cached) downstream.push(next);
       cached = next;
     }
@@ -85,7 +90,17 @@ describe("Bedrock automation with the installed wire codec", () => {
     expect(packets[2].params.tick).toBeGreaterThan(packets[1].params.tick);
     sender.setSneak(true, true); sender.tickInput();
     sender.setSneak(false); sender.tickInput(); sender.tickInput();
-    expect(packets.slice(-2).every(packet => !packet.params.input_data.sneak_down)).toBe(true);
+    expect(packets.slice(-2).every(packet => !inputFlag(packet.params, "sneak_down"))).toBe(true);
+  });
+
+  it.each(["1.26.40", "1.26.51"])("encodes modern %s crouch as a list of active flags", version => {
+    const { sender, packets } = setup(version);
+    sender.setSneak(true); sender.tickInput();
+    expect(packets[0].params.input_data).toEqual(expect.arrayContaining(["sneaking", "sneak_down", "start_sneaking", "sneak_current_raw"]));
+    expect(packets[0].params.input_data).not.toContain("stop_sneaking");
+    sender.setSneak(false); sender.tickInput();
+    expect(packets[1].params.input_data).toEqual(expect.arrayContaining(["stop_sneaking", "sneak_released_raw"]));
+    expect(packets[1].params.input_data).not.toContain("sneak_down");
   });
 
   it("uses only decoded server flags for the local player's crouch confirmation", () => {
@@ -104,20 +119,20 @@ describe("Bedrock automation with the installed wire codec", () => {
     behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
     behavior.onSneakStatus(true); vi.advanceTimersByTime(2100);
     behavior.onSneakStatus(false); behavior.onTick();
-    expect(packets.at(-1)!.params.input_data.stop_sneaking).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(true);
     behavior.onSneakStatus(false); vi.advanceTimersByTime(50); behavior.onTick();
-    expect(packets.at(-1)!.params.input_data.start_sneaking).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "start_sneaking")).toBe(true);
     // Delayed metadata from our deliberate release arrives after the press.
     vi.advanceTimersByTime(300); behavior.onSneakStatus(false); behavior.onTick();
-    expect(packets.at(-1)!.params.input_data.sneak_down).toBe(true);
-    expect(packets.at(-1)!.params.input_data.stop_sneaking).toBe(false);
+    expect(inputFlag(packets.at(-1)!.params, "sneak_down")).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(false);
     behavior.onSneakStatus(true); vi.advanceTimersByTime(2100); behavior.onTick();
-    expect(packets.at(-1)!.params.input_data.sneak_down).toBe(true);
-    expect(packets.at(-1)!.params.input_data.stop_sneaking).toBe(false);
+    expect(inputFlag(packets.at(-1)!.params, "sneak_down")).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(false);
     behavior.markTeleported(); vi.advanceTimersByTime(150); behavior.onTick();
-    expect(packets.at(-1)!.params.input_data.stop_sneaking).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(true);
     vi.advanceTimersByTime(50); behavior.onTick();
-    expect(packets.at(-1)!.params.input_data.start_sneaking).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "start_sneaking")).toBe(true);
   });
 
   it("retries input after a transient serialization failure", () => {
@@ -126,10 +141,10 @@ describe("Bedrock automation with the installed wire codec", () => {
     queue.mockImplementationOnce(() => { throw new Error("not ready"); });
     expect(sender.tickInput()).toBe(false);
     expect(sender.tickInput()).toBe(true);
-    expect(packets[0].params.input_data.start_sneaking).toBe(true);
+    expect(inputFlag(packets[0].params, "start_sneaking")).toBe(true);
   });
 
-  it.each(["1.21.50", "1.21.130"])("transfers actual stacks and closes only after matching acknowledgements in %s", version => {
+  it.each(["1.21.50", "1.21.130", "1.26.40", "1.26.51"])("transfers actual stacks and closes only after matching acknowledgements in %s", version => {
     const { inventory, packets } = setup(version);
     open(inventory, [stack(99), stack(101, 32)]);
     inventory.tick(Date.now());
@@ -270,11 +285,11 @@ describe("Bedrock automation with the installed wire codec", () => {
     behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
     for (const message of ["<HugoSMP> Du wurdest zu deinem Home Farm teleportiert!", "[HugoSMP] Steve hat deine Teleportations-Anfrage angenommen!"]) {
       behavior.onChat(null, message); behavior.onTick();
-      expect(packets.at(-1)!.params.input_data.stop_sneaking).toBe(true);
+      expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(true);
       vi.advanceTimersByTime(50); behavior.onTick();
-      expect(packets.at(-1)!.params.input_data.start_sneaking).toBe(true);
+      expect(inputFlag(packets.at(-1)!.params, "start_sneaking")).toBe(true);
       vi.advanceTimersByTime(2100); behavior.onTick();
-      expect(packets.at(-1)!.params.input_data.start_sneaking).toBe(true);
+      expect(inputFlag(packets.at(-1)!.params, "start_sneaking")).toBe(true);
     }
   });
 });

@@ -146,18 +146,23 @@ export class BotSender {
   tickInput(): boolean {
     if (this.runtimeEntityId == null || !this.position) return false;
     const heldSneak = this.sneaking && !this.releaseForSneakResync;
+    const inputFlags = {
+      sneaking: heldSneak, sneak_down: heldSneak, sneak_current_raw: heldSneak,
+      persist_sneak: heldSneak,
+      start_sneaking: heldSneak && this.sneakEdge,
+      stop_sneaking: !heldSneak && this.sneakEdge,
+      sneak_pressed_raw: heldSneak && this.sneakEdge,
+      sneak_released_raw: !heldSneak && this.sneakEdge,
+      handled_teleport: this.handledTeleport,
+    };
     const sent = this.packet("player_auth_input", {
       pitch: this.pitch, yaw: this.yaw, head_yaw: this.yaw, position: this.position,
       move_vector: { x: 0, z: 0 }, analogue_move_vector: { x: 0, z: 0 }, raw_move_vector: { x: 0, z: 0 },
-      input_data: {
-        sneaking: heldSneak, sneak_down: heldSneak, sneak_current_raw: heldSneak,
-        persist_sneak: heldSneak,
-        start_sneaking: heldSneak && this.sneakEdge,
-        stop_sneaking: !heldSneak && this.sneakEdge,
-        sneak_pressed_raw: heldSneak && this.sneakEdge,
-        sneak_released_raw: !heldSneak && this.sneakEdge,
-        handled_teleport: this.handledTeleport,
-      },
+      // From 26.40 onward the codec expects a list, not a bitflags object;
+      // passing the old shape serializes an empty list and silently loses crouch.
+      input_data: this.client.versionGreaterThanOrEqualTo?.("1.26.40")
+        ? Object.entries(inputFlags).filter(([, enabled]) => enabled).map(([flag]) => flag)
+        : inputFlags,
       input_mode: "mouse", play_mode: "normal", interaction_model: "crosshair",
       interact_rotation: { x: this.pitch, z: this.yaw },
       tick: ++this.inputTick, delta: { x: 0, y: 0, z: 0 },

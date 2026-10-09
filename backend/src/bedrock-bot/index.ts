@@ -18,6 +18,8 @@ import { emit, type Command, type Config } from "./protocol.js";
 import { BotSender } from "./send.js";
 import { BehaviorState } from "./behaviors.js";
 import { BedrockConnectionProgress, bedrockLoginFailure } from "./connection.js";
+import { bedrockVersion } from "./version.js";
+import { discoverBedrockServer } from "./discovery.js";
 
 const CONNECT_TIMEOUT_MS =
   (Number.parseInt(process.env.BOT_CONNECT_TIMEOUT_SECS ?? "", 10) || 45) * 1000;
@@ -62,6 +64,14 @@ async function main(): Promise<void> {
 
   let client: ReturnType<typeof createClient>;
   try {
+    // The library's auto mode compares the display version literally ("26.51")
+    // and otherwise silently falls back to an older protocol ("1.26.40").
+    // Resolve the advertised wire protocol first, then pass a concrete version.
+    const advertised = await discoverBedrockServer(config.host, config.port || 19132, Math.min(CONNECT_TIMEOUT_MS, 5000));
+    const selectedVersion = bedrockVersion(advertised, version);
+    emit({ type: "behavior_log", message: `Bedrock: Server protocol ${advertised.protocol}; using client version ${selectedVersion}${version ? " (configured)" : " (auto)"}` });
+    progress.advance("authentication");
+    emit({ type: "behavior_log", message: "Bedrock: Server discovered; authenticating Microsoft/Xbox session" });
     client = createClient({
       host: config.host,
       port: config.port || 19132,
@@ -75,7 +85,10 @@ async function main(): Promise<void> {
       // backend (compiled in the Docker image; see backend/Dockerfile).
       // The installed library's declarations still spell this in the singular.
       ...{ useRaknetWorkers: false },
-      ...(version ? { version: version as never } : {}),
+      version: selectedVersion as never,
+      // Discovery already completed over a separate, closed UDP socket.
+      // Keep the native peer solely for the actual connection.
+      skipPing: true,
       ...(isMicrosoft ? { profilesFolder: config.cache_dir } : {}),
       connectTimeout: CONNECT_TIMEOUT_MS,
       // Default library logs are plain stdout and get discarded by our NDJSON
@@ -129,15 +142,15 @@ async function main(): Promise<void> {
   };
 
   // --- Lifecycle events ---
-  c.on("connect_allowed", () => {
-    if (progress.advance("authentication")) emit({ type: "behavior_log", message: "Bedrock: Server discovered; authenticating Microsoft/Xbox session" });
-  });
-  c.on("session", () => {
-    progress.advance("transport");
+  const onSession = () => {
+    if (!progress.advance("transport")) return;
     const profile = (client as unknown as { profile?: { name: string; uuid: string } }).profile;
     if (profile?.name) emit({ type: "profile", username: profile.name, uuid: profile.uuid ?? "" });
     emit({ type: "behavior_log", message: "Bedrock: Session ready; establishing RakNet/UDP connection" });
-  });
+  };
+  c.on("session", onSession);
+  // Offline sessions can be ready synchronously when skipPing is enabled.
+  if ((client as unknown as { profile?: { name?: string } }).profile?.name) onSession();
   c.on("loggingIn", () => {
     progress.advance("login");
     emit({ type: "behavior_log", message: "Bedrock: Transport connected; sending server login" });
