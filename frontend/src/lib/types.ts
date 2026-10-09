@@ -105,6 +105,15 @@ export interface ConsoleLogEntry {
   createdAt: string;
 }
 
+export interface EarningsHistory {
+  range: "30m" | "1h" | "6h" | "24h";
+  start: string;
+  end: string;
+  bucketMs: number;
+  total: number;
+  points: { at: string; amount: number }[];
+}
+
 export interface SystemStatus {
   uptimeSeconds: number;
   systemUptimeSeconds: number;

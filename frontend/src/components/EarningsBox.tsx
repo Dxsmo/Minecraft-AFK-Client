@@ -1,16 +1,9 @@
 import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { apiFetch } from "../lib/api";
+import type { EarningsHistory as History } from "../lib/types";
 
 type Range = "1h" | "6h" | "24h";
 interface Earnings { last5m: number; last1h: number; last24h: number }
-interface History {
-  range: Range;
-  start: string;
-  end: string;
-  bucketMs: number;
-  total: number;
-  points: { at: string; amount: number }[];
-}
 const money = (amount: number) => `$${amount.toLocaleString("de-DE", { maximumFractionDigits: 2 })}`;
 const time = (at: string | number) => new Date(at).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 

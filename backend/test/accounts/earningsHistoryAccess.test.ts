@@ -22,7 +22,7 @@ beforeAll(async () => {
   } });
   accountId = account.id;
   await prisma.sellEarning.create({ data: { minecraftAccountId: accountId, amount: 42,
-    createdAt: new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000 - 1000) } });
+    createdAt: new Date(Math.floor(Date.now() / 300_000) * 300_000 - 1000) } });
   app = await buildApp();
 });
 afterAll(async () => {
@@ -31,14 +31,14 @@ afterAll(async () => {
   await prisma.user.deleteMany({ where: { id: { in: users } } });
 });
 
-it("exposes the graph only to admins and users assigned to the account", async () => {
-  const url = `/api/minecraft/accounts/${accountId}/earnings/history?range=6h`;
+it.each([['30m', 6], ['6h', 72]] as const)("exposes the %s graph only to admins and users assigned to the account", async (range, points) => {
+  const url = `/api/minecraft/accounts/${accountId}/earnings/history?range=${range}`;
   expect((await app.inject({ url })).statusCode).toBe(401);
   for (const cookie of cookies.slice(0, 2)) {
     const response = await app.inject({ url, headers: { cookie } });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ range: "6h", total: 42 });
-    expect(response.json().points).toHaveLength(72);
+    expect(response.json()).toMatchObject({ range, total: 42 });
+    expect(response.json().points).toHaveLength(points);
   }
   const response = await app.inject({ url, headers: { cookie: cookies[2] } });
   expect(response.statusCode).toBe(404);

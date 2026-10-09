@@ -111,7 +111,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
     if (!(await accountsService.getAccountForSession(req.session!, id))) {
       return reply.code(404).send({ error: "Account not found" });
     }
-    const query = parseOrReject(z.object({ range: z.enum(["1h", "6h", "24h"]).default("1h") }).strict(), req.query, reply);
+    const query = parseOrReject(z.object({ range: z.enum(["30m", "1h", "6h", "24h"]).default("1h") }).strict(), req.query, reply);
     if (!query) return;
     reply.send(await accountsService.getEarningsHistory(id, query.range));
   });

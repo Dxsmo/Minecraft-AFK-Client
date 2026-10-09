@@ -216,8 +216,9 @@ export async function getEarningsSummary(id: string) {
 }
 
 
-export type EarningsRange = "1h" | "6h" | "24h";
+export type EarningsRange = "30m" | "1h" | "6h" | "24h";
 const EARNINGS_WINDOWS = {
+  "30m": { durationMs: 30 * 60_000, bucketMs: 5 * 60_000 },
   "1h": { durationMs: 60 * 60_000, bucketMs: 5 * 60_000 },
   "6h": { durationMs: 6 * 60 * 60_000, bucketMs: 5 * 60_000 },
   "24h": { durationMs: 24 * 60 * 60_000, bucketMs: 5 * 60_000 },

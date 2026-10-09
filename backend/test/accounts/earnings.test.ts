@@ -41,7 +41,7 @@ describe("rolling sell revenue", () => {
     expect(await getEarningsSummary(account.id)).toEqual({ last5m: 0, last1h: 0, last24h: 0 });
   });
 
-  it.each([['1h', 12, 5], ['6h', 72, 5], ['24h', 288, 5]] as const)("aggregates %s into completed clock-aligned intervals with cents and empty gaps", async (range, buckets, minutes) => {
+  it.each([['30m', 6, 5], ['1h', 12, 5], ['6h', 72, 5], ['24h', 288, 5]] as const)("aggregates %s into completed clock-aligned intervals with cents and empty gaps", async (range, buckets, minutes) => {
     const account = await prisma.minecraftAccount.create({ data: { name: `Graph_${range}`, serverHost: "localhost" } });
     const other = await prisma.minecraftAccount.create({ data: { name: `Other_${range}`, serverHost: "localhost" } });
     const now = Date.UTC(2026, 9, 9, 13, 47, 31), bucketMs = minutes * 60_000;
@@ -78,7 +78,7 @@ describe("rolling sell revenue", () => {
     expect(history.points.every(point => point.amount === 0)).toBe(true);
   });
 
-  it.each([['1h', 5], ['6h', 5], ['24h', 5]] as const)("keeps %s stable inside an interval and includes a sale exactly once after the boundary", async (range, minutes) => {
+  it.each([['30m', 5], ['1h', 5], ['6h', 5], ['24h', 5]] as const)("keeps %s stable inside an interval and includes a sale exactly once after the boundary", async (range, minutes) => {
     const account = await prisma.minecraftAccount.create({ data: { name: `Aligned_${range}`, serverHost: "localhost" } });
     const bucketMs = minutes * 60_000, boundary = Date.UTC(2026, 9, 9, 13);
     await prisma.sellEarning.createMany({ data: [
