@@ -294,10 +294,6 @@ export function DashboardPage() {
                         </span>
                       )}
                     </div>
-                    <p className="truncate text-[10px] sm:mt-0.5 sm:text-xs" style={{ color: "var(--text-subtle)" }}>
-                      {account.serverHost}
-                      {account.minecraftVersion ? ` · ${account.minecraftVersion}` : " · auto"}
-                    </p>
                     <NotesField accountId={account.id} initial={account.notes ?? ""} disabled={isBlurred} />
                   </div>
 
@@ -346,6 +342,10 @@ export function DashboardPage() {
                   <div className="account-details-content"
                     style={{ filter: isBlurred ? "blur(6px)" : undefined, userSelect: isBlurred ? "none" : undefined }}>
                     <div className="account-details-meta min-w-0">
+                      <p className="account-server w-full truncate text-[10px]" style={{ color: "var(--text-subtle)" }}>
+                        {account.serverHost}
+                        {account.minecraftVersion ? ` · ${account.minecraftVersion}` : " · auto"}
+                      </p>
                       <p className="account-last-sale text-[11px]" style={{ color: "var(--text-muted)" }}
                         title={!isBlurred && account.lastSellAt ? new Date(account.lastSellAt).toLocaleString("de-DE") : undefined}>
                         Letzter Verkauf: <span className="whitespace-nowrap tabular-nums">{saleAge(account.lastSellAt, now)}</span>
