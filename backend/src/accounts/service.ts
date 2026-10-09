@@ -40,6 +40,7 @@ const publicAccountSelect = {
   autoSellEnabled: true,
   autoSellIntervalSeconds: true,
   autoSellCommand: true,
+  lastSellAt: true,
   spawnerType: true,
   spawnerActions: true,
   spawnerClearEnabled: true,

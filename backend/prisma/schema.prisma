@@ -150,6 +150,8 @@ model MinecraftAccount {
   autoSellEnabled            Boolean      @default(false)
   autoSellIntervalSeconds    Float        @default(60)
   autoSellCommand            String       @default("/sell")
+  // Last confirmed sale survives earnings-history cleanup and client restarts.
+  lastSellAt                 DateTime?
   // Legacy daily auto-home scheduler columns, unused.
   dailyCommandEnabled        Boolean      @default(false)
   dailyCommandTimes          String       @default("[]")

@@ -64,6 +64,9 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
     subscribe(onAccountImageUpdated((update) => {
       run(async (session) => { if (await canAccessAccount(session, update.id)) send({ type: "account_image", ...update }); });
     }));
+    subscribe(clientManager.onSellEvent((update) => {
+      run(async (session) => { if (await canAccessAccount(session, update.id)) send({ type: "account_sale", ...update }); });
+    }));
   });
 
   app.get("/ws/namesniper/:id", { websocket: true }, (socket, req) => {

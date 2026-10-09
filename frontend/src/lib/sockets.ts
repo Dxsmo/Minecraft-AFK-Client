@@ -120,12 +120,18 @@ export function useAccountConsole(accountId: string | undefined) {
 }
 
 /** Live status snapshots for every account visible to the current user. */
-export function useDashboardSocket(onImageUpdated?: (update: { id: string; imageUrl: string }) => void, onRefresh?: () => void) {
+export function useDashboardSocket(
+  onImageUpdated?: (update: { id: string; imageUrl: string }) => void,
+  onRefresh?: () => void,
+  onSellUpdated?: (update: { id: string; lastSellAt: string }) => void,
+) {
   const [statuses, setStatuses] = useState<Record<string, LiveStatus>>({});
   const imageCallback = useRef(onImageUpdated);
   const refreshCallback = useRef(onRefresh);
+  const sellCallback = useRef(onSellUpdated);
   imageCallback.current = onImageUpdated;
   refreshCallback.current = onRefresh;
+  sellCallback.current = onSellUpdated;
 
   useEffect(() => {
     let cancelled = false;
@@ -151,6 +157,8 @@ export function useDashboardSocket(onImageUpdated?: (update: { id: string; image
           setStatuses((prev) => ({ ...prev, [msg.status.id]: msg.status }));
         } else if (msg.type === "account_image") {
           imageCallback.current?.({ id: msg.id, imageUrl: msg.imageUrl });
+        } else if (msg.type === "account_sale") {
+          sellCallback.current?.({ id: msg.id, lastSellAt: msg.lastSellAt });
         }
       };
     }

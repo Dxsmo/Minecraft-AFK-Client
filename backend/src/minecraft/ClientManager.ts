@@ -9,6 +9,7 @@ import type { MinecraftAccount } from "@prisma/client";
 
 export type ConsoleEventListener = (event: ConsoleEvent) => void;
 export type StatusEventListener = (status: ClientStatusSnapshot) => void;
+export type SellEventListener = (update: { id: string; lastSellAt: string }) => void;
 /** Raw incoming chat/server line, formatting stripped, sender prefix removed. */
 export type ChatEventListener = (event: { minecraftAccountId: string; message: string }) => void;
 
@@ -47,6 +48,7 @@ export class ClientManager {
   private clients = new Map<string, MinecraftClient>();
   private consoleListeners = new Set<ConsoleEventListener>();
   private statusListeners = new Set<StatusEventListener>();
+  private sellListeners = new Set<SellEventListener>();
   private chatListeners = new Set<ChatEventListener>();
 
   onChatEvent(listener: ChatEventListener): () => void {
@@ -62,6 +64,11 @@ export class ClientManager {
   onStatusEvent(listener: StatusEventListener): () => void {
     this.statusListeners.add(listener);
     return () => this.statusListeners.delete(listener);
+  }
+
+  onSellEvent(listener: SellEventListener): () => void {
+    this.sellListeners.add(listener);
+    return () => this.sellListeners.delete(listener);
   }
 
   /** Loads all accounts from the DB and registers a client for each, then
@@ -133,8 +140,23 @@ export class ClientManager {
       }
     });
     client.on("earning", ({ minecraftAccountId, amount }: { minecraftAccountId: string; amount: number }) => {
-      prisma.sellEarning
-        .create({ data: { minecraftAccountId, amount } })
+      const createdAt = new Date();
+      prisma.$transaction([
+        prisma.sellEarning.create({ data: { minecraftAccountId, amount, createdAt } }),
+        prisma.minecraftAccount.updateMany({
+          where: { id: minecraftAccountId, OR: [{ lastSellAt: null }, { lastSellAt: { lte: createdAt } }] },
+          data: { lastSellAt: createdAt },
+        }),
+      ])
+        .then(() => {
+          for (const listener of this.sellListeners) {
+            try {
+              listener({ id: minecraftAccountId, lastSellAt: createdAt.toISOString() });
+            } catch (err) {
+              logger.error({ err }, "Sell listener threw");
+            }
+          }
+        })
         .catch((err) => {
           if (err?.code !== "P2025") logger.error({ err }, "Failed to persist sell earning");
         });

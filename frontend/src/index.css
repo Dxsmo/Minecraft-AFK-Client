@@ -193,7 +193,8 @@ body {
   }
   @media (max-width: 639px) {
     .account-row {
-      grid-template-columns: 28px var(--account-height) minmax(0, 1fr);
+      --account-height: 136px;
+      grid-template-columns: 28px min(112px, 25vw) minmax(0, 1fr);
       grid-template-rows: minmax(0, 1fr) 24px;
       column-gap: 8px;
       padding-right: 8px;
@@ -211,7 +212,7 @@ body {
   }
   @media (max-width: 359px) {
     .account-row {
-      grid-template-columns: 24px var(--account-height) minmax(0, 1fr);
+      grid-template-columns: 24px min(112px, 25vw) minmax(0, 1fr);
       column-gap: 4px;
       padding-right: 6px;
     }

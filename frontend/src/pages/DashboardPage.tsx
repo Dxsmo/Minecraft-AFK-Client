@@ -16,6 +16,8 @@ export function DashboardPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [reorderBusy, setReorderBusy] = useState(false);
+  const [now, setNow] = useState(Date.now);
+  const lastSales = useRef<Record<string, string>>({});
   // Locally censor individual account cards, e.g. while screen-sharing.
   // Persisted per website user so the preference survives reloads.
   const blurKey = user ? `afk.blurredAccounts.${user.id}` : null;
@@ -23,7 +25,26 @@ export function DashboardPage() {
   function updateImage(update: { id: string; imageUrl: string }) {
     setAccounts((prev) => prev?.map((account) => account.id === update.id ? { ...account, imageUrl: update.imageUrl } : account) ?? null);
   }
-  const liveStatuses = useDashboardSocket(updateImage, () => void load());
+  function updateSale(update: { id: string; lastSellAt: string }) {
+    const previous = lastSales.current[update.id];
+    if (previous && Date.parse(previous) >= Date.parse(update.lastSellAt)) return;
+    lastSales.current[update.id] = update.lastSellAt;
+    setAccounts((prev) => prev?.map((account) => account.id === update.id
+      && (!account.lastSellAt || Date.parse(account.lastSellAt) < Date.parse(update.lastSellAt))
+      ? { ...account, lastSellAt: update.lastSellAt } : account) ?? null);
+    setNow(Date.now());
+  }
+  const liveStatuses = useDashboardSocket(updateImage, () => void load(), updateSale);
+
+  useEffect(() => {
+    const refresh = () => { if (!document.hidden) setNow(Date.now()); };
+    const timer = setInterval(refresh, 1000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, []);
 
   useEffect(() => {
     if (!blurKey) return;
@@ -49,7 +70,12 @@ export function DashboardPage() {
 
   async function load() {
     try {
-      setAccounts(await api.get<MinecraftAccount[]>("/minecraft/accounts"));
+      const loaded = await api.get<MinecraftAccount[]>("/minecraft/accounts");
+      setAccounts(loaded.map((account) => {
+        const liveSale = lastSales.current[account.id];
+        return liveSale && (!account.lastSellAt || Date.parse(liveSale) > Date.parse(account.lastSellAt))
+          ? { ...account, lastSellAt: liveSale } : account;
+      }));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to load accounts");
     }
@@ -246,6 +272,12 @@ export function DashboardPage() {
                     {account.serverHost}
                     {account.minecraftVersion ? ` · ${account.minecraftVersion}` : " · auto"}
                   </p>
+                  <p className="account-last-sale mt-0.5 flex flex-wrap gap-x-1 text-[10px] sm:text-xs"
+                    style={{ color: "var(--text-muted)" }}
+                    title={!isBlurred && account.lastSellAt ? new Date(account.lastSellAt).toLocaleString("de-DE") : undefined}>
+                    <span className="whitespace-nowrap">Letzter Verkauf</span>
+                    <span className="whitespace-nowrap tabular-nums">{saleAge(account.lastSellAt, now)}</span>
+                  </p>
                   <NotesField accountId={account.id} initial={account.notes ?? ""} disabled={isBlurred} />
                 </div>
 
@@ -306,6 +338,20 @@ export function DashboardPage() {
       )}
     </div>
   );
+}
+
+/** Age of the most recent confirmed sale, including accounts currently offline. */
+function saleAge(timestamp: string | null, now: number): string {
+  if (!timestamp || !Number.isFinite(Date.parse(timestamp))) return "– noch keiner";
+  const seconds = Math.max(0, Math.floor((now - Date.parse(timestamp)) / 1000));
+  if (seconds < 1) return "gerade eben";
+  if (seconds < 60) return `vor ${seconds} ${seconds === 1 ? "Sekunde" : "Sekunden"}`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `vor ${minutes} ${minutes === 1 ? "Minute" : "Minuten"}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `vor ${hours} ${hours === 1 ? "Stunde" : "Stunden"}`;
+  const days = Math.floor(hours / 24);
+  return `vor ${days} ${days === 1 ? "Tag" : "Tagen"}`;
 }
 
 /** Inline, debounced-autosave note line for an account (no save button). */

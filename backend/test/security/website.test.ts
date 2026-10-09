@@ -18,6 +18,7 @@ let users: {id:string;username:string}[] = [], accounts: {id:string;name:string}
 let sessions: {sessionId:string;csrfToken:string}[] = [];
 const sockets: WebSocket[] = [];
 const statusListeners = new Set<(status:any) => void>(), consoleListeners = new Set<(event:any) => void>(), sniperListeners = new Set<(status:any) => void>();
+const sellListeners = new Set<(event: { id: string; lastSellAt: string }) => void>();
 const sendCommand = vi.fn(() => true);
 const headers = (index = 0, csrf = true) => ({ cookie: `${config.session.cookieName}=${sessions[index].sessionId}`, ...(csrf ? {"x-csrf-token": sessions[index].csrfToken} : {}) });
 const snapshot = (account: {id:string;name:string}) => ({ id:account.id, name:account.name, status:"ONLINE", serverHost:"minecraft.example", serverPort:25565,
@@ -42,6 +43,7 @@ beforeAll(async()=>{
   vi.spyOn(clientManager,"get").mockImplementation(id=>({getStatus:()=>snapshot(accounts.find(a=>a.id===id)!),sendCommand}) as any);
   vi.spyOn(clientManager,"onStatusEvent").mockImplementation(cb=>{statusListeners.add(cb);return()=>{statusListeners.delete(cb);};});
   vi.spyOn(clientManager,"onConsoleEvent").mockImplementation(cb=>{consoleListeners.add(cb);return()=>{consoleListeners.delete(cb);};});
+  vi.spyOn(clientManager,"onSellEvent").mockImplementation(cb=>{sellListeners.add(cb);return()=>{sellListeners.delete(cb);};});
   vi.spyOn(sniperManager,"getAllStatuses").mockReturnValue([{id:"sniper-secret",msaSignIn:{userCode:"SNIPER-SECRET"}}] as any);
   vi.spyOn(sniperManager,"onStatusEvent").mockImplementation(cb=>{sniperListeners.add(cb);return()=>{sniperListeners.delete(cb);};});
   app = await buildApp();
@@ -205,6 +207,29 @@ it("filters the initial dashboard snapshot and live events, including Microsoft 
   const admin=await socket("/ws/dashboard",2);
   await waitFor(()=>admin.messages.some(m=>m.type==="statuses"));
   expect(admin.messages[0].statuses).toHaveLength(2);
+});
+
+it("exposes last-sale times only to authorized viewers and rechecks dashboard access for every sale",async()=>{
+  const lastSellAt = new Date(Date.now() - 8_000).toISOString();
+  await prisma.minecraftAccount.update({where:{id:accounts[0].id},data:{lastSellAt:new Date(lastSellAt)}});
+  const listed = await app.inject({url:"/api/minecraft/accounts",headers:headers()});
+  expect(listed.json()).toHaveLength(1);
+  expect(listed.json()[0].lastSellAt).toBe(lastSellAt);
+  const foreign = await app.inject({url:`/api/minecraft/accounts/${accounts[0].id}`,headers:headers(1)});
+  expect(foreign.statusCode).toBe(404);
+  const connection = await socket("/ws/dashboard"), admin = await socket("/ws/dashboard",2);
+  await waitFor(()=>connection.messages.some(m=>m.type==="statuses") && admin.messages.some(m=>m.type==="statuses"));
+  for (const listener of sellListeners) {
+    listener({id:accounts[1].id,lastSellAt});
+    listener({id:accounts[0].id,lastSellAt});
+  }
+  await waitFor(()=>connection.messages.some(m=>m.type==="account_sale") && admin.messages.filter(m=>m.type==="account_sale").length===2);
+  expect(connection.messages.filter(m=>m.type==="account_sale")).toEqual([{type:"account_sale",id:accounts[0].id,lastSellAt}]);
+  await prisma.userMinecraftAccount.deleteMany({where:{minecraftAccountId:accounts[0].id}});
+  for (const listener of sellListeners) listener({id:accounts[0].id,lastSellAt:"2026-10-09T23:45:00.000Z"});
+  // The admin's matching event confirms that the queued broadcasts were processed.
+  await waitFor(()=>admin.messages.some(m=>m.lastSellAt==="2026-10-09T23:45:00.000Z"));
+  expect(connection.messages.filter(m=>m.type==="account_sale")).toHaveLength(1);
 });
 
 it("rejects missing, null and foreign origins for cookie-authenticated sockets",async()=>{

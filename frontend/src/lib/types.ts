@@ -83,6 +83,7 @@ export interface MinecraftAccount {
   autoSellEnabled: boolean;
   autoSellIntervalSeconds: number;
   autoSellCommand: string;
+  lastSellAt: string | null;
   spawnerType: string;
   spawnerActions: Record<string, SpawnerAction>;
   spawnerClearEnabled: boolean;
