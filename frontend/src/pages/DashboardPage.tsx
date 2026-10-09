@@ -9,6 +9,7 @@ import { CreateAccountDialog } from "../components/CreateAccountDialog";
 import { AccountImageButton } from "../components/AccountImageButton";
 import { AccountCreatorAvatar } from "../components/AccountCreatorAvatar";
 import { AccountSellPreview } from "../components/AccountSellPreview";
+import { AccountDetails } from "../components/AccountDetails";
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -39,14 +40,26 @@ export function DashboardPage() {
   const liveStatuses = useDashboardSocket(updateImage, () => void load(), updateSale);
 
   useEffect(() => {
-    const refresh = () => { if (!document.hidden) setNow(Date.now()); };
-    const timer = setInterval(refresh, 1000);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timestamps = (accounts ?? []).map(account => Date.parse(account.lastSellAt ?? "")).filter(Number.isFinite);
+    const refresh = () => {
+      clearTimeout(timer);
+      if (document.hidden) return;
+      const current = Date.now();
+      setNow(current);
+      if (timestamps.length) {
+        // Each account advances at its own sale + 30s boundary, even when other accounts keep selling.
+        const delay = Math.min(...timestamps.map(at => at > current ? at - current + 30_000 : 30_000 - (current - at) % 30_000));
+        timer = setTimeout(refresh, delay);
+      }
+    };
+    refresh();
     document.addEventListener("visibilitychange", refresh);
     return () => {
-      clearInterval(timer);
+      clearTimeout(timer);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, []);
+  }, [accounts]);
 
   useEffect(() => {
     if (!blurKey) return;
@@ -329,23 +342,21 @@ export function DashboardPage() {
                     </button>
                   </div>
                 </div>
-                <div id={detailsId} className="account-details" aria-hidden={!expanded || isBlurred} inert={!expanded}>
-                  <div className="account-details-clip">
-                    <div className="account-details-content"
-                      style={{ filter: isBlurred ? "blur(6px)" : undefined, userSelect: isBlurred ? "none" : undefined }}>
-                      <div className="account-details-meta min-w-0">
-                        <p className="account-last-sale text-[11px]" style={{ color: "var(--text-muted)" }}
-                          title={!isBlurred && account.lastSellAt ? new Date(account.lastSellAt).toLocaleString("de-DE") : undefined}>
-                          Letzter Verkauf <span className="whitespace-nowrap tabular-nums">{saleAge(account.lastSellAt, now)}</span>
-                        </p>
-                        <p className="account-created-by truncate text-[10px]" style={{ color: "var(--text-subtle)" }}>
-                          Erstellt von <span style={{ color: "var(--text-muted)" }}>{account.createdBy?.username ?? "unbekannt"}</span>
-                        </p>
-                      </div>
-                      <AccountSellPreview accountId={account.id} active={expanded} blurred={isBlurred} />
+                <AccountDetails id={detailsId} expanded={expanded} blurred={isBlurred}>
+                  <div className="account-details-content"
+                    style={{ filter: isBlurred ? "blur(6px)" : undefined, userSelect: isBlurred ? "none" : undefined }}>
+                    <div className="account-details-meta min-w-0">
+                      <p className="account-last-sale text-[11px]" style={{ color: "var(--text-muted)" }}
+                        title={!isBlurred && account.lastSellAt ? new Date(account.lastSellAt).toLocaleString("de-DE") : undefined}>
+                        Letzter Verkauf: <span className="whitespace-nowrap tabular-nums">{saleAge(account.lastSellAt, now)}</span>
+                      </p>
+                      <p className="account-created-by truncate text-[10px]" style={{ color: "var(--text-subtle)" }}>
+                        Erstellt von <span style={{ color: "var(--text-muted)" }}>{account.createdBy?.username ?? "unbekannt"}</span>
+                      </p>
                     </div>
+                    <AccountSellPreview accountId={account.id} active={expanded} blurred={isBlurred} />
                   </div>
-                </div>
+                </AccountDetails>
               </div>
             );
           })}
@@ -367,16 +378,16 @@ export function DashboardPage() {
 
 /** Age of the most recent confirmed sale, including accounts currently offline. */
 function saleAge(timestamp: string | null, now: number): string {
-  if (!timestamp || !Number.isFinite(Date.parse(timestamp))) return "– noch keiner";
-  const seconds = Math.max(0, Math.floor((now - Date.parse(timestamp)) / 1000));
-  if (seconds < 1) return "gerade eben";
-  if (seconds < 60) return `vor ${seconds} ${seconds === 1 ? "Sekunde" : "Sekunden"}`;
+  if (!timestamp || !Number.isFinite(Date.parse(timestamp))) return "noch keiner";
+  const seconds = Math.max(0, Math.floor((now - Date.parse(timestamp)) / 30_000) * 30);
+  if (seconds < 30) return "gerade eben";
+  if (seconds < 60) return `${seconds} Sek.`;
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `vor ${minutes} ${minutes === 1 ? "Minute" : "Minuten"}`;
+  if (minutes < 60) return `${minutes} Min.${seconds % 60 ? " 30 Sek." : ""}`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `vor ${hours} ${hours === 1 ? "Stunde" : "Stunden"}`;
+  if (hours < 24) return `${hours} Std.${minutes % 60 ? ` ${minutes % 60} Min.` : ""}`;
   const days = Math.floor(hours / 24);
-  return `vor ${days} ${days === 1 ? "Tag" : "Tagen"}`;
+  return `${days} ${days === 1 ? "Tag" : "Tage"}${hours % 24 ? ` ${hours % 24} Std.` : ""}`;
 }
 
 /** Inline, debounced-autosave note line for an account (no save button). */

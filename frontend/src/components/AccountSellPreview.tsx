@@ -3,9 +3,8 @@ import { apiFetch } from "../lib/api";
 import type { EarningsHistory } from "../lib/types";
 
 const intervalMs = 5 * 60_000;
-const money = (amount: number) => `$${amount.toLocaleString("de-DE", { maximumFractionDigits: 2 })}`;
+const money = (amount: number) => `$${(Math.round(amount / 1000) * 1000).toLocaleString("de-DE", { maximumFractionDigits: 0 })}`;
 const time = (at: string) => new Date(at).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-const axisMoney = (amount: number) => `$${new Intl.NumberFormat("de-DE", { notation: "compact", maximumFractionDigits: 1 }).format(amount)}`;
 
 /** Fetch only while open; preserve a completed interval's data across quick hovers. */
 export function AccountSellPreview({ accountId, active, blurred }: { accountId: string; active: boolean; blurred: boolean }) {
@@ -51,19 +50,17 @@ export function AccountSellPreview({ accountId, active, blurred }: { accountId: 
   }, [accountId, active]);
 
   const points = history?.points ?? [];
-  const height = 80, left = 4, right = 48, top = 7, bottom = 21;
+  const step = Math.max(1000, Math.ceil(Math.max(0, ...points.map(point => point.amount)) / 2000) * 1000);
+  const peak = step * 2;
+  const height = 80, left = 4, right = Math.max(48, money(peak).length * 6 + 12), top = 7, bottom = 21;
   const plotWidth = width - left - right, plotHeight = height - top - bottom;
-  const peak = Math.max(1, ...points.map(point => point.amount));
   const x = (index: number) => left + (index + 0.5) / points.length * plotWidth;
   const y = (amount: number) => top + (1 - amount / peak) * plotHeight;
   const line = points.map((point, index) => `${x(index)},${y(point.amount)}`).join(" ");
   const area = points.length ? `${x(0)},${y(0)} ${line} ${x(points.length - 1)},${y(0)}` : "";
 
   return <div ref={chart} className="account-sell-preview min-w-0">
-    <div className="mb-1 flex items-center justify-between gap-2 text-[10px]">
-      <span style={{ color: "var(--text-subtle)" }}>Verkäufe · letzte 30 Minuten</span>
-      <span className="shrink-0 font-medium tabular-nums" style={{ color: "var(--text)" }}>{history ? money(history.total) : "—"}</span>
-    </div>
+    <p className="mb-1 text-[10px]" style={{ color: "var(--text-subtle)" }}>Verkäufe · letzte 30 Minuten</p>
     {history ? <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img"
       aria-label="Verkaufsgraph der letzten 30 Minuten in 5-Minuten-Intervallen">
       <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -72,7 +69,7 @@ export function AccountSellPreview({ accountId, active, blurred }: { accountId: 
       </linearGradient></defs>
       {[0, peak / 2, peak].map(amount => <g key={amount}>
         <line x1={left} x2={width - right} y1={y(amount)} y2={y(amount)} stroke="var(--border)" />
-        <text x={width - right + 8} y={y(amount) + 3} fontSize="9" fill="var(--text-subtle)">{axisMoney(amount)}</text>
+        <text x={width - right + 8} y={y(amount) + 3} fontSize="9" fill="var(--text-subtle)">{money(amount)}</text>
       </g>)}
       <polygon points={area} fill={`url(#${gradientId})`} />
       <polyline points={line} fill="none" stroke="var(--accent-light)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
