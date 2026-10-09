@@ -21,7 +21,8 @@ beforeAll(async () => {
     name: `Graph_${randomUUID()}`, serverHost: "localhost", assignments: { create: { userId: users[1] } },
   } });
   accountId = account.id;
-  await prisma.sellEarning.create({ data: { minecraftAccountId: accountId, amount: 42 } });
+  await prisma.sellEarning.create({ data: { minecraftAccountId: accountId, amount: 42,
+    createdAt: new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000 - 1000) } });
   app = await buildApp();
 });
 afterAll(async () => {
@@ -37,7 +38,7 @@ it("exposes the graph only to admins and users assigned to the account", async (
     const response = await app.inject({ url, headers: { cookie } });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ range: "6h", total: 42 });
-    expect(response.json().points).toHaveLength(72);
+    expect(response.json().points).toHaveLength(6);
   }
   const response = await app.inject({ url, headers: { cookie: cookies[2] } });
   expect(response.statusCode).toBe(404);

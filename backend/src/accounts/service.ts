@@ -193,9 +193,9 @@ export async function getFullAccount(id: string) {
   return prisma.minecraftAccount.findUnique({ where: { id } });
 }
 
-/** Remove expired earnings independently of whether an account page is open. */
+/** Keep one extra hour so the oldest completed 24h graph bucket stays intact. */
 export async function pruneOldEarnings(now = Date.now()) {
-  return prisma.sellEarning.deleteMany({ where: { createdAt: { lt: new Date(now - 24 * 60 * 60_000) } } });
+  return prisma.sellEarning.deleteMany({ where: { createdAt: { lt: new Date(now - 25 * 60 * 60_000) } } });
 }
 
 /** Aggregate in SQLite: return three numbers rather than every sale in 24h. */
@@ -217,32 +217,32 @@ export async function getEarningsSummary(id: string) {
 
 export type EarningsRange = "1h" | "6h" | "24h";
 const EARNINGS_WINDOWS = {
-  "1h": { durationMs: 60 * 60_000, bucketMs: 60_000 },
-  "6h": { durationMs: 6 * 60 * 60_000, bucketMs: 5 * 60_000 },
-  "24h": { durationMs: 24 * 60 * 60_000, bucketMs: 15 * 60_000 },
+  "1h": { durationMs: 60 * 60_000, bucketMs: 5 * 60_000 },
+  "6h": { durationMs: 6 * 60 * 60_000, bucketMs: 60 * 60_000 },
+  "24h": { durationMs: 24 * 60 * 60_000, bucketMs: 60 * 60_000 },
 } as const;
 
-/** A bounded time series, aggregated in SQLite using the account/time index. */
+/** Completed clock-aligned intervals, aggregated with the account/time index. */
 export async function getEarningsHistory(id: string, range: EarningsRange, now = Date.now()) {
   const { durationMs, bucketMs } = EARNINGS_WINDOWS[range];
-  const start = now - durationMs;
+  const end = Math.floor(now / bucketMs) * bucketMs;
+  const start = end - durationMs;
   const count = durationMs / bucketMs;
   const rows = await prisma.$queryRaw<Array<{ bucket: number | bigint; cents: number | bigint }>>`
     SELECT CAST((CAST("createdAt" AS INTEGER) - ${start}) / ${bucketMs} AS INTEGER) AS "bucket",
       SUM(ROUND("amount" * 100)) AS "cents"
     FROM "SellEarning"
     WHERE "minecraftAccountId" = ${id}
-      AND "createdAt" >= ${new Date(start)} AND "createdAt" <= ${new Date(now)}
+      AND "createdAt" >= ${new Date(start)} AND "createdAt" < ${new Date(end)}
     GROUP BY "bucket"
   `;
   const cents = Array<number>(count).fill(0);
   for (const row of rows) {
-    // A sale at exactly 'now' belongs to the last visible interval.
-    const index = Math.min(count - 1, Number(row.bucket));
+    const index = Number(row.bucket);
     if (index >= 0 && index < count) cents[index] += Number(row.cents);
   }
   return {
-    range, start: new Date(start).toISOString(), end: new Date(now).toISOString(), bucketMs,
+    range, start: new Date(start).toISOString(), end: new Date(end).toISOString(), bucketMs,
     total: cents.reduce((sum, value) => sum + value, 0) / 100,
     points: cents.map((value, index) => ({ at: new Date(start + index * bucketMs).toISOString(), amount: value / 100 })),
   };

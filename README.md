@@ -265,10 +265,15 @@ additional users access afterwards in the account's **Settings** panel):
   to one per 30 seconds, and do not prevent processing subsequent packets.
 - Sell earnings under the console keep the rolling 5m/1h/24h totals. The small
   bottom-left arrow expands a live graph for the last 1h, 6h or 24h, with time
-  labels below and amounts on the right. Points aggregate sales per minute,
-  five minutes or fifteen minutes respectively; hover/touch or arrow keys show
-  individual intervals. Only users with access to the account can read its
-  history. The existing 24-hour earnings retention also applies to the graph.
+  labels below and amounts on the right. The 1h view shows 12 completed,
+  clock-aligned five-minute intervals and refreshes at each five-minute boundary.
+  The 6h/24h views show 6/24 completed hourly intervals and refresh on the hour.
+  Every interval has its own timestamp; hover/touch or arrow keys show its amount.
+  Only users with access to the account can read its history. Earnings are kept
+  for 25 hours so the oldest complete 24h graph bucket survives cleanup; the
+  summary totals remain rolling 5m/1h/24h totals. The website uses document
+  scrolling, with the sidebar and header remaining visible and no nested page
+  or graph scrollbar. The console keeps its own scrollable log history.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once

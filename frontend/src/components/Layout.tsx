@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useAuth } from "../lib/auth";
+import { useEffect } from "react";
 
 type IconName = "notes" | "minigames" | "dashboard" | "sniper" | "worth" | "users" | "logs" | "settings";
 
@@ -88,10 +89,12 @@ export function Layout() {
   const location = useLocation();
   const initial = user?.username?.charAt(0).toUpperCase() ?? "?";
 
+  useEffect(() => { window.scrollTo({ top: 0, left: 0, behavior: "instant" }); }, [location.pathname]);
+
   return (
-    <div className="app-shell flex h-screen overflow-hidden">
+    <div className="app-shell flex min-h-dvh">
       <aside
-        className="app-sidebar flex w-14 shrink-0 flex-col overflow-y-auto px-2 py-5 sm:w-60 sm:px-3"
+        className="app-sidebar sticky top-0 flex h-dvh w-14 shrink-0 flex-col overflow-y-auto px-2 py-5 sm:w-60 sm:px-3"
       >
         <div className="flex items-center justify-center gap-2.5 sm:justify-start sm:px-2">
           <span
@@ -160,7 +163,7 @@ export function Layout() {
             Log out
           </button>
         </header>
-        <main className="min-w-0 flex-1 overflow-y-auto p-3 sm:p-6">
+        <main className="min-w-0 flex-1 p-3 sm:p-6">
           <div className="mx-auto max-w-6xl">
             <ErrorBoundary resetKey={location.pathname}>
               <Outlet />

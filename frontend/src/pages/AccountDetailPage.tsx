@@ -159,7 +159,7 @@ export function AccountDetailPage() {
             {account.serverHost}:{account.serverPort} · {account.minecraftVersion || "auto-detect"}
           </p>
         </div>
-        <div className="flex gap-1.5">
+        <div className="flex max-w-full flex-wrap gap-1.5">
           <button onClick={() => void runAction("start")} className="btn btn-secondary btn-sm">
             Start
           </button>

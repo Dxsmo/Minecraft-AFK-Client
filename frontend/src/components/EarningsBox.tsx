@@ -92,27 +92,37 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
   }, [hasHistory]);
   useEffect(() => {
     const controller = new AbortController();
-    let busy = false;
+    const refreshMs = range === "1h" ? 5 * 60_000 : 60 * 60_000;
+    let timer: ReturnType<typeof setTimeout>;
     async function poll() {
-      if (busy) return;
-      busy = true;
+      let retry = false;
       try {
         const data = await apiFetch<History>(`/minecraft/accounts/${accountId}/earnings/history?range=${range}`, { signal: controller.signal });
         if (!controller.signal.aborted) { setHistory(data); setError(false); }
-      } catch { if (!controller.signal.aborted) setError(true); }
-      finally { busy = false; }
+      } catch {
+        retry = true;
+        if (!controller.signal.aborted) setError(true);
+      } finally {
+        if (!controller.signal.aborted) {
+          // Refresh once the next complete interval is available, not every 15s.
+          timer = setTimeout(poll, retry ? 15_000 : refreshMs - Date.now() % refreshMs + 100);
+        }
+      }
     }
     void poll();
-    const timer = setInterval(poll, 15_000);
-    return () => { controller.abort(); clearInterval(timer); };
+    return () => { controller.abort(); clearTimeout(timer); };
   }, [accountId, range]);
 
   if (!history) return <div className="flex h-[240px] items-center justify-center text-xs" role="status" style={{ color: "var(--text-subtle)" }}>
     {error ? "Verkaufsverlauf konnte nicht geladen werden. Erneuter Versuch folgt." : "Verkaufsverlauf wird geladen…"}
   </div>;
 
-  const height = 240, left = 8, right = 92, top = 16, bottom = 32;
-  const plotWidth = width - left - right, plotHeight = height - top - bottom;
+  const height = 240, left = 8, right = 80, top = 16;
+  const plotWidth = width - left - right;
+  const rotateTimes = plotWidth / history.points.length < 46;
+  const staggerTimes = plotWidth / history.points.length < 12;
+  const bottom = rotateTimes ? (staggerTimes ? 92 : 54) : 32;
+  const plotHeight = height - top - bottom;
   const peak = Math.max(...history.points.map(point => point.amount), 0);
   const magnitude = 10 ** Math.floor(Math.log10(peak > 0 ? peak / 4 : 1));
   const step = ([1, 2, 5, 10].find(value => value * magnitude * 4 >= peak) ?? 10) * magnitude;
@@ -123,7 +133,6 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
   const active = selected == null ? null : history.points[selected];
   const interval = history.bucketMs / 60_000;
   const axisMoney = (amount: number) => `$${new Intl.NumberFormat("de-DE", { notation: "compact", maximumFractionDigits: 1 }).format(amount)}`;
-  const start = new Date(history.start).getTime(), end = new Date(history.end).getTime();
   function selectFromPointer(event: ReactPointerEvent<SVGSVGElement>) {
     const bounds = event.currentTarget.getBoundingClientRect();
     const pointerX = (event.clientX - bounds.left) / bounds.width * width;
@@ -132,7 +141,7 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
 
   return <div>
     <div className="mb-1 flex min-h-5 flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums" style={{ color: "var(--text-muted)" }}>
-      <span aria-live="polite">{active ? `${time(active.at)}–${time(new Date(active.at).getTime() + history.bucketMs)} · ${money(active.amount)}` : `Verkäufe pro ${interval === 1 ? "Minute" : `${interval} Minuten`}`}</span>
+      <span aria-live="polite">{active ? `${time(active.at)}–${time(new Date(active.at).getTime() + history.bucketMs)} · ${money(active.amount)}` : `Verkäufe pro ${interval === 60 ? "Stunde" : `${interval} Minuten`}`}</span>
       <span>Gesamt <strong style={{ color: "var(--text)" }}>{money(history.total)}</strong></span>
     </div>
     <svg ref={svgRef} style={{ height: 240, outlineColor: "var(--accent)" }} className="w-full rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2" viewBox={`0 0 ${width} ${height}`}
@@ -149,16 +158,25 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
       {[0, 1, 2, 3, 4].map(index => <g key={index}>
         <line x1={left} x2={left + plotWidth} y1={top + plotHeight * index / 4} y2={top + plotHeight * index / 4} stroke="var(--border)" strokeDasharray={index === 4 ? undefined : "3 5"} />
         <text x={left + plotWidth + 12} y={top + plotHeight * index / 4 + 4} fill="var(--text-subtle)" fontSize="11">{axisMoney(max * (1 - index / 4))}</text>
-        <text x={left + plotWidth * index / 4} y={height - 9} textAnchor={index === 0 ? "start" : index === 4 ? "end" : "middle"} fill="var(--text-subtle)" fontSize="11">{time(start + (end - start) * index / 4)}</text>
       </g>)}
       <polygon points={`${left},${top + plotHeight} ${line} ${left + plotWidth},${top + plotHeight}`} fill={`url(#${gradientId})`} />
       <polyline points={line} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+      {history.points.map((point, index) => {
+        const labelY = top + plotHeight + (rotateTimes ? 10 : 22) + (staggerTimes && index % 2 ? 38 : 0);
+        return <g key={point.at}>
+          <line x1={x(index)} x2={x(index)} y1={top + plotHeight} y2={top + plotHeight + 4} stroke="var(--border)" />
+          <text className="earnings-time-label" x={x(index)} y={labelY} textAnchor={rotateTimes ? "end" : "middle"}
+            transform={rotateTimes ? `rotate(-90 ${x(index)} ${labelY})` : undefined}
+            fill="var(--text-subtle)" fontSize="11">{time(point.at)}</text>
+        </g>;
+      })}
       {selected != null && active && <g>
         <line x1={x(selected)} x2={x(selected)} y1={top} y2={top + plotHeight} stroke="var(--text-muted)" strokeDasharray="3 4" />
         <circle cx={x(selected)} cy={y(active.amount)} r="4" fill="var(--accent)" stroke="var(--bg)" strokeWidth="2" />
       </g>}
       {history.total === 0 && <text x={left + plotWidth / 2} y={top + plotHeight / 2} textAnchor="middle" fill="var(--text-subtle)" fontSize="12">Keine Verkäufe in diesem Zeitraum</text>}
     </svg>
+    <p className="mt-1 text-[10px]" style={{ color: "var(--text-subtle)" }}>Abgeschlossene Intervalle · Aktualisierung {interval === 60 ? "zur vollen Stunde" : "alle 5 Minuten"}</p>
     <p id={hintId} className="sr-only">Einzelne Zeiträume mit dem Zeiger oder den Pfeiltasten auswählen.</p>
     {error && <p className="mt-1 text-[11px]" role="status" style={{ color: "var(--text-subtle)" }}>Aktualisierung fehlgeschlagen. Der letzte Stand wird angezeigt.</p>}
   </div>;
