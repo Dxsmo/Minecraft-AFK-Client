@@ -17,6 +17,7 @@ import { createClient } from "bedrock-protocol";
 import { emit, type Command, type Config } from "./protocol.js";
 import { BotSender } from "./send.js";
 import { BehaviorState } from "./behaviors.js";
+import { BedrockConnectionProgress, bedrockLoginFailure } from "./connection.js";
 
 const CONNECT_TIMEOUT_MS =
   (Number.parseInt(process.env.BOT_CONNECT_TIMEOUT_SECS ?? "", 10) || 45) * 1000;
@@ -56,6 +57,8 @@ async function main(): Promise<void> {
 
   const isMicrosoft = config.auth_type.toLowerCase() === "microsoft";
   const version = (config.version ?? "").trim();
+  const progress = new BedrockConnectionProgress(CONNECT_TIMEOUT_MS);
+  emit({ type: "behavior_log", message: `Bedrock: Connecting to ${config.host}:${config.port || 19132} (version ${version || "auto"})` });
 
   let client: ReturnType<typeof createClient>;
   try {
@@ -64,13 +67,20 @@ async function main(): Promise<void> {
       port: config.port || 19132,
       username: config.username,
       offline: !isMicrosoft,
+      // A proxy may advertise its internal/default port instead of the public
+      // port entered on the website. Always use the configured endpoint.
+      followPort: false,
       // One Bedrock account per process is light; run RakNet inline rather than
       // in a worker thread. Uses bedrock-protocol's default native RakNet
       // backend (compiled in the Docker image; see backend/Dockerfile).
-      useRaknetWorker: false,
+      // The installed library's declarations still spell this in the singular.
+      ...{ useRaknetWorkers: false },
       ...(version ? { version: version as never } : {}),
       ...(isMicrosoft ? { profilesFolder: config.cache_dir } : {}),
       connectTimeout: CONNECT_TIMEOUT_MS,
+      // Default library logs are plain stdout and get discarded by our NDJSON
+      // reader. Forward only its connection messages, never token/debug dumps.
+      conLog: (...messages: unknown[]) => emit({ type: "behavior_log", message: `Bedrock: ${messages.map(String).join(" ")}` }),
       onMsaCode: (data) => {
         emit({
           type: "msa_code",
@@ -79,7 +89,7 @@ async function main(): Promise<void> {
           expires_in: data.expires_in,
         });
         // A device-code sign-in needs human time; push the connect watchdog out.
-        connectDeadline = Date.now() + (data.expires_in + 30) * 1000;
+        progress.waitForDeviceCode(data.expires_in);
       },
     });
   } catch (err) {
@@ -93,13 +103,12 @@ async function main(): Promise<void> {
   const behavior = new BehaviorState(config, sender);
 
   // Connect watchdog: if we never spawn, exit so Node can reschedule.
-  let connectDeadline = Date.now() + CONNECT_TIMEOUT_MS;
   let spawned = false;
   const watchdog = setInterval(() => {
-    if (!spawned && Date.now() >= connectDeadline) {
-      clearInterval(watchdog);
-      emit({ type: "connection_failed", error: "Timed out before joining the world" });
-      endProcess(1);
+    if (progress.timedOut) {
+      const options = (client as unknown as { options?: { version?: string } }).options;
+      emit({ type: "connection_failed", error: progress.timeoutMessage(config.host, config.port || 19132, options?.version ?? version) });
+      shutdown(1);
     }
   }, 1000);
 
@@ -116,25 +125,47 @@ async function main(): Promise<void> {
     clearInterval(watchdog);
     clearInterval(tick);
     endProcess(code);
+    try { c.close?.(); } catch { /* process exit still closes native sockets */ }
   };
 
   // --- Lifecycle events ---
+  c.on("connect_allowed", () => {
+    if (progress.advance("authentication")) emit({ type: "behavior_log", message: "Bedrock: Server discovered; authenticating Microsoft/Xbox session" });
+  });
+  c.on("session", () => {
+    progress.advance("transport");
+    const profile = (client as unknown as { profile?: { name: string; uuid: string } }).profile;
+    if (profile?.name) emit({ type: "profile", username: profile.name, uuid: profile.uuid ?? "" });
+    emit({ type: "behavior_log", message: "Bedrock: Session ready; establishing RakNet/UDP connection" });
+  });
+  c.on("loggingIn", () => {
+    progress.advance("login");
+    emit({ type: "behavior_log", message: "Bedrock: Transport connected; sending server login" });
+  });
+  c.on("resource_packs_info", () => progress.advance("resources"));
+  c.on("play_status", (packet: unknown) => {
+    const failure = bedrockLoginFailure(packet);
+    if (failure && !exiting) {
+      emit({ type: "connection_failed", error: failure });
+      shutdown(1);
+    }
+  });
   c.on("join", () => {
+    progress.advance("resources");
     behavior.markJoining();
     emit({ type: "login" });
   });
 
   c.on("spawn", () => {
+    progress.advance("spawned");
+    clearInterval(watchdog);
     spawned = true;
     behavior.markSpawned();
-    const profile = (client as unknown as { profile?: { name: string; uuid: string } }).profile;
-    if (profile?.name) {
-      emit({ type: "profile", username: profile.name, uuid: profile.uuid ?? "" });
-    }
     emit({ type: "spawn" });
   });
 
   const onGone = (reason: string) => {
+    if (exiting) return;
     emit({ type: "disconnect", reason: reason || null });
     shutdown(0);
   };
@@ -144,13 +175,16 @@ async function main(): Promise<void> {
     if (!exiting) onGone("Connection closed");
   });
   c.on("error", (err: unknown) => {
-    emit({ type: "connection_failed", error: errMsg(err) });
+    if (exiting) return;
+    const options = (client as unknown as { options?: { version?: string } }).options;
+    emit({ type: "connection_failed", error: progress.failureMessage(errMsg(err), config.host, config.port || 19132, options?.version ?? version) });
     shutdown(1);
   });
 
   // --- World / telemetry packets (all defensive) ---
   let localRuntimeEntityId: bigint | null = null;
   c.on("start_game", (packet: unknown) => {
+    progress.advance("world");
     try {
       const p = packet as { runtime_entity_id?: unknown; player_position?: unknown; rotation?: { x?: number; z?: number }; current_tick?: unknown; server_authoritative_inventory?: boolean };
       const id = toBigIntOrNull(p.runtime_entity_id);

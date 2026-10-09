@@ -35,6 +35,13 @@ dashboard) is edition-agnostic.
 
 - **Implemented:** connect/login (offline + Microsoft device-code), chat/console,
   commands, interval auto-sell, crouch, health telemetry, sell chat parsing.
+- **Connection:** always uses the configured public port instead of following
+  a proxy's advertised internal port. Discovery, Microsoft authentication,
+  transport, login and world initialization have separate bounded deadlines;
+  cached-token refresh has at least 120 seconds, and device-code sign-in uses
+  the supplied code expiry. After authentication the normal connect deadline
+  resumes. Console messages identify each connection stage and explicit
+  Bedrock login refusals (including incompatible protocol versions).
 - **Crouch:** emits `player_auth_input` at 20 Hz with held sneak flags and the
   server's own player position; acknowledges teleport input and reasserts sneak
   after transfers and HugoSMP home/TPA confirmations. Only the local player's
