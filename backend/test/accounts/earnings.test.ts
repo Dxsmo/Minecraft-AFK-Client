@@ -41,7 +41,7 @@ describe("rolling sell revenue", () => {
     expect(await getEarningsSummary(account.id)).toEqual({ last5m: 0, last1h: 0, last24h: 0 });
   });
 
-  it.each([['1h', 12, 5], ['6h', 6, 60], ['24h', 24, 60]] as const)("aggregates %s into completed clock-aligned intervals with cents and empty gaps", async (range, buckets, minutes) => {
+  it.each([['1h', 12, 5], ['6h', 72, 5], ['24h', 288, 5]] as const)("aggregates %s into completed clock-aligned intervals with cents and empty gaps", async (range, buckets, minutes) => {
     const account = await prisma.minecraftAccount.create({ data: { name: `Graph_${range}`, serverHost: "localhost" } });
     const other = await prisma.minecraftAccount.create({ data: { name: `Other_${range}`, serverHost: "localhost" } });
     const now = Date.UTC(2026, 9, 9, 13, 47, 31), bucketMs = minutes * 60_000;
@@ -74,11 +74,11 @@ describe("rolling sell revenue", () => {
     const account = await prisma.minecraftAccount.create({ data: { name: "EmptyGraph", serverHost: "localhost" } });
     const history = await getEarningsHistory(account.id, "24h");
     expect(history.total).toBe(0);
-    expect(history.points).toHaveLength(24);
+    expect(history.points).toHaveLength(288);
     expect(history.points.every(point => point.amount === 0)).toBe(true);
   });
 
-  it.each([['1h', 5], ['6h', 60], ['24h', 60]] as const)("keeps %s stable inside an interval and includes a sale exactly once after the boundary", async (range, minutes) => {
+  it.each([['1h', 5], ['6h', 5], ['24h', 5]] as const)("keeps %s stable inside an interval and includes a sale exactly once after the boundary", async (range, minutes) => {
     const account = await prisma.minecraftAccount.create({ data: { name: `Aligned_${range}`, serverHost: "localhost" } });
     const bucketMs = minutes * 60_000, boundary = Date.UTC(2026, 9, 9, 13);
     await prisma.sellEarning.createMany({ data: [
@@ -94,10 +94,10 @@ describe("rolling sell revenue", () => {
     expect(next.points.at(-2)?.amount).toBe(10);
   });
 
-  it("preserves the oldest full hourly graph bucket when pruning rolling 24h earnings", async () => {
+  it("preserves the oldest full five-minute graph bucket when pruning rolling 24h earnings", async () => {
     const account = await prisma.minecraftAccount.create({ data: { name: "RetentionGraph", serverHost: "localhost" } });
     const now = Date.UTC(2026, 9, 9, 13, 59, 59), hour = 60 * 60_000;
-    const start = Math.floor(now / hour) * hour - 24 * hour;
+    const start = Math.floor(now / 300_000) * 300_000 - 24 * hour;
     await prisma.sellEarning.createMany({ data: [
       { minecraftAccountId: account.id, amount: 42, createdAt: new Date(start) },
       { minecraftAccountId: account.id, amount: 9999, createdAt: new Date(now - 25 * hour - 1) },

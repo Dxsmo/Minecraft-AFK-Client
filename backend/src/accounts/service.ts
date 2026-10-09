@@ -193,7 +193,7 @@ export async function getFullAccount(id: string) {
   return prisma.minecraftAccount.findUnique({ where: { id } });
 }
 
-/** Keep one extra hour so the oldest completed 24h graph bucket stays intact. */
+/** Keep a buffer so the oldest completed 24h graph interval stays intact. */
 export async function pruneOldEarnings(now = Date.now()) {
   return prisma.sellEarning.deleteMany({ where: { createdAt: { lt: new Date(now - 25 * 60 * 60_000) } } });
 }
@@ -218,8 +218,8 @@ export async function getEarningsSummary(id: string) {
 export type EarningsRange = "1h" | "6h" | "24h";
 const EARNINGS_WINDOWS = {
   "1h": { durationMs: 60 * 60_000, bucketMs: 5 * 60_000 },
-  "6h": { durationMs: 6 * 60 * 60_000, bucketMs: 60 * 60_000 },
-  "24h": { durationMs: 24 * 60 * 60_000, bucketMs: 60 * 60_000 },
+  "6h": { durationMs: 6 * 60 * 60_000, bucketMs: 5 * 60_000 },
+  "24h": { durationMs: 24 * 60 * 60_000, bucketMs: 5 * 60_000 },
 } as const;
 
 /** Completed clock-aligned intervals, aggregated with the account/time index. */

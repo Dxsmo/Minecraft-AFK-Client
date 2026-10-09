@@ -38,7 +38,7 @@ it("exposes the graph only to admins and users assigned to the account", async (
     const response = await app.inject({ url, headers: { cookie } });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ range: "6h", total: 42 });
-    expect(response.json().points).toHaveLength(6);
+    expect(response.json().points).toHaveLength(72);
   }
   const response = await app.inject({ url, headers: { cookie: cookies[2] } });
   expect(response.statusCode).toBe(404);

@@ -92,7 +92,7 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
   }, [hasHistory]);
   useEffect(() => {
     const controller = new AbortController();
-    const refreshMs = range === "1h" ? 5 * 60_000 : 60 * 60_000;
+    const refreshMs = 5 * 60_000;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
       let retry = false;
@@ -119,8 +119,18 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
 
   const height = 240, left = 8, right = 80, top = 16;
   const plotWidth = width - left - right;
-  const rotateTimes = plotWidth / history.points.length < 46;
-  const staggerTimes = plotWidth / history.points.length < 12;
+  // Every five-minute point stays selectable. Thin only the printed labels
+  // when hundreds of timestamps would overlap; keep both ends of the axis.
+  const labelStride = Math.max(1, Math.ceil(history.points.length / (Math.floor(plotWidth / 14) * 2)));
+  const labelIndices = history.points.flatMap((_, index) => index % labelStride === 0 ? [index] : []);
+  const lastIndex = history.points.length - 1;
+  if (labelIndices.at(-1) !== lastIndex) {
+    if (lastIndex - labelIndices.at(-1)! < labelStride) labelIndices.pop();
+    labelIndices.push(lastIndex);
+  }
+  const rotateTimes = plotWidth / labelIndices.length < 46;
+  const staggerTimes = plotWidth / labelIndices.length < 12;
+  const labelPositions = new Map(labelIndices.map((index, position) => [index, position]));
   const bottom = rotateTimes ? (staggerTimes ? 92 : 54) : 32;
   const plotHeight = height - top - bottom;
   const peak = Math.max(...history.points.map(point => point.amount), 0);
@@ -141,7 +151,7 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
 
   return <div>
     <div className="mb-1 flex min-h-5 flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums" style={{ color: "var(--text-muted)" }}>
-      <span aria-live="polite">{active ? `${time(active.at)}–${time(new Date(active.at).getTime() + history.bucketMs)} · ${money(active.amount)}` : `Verkäufe pro ${interval === 60 ? "Stunde" : `${interval} Minuten`}`}</span>
+      <span aria-live="polite">{active ? `${time(active.at)}–${time(new Date(active.at).getTime() + history.bucketMs)} · ${money(active.amount)}` : `Verkäufe pro ${interval} Minuten`}</span>
       <span>Gesamt <strong style={{ color: "var(--text)" }}>{money(history.total)}</strong></span>
     </div>
     <svg ref={svgRef} style={{ height: 240, outlineColor: "var(--accent)" }} className="w-full rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2" viewBox={`0 0 ${width} ${height}`}
@@ -162,12 +172,15 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
       <polygon points={`${left},${top + plotHeight} ${line} ${left + plotWidth},${top + plotHeight}`} fill={`url(#${gradientId})`} />
       <polyline points={line} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
       {history.points.map((point, index) => {
-        const labelY = top + plotHeight + (rotateTimes ? 10 : 22) + (staggerTimes && index % 2 ? 38 : 0);
+        const labelPosition = labelPositions.get(index);
+        const labelY = top + plotHeight + (rotateTimes ? 10 : 22) + (staggerTimes && labelPosition != null && labelPosition % 2 ? 38 : 0);
         return <g key={point.at}>
-          <line x1={x(index)} x2={x(index)} y1={top + plotHeight} y2={top + plotHeight + 4} stroke="var(--border)" />
-          <text className="earnings-time-label" x={x(index)} y={labelY} textAnchor={rotateTimes ? "end" : "middle"}
+          <line className="earnings-time-tick" x1={x(index)} x2={x(index)} y1={top + plotHeight} y2={top + plotHeight + 4} stroke="var(--border)">
+            <title>{time(point.at)} · {money(point.amount)}</title>
+          </line>
+          {labelPosition != null && <text className="earnings-time-label" x={x(index)} y={labelY} textAnchor={rotateTimes ? "end" : "middle"}
             transform={rotateTimes ? `rotate(-90 ${x(index)} ${labelY})` : undefined}
-            fill="var(--text-subtle)" fontSize="11">{time(point.at)}</text>
+            fill="var(--text-subtle)" fontSize="11">{time(point.at)}</text>}
         </g>;
       })}
       {selected != null && active && <g>
@@ -176,7 +189,7 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
       </g>}
       {history.total === 0 && <text x={left + plotWidth / 2} y={top + plotHeight / 2} textAnchor="middle" fill="var(--text-subtle)" fontSize="12">Keine Verkäufe in diesem Zeitraum</text>}
     </svg>
-    <p className="mt-1 text-[10px]" style={{ color: "var(--text-subtle)" }}>Abgeschlossene Intervalle · Aktualisierung {interval === 60 ? "zur vollen Stunde" : "alle 5 Minuten"}</p>
+    <p className="mt-1 text-[10px]" style={{ color: "var(--text-subtle)" }}>Abgeschlossene Intervalle · Aktualisierung alle 5 Minuten</p>
     <p id={hintId} className="sr-only">Einzelne Zeiträume mit dem Zeiger oder den Pfeiltasten auswählen.</p>
     {error && <p className="mt-1 text-[11px]" role="status" style={{ color: "var(--text-subtle)" }}>Aktualisierung fehlgeschlagen. Der letzte Stand wird angezeigt.</p>}
   </div>;

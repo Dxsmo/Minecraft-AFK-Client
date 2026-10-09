@@ -265,10 +265,12 @@ additional users access afterwards in the account's **Settings** panel):
   to one per 30 seconds, and do not prevent processing subsequent packets.
 - Sell earnings under the console keep the rolling 5m/1h/24h totals. The small
   bottom-left arrow expands a live graph for the last 1h, 6h or 24h, with time
-  labels below and amounts on the right. The 1h view shows 12 completed,
-  clock-aligned five-minute intervals and refreshes at each five-minute boundary.
-  The 6h/24h views show 6/24 completed hourly intervals and refresh on the hour.
-  Every interval has its own timestamp; hover/touch or arrow keys show its amount.
+  labels below and amounts on the right. All views use completed, clock-aligned
+  five-minute intervals (12/72/288 points for 1h/6h/24h) and refresh at every
+  five-minute boundary. Points become denser as the time range grows. Every
+  interval has a time tick; printed labels adapt to available space to remain
+  readable. Hover/touch or arrow keys show each exact five-minute timestamp
+  and amount.
   Only users with access to the account can read its history. Earnings are kept
   for 25 hours so the oldest complete 24h graph bucket survives cleanup; the
   summary totals remain rolling 5m/1h/24h totals. The website uses document
