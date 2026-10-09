@@ -49,7 +49,7 @@ const publicAccountSelect = {
   createdAt: true,
   updatedAt: true,
   image: { select: { revision: true } },
-  createdBy: { select: { id: true, username: true } },
+  createdBy: { select: { id: true, username: true, minecraftUsername: true } },
   assignments: {
     select: { userId: true, user: { select: { id: true, username: true } } },
   },

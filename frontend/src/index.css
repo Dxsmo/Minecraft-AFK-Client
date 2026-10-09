@@ -169,6 +169,7 @@ body {
   .account-actions { gap: 6px; }
   .account-sort, .account-actions { pointer-events: none; }
   .account-sort button, .account-actions button { pointer-events: auto; }
+  .account-creator-avatar { pointer-events: auto; }
   .account-image-button {
     position: absolute;
     inset: 5px 6px;

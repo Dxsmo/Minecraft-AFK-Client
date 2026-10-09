@@ -46,6 +46,7 @@ enum ConsoleLogType {
 model User {
   id           String     @id @default(cuid())
   username     String     @unique
+  minecraftUsername String?
   passwordHash String
   role         Role       @default(USER)
   status       UserStatus @default(ACTIVE)

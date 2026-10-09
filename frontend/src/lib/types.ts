@@ -29,6 +29,7 @@ export interface CurrentUser {
 export interface ManagedUser {
   id: string;
   username: string;
+  minecraftUsername: string | null;
   role: Role;
   status: UserStatus;
   createdAt: string;
@@ -90,7 +91,7 @@ export interface MinecraftAccount {
   status: ClientStatus;
   createdAt: string;
   updatedAt: string;
-  createdBy: { id: string; username: string } | null;
+  createdBy: { id: string; username: string; minecraftUsername: string | null } | null;
   assignments: { userId: string; user: { id: string; username: string } }[];
   live?: LiveStatus;
 }

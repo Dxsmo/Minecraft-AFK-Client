@@ -8,6 +8,7 @@ import { findUsernameMatches } from "./username.js";
 const publicUserSelect = {
   id: true,
   username: true,
+  minecraftUsername: true,
   role: true,
   status: true,
   createdAt: true,
@@ -31,7 +32,7 @@ export async function createUser(input: CreateUserInput) {
       });
     }
     return tx.user.create({
-      data: { username: input.username, passwordHash, role: input.role },
+      data: { username: input.username, passwordHash, role: input.role, minecraftUsername: input.minecraftUsername },
       select: publicUserSelect,
     });
   });
@@ -42,6 +43,7 @@ export async function updateUser(id: string, input: UpdateUserInput) {
   if (input.password) data.passwordHash = await hashPassword(input.password);
   if (input.role) data.role = input.role;
   if (input.status) data.status = input.status;
+  if (input.minecraftUsername !== undefined) data.minecraftUsername = input.minecraftUsername;
 
   const user = await prisma.user.update({ where: { id }, data, select: publicUserSelect });
 

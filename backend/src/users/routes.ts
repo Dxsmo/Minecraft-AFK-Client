@@ -44,7 +44,7 @@ export default async function usersRoutes(app: FastifyInstance) {
       action: "USER_CREATE",
       targetType: "User",
       targetId: user.id,
-      details: { username: user.username, role: user.role },
+      details: { username: user.username, role: user.role, minecraftUsername: user.minecraftUsername },
     });
     reply.code(201).send(user);
   });
@@ -72,7 +72,7 @@ export default async function usersRoutes(app: FastifyInstance) {
       action: "USER_UPDATE",
       targetType: "User",
       targetId: id,
-      details: { role: body.role, status: body.status, passwordChanged: !!body.password },
+      details: { role: body.role, status: body.status, passwordChanged: !!body.password, minecraftUsername: body.minecraftUsername },
     });
     reply.send(user);
   });

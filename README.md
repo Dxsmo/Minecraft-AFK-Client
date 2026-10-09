@@ -156,6 +156,14 @@ Copy `.env.example` to `.env` (repo root) for Docker Compose, or to
 - The **first** admin is bootstrapped from `.env` on first boot (see above).
 - Admins manage further users under **Users** in the sidebar: create,
   change role, disable/enable, delete, and reset passwords.
+- Admins can assign, change or clear an optional **Minecraft-Name** for each
+  website user. The account list shows that creator's small skin head directly
+  left of the eye button, including for shared accounts. Heads are fetched from
+  [MCHeads](https://mc-heads.net/) through the authenticated backend, with a
+  bounded cache and a placeholder if no name is assigned or the service is
+  unavailable. Browser requests stay on this website's origin.
+- All users can locally blur/reveal their visible accounts using the eye button.
+  The preference is saved separately for each website user in that browser.
 - The system will always refuse to delete/disable/demote the **last**
   remaining active admin, so you can't lock yourself out.
 - Any user can change their own password under **Settings** (requires the

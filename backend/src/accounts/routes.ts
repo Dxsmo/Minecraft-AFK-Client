@@ -16,6 +16,7 @@ import { prisma } from "../database/prisma.js";
 import { z } from "zod";
 import { decodeAccountImage, MAX_ACCOUNT_IMAGE_BASE64, replaceAccountImage } from "./images.js";
 import { accessLookupSchema, accessLookupRateLimit, findAccessUser } from "../users/accessLookup.js";
+import { getMinecraftAvatar } from "../users/minecraftAvatar.js";
 
 export default async function accountsRoutes(app: FastifyInstance) {
   app.addHook("preHandler", app.requireAuth);
@@ -45,6 +46,17 @@ export default async function accountsRoutes(app: FastifyInstance) {
       return;
     }
     reply.send({ ...account, live: clientManager.get(id)?.getStatus() });
+  });
+
+  app.get("/api/minecraft/accounts/:id/creator-avatar", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const account = await accountsService.getAccountForSession(req.session!, id);
+    if (!account) return reply.code(404).send({ error: "Account not found" });
+    const username = account.createdBy?.minecraftUsername;
+    if (!username) return reply.code(404).send({ error: "Minecraft username not assigned" });
+    const image = await getMinecraftAvatar(username);
+    if (!image) return reply.code(502).send({ error: "Minecraft avatar unavailable" });
+    return reply.type("image/png").send(image);
   });
 
   app.get("/api/minecraft/accounts/:id/image", async (req, reply) => {

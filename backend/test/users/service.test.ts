@@ -24,6 +24,14 @@ describe("users service", () => {
     expect((found as any).passwordHash).toBeUndefined();
   });
 
+  it("stores optional Minecraft names on creation and supports changing and clearing them", async () => {
+    const user = await usersService.createUser({ username: "skinOwner", password: "supersecret1", role: "USER", minecraftUsername: "Desmodus" });
+    expect(user.minecraftUsername).toBe("Desmodus");
+    expect((await usersService.getUserById(user.id))?.minecraftUsername).toBe("Desmodus");
+    expect((await usersService.updateUser(user.id, { minecraftUsername: "Alex_123" })).minecraftUsername).toBe("Alex_123");
+    expect((await usersService.updateUser(user.id, { minecraftUsername: null })).minecraftUsername).toBeNull();
+  });
+
   it("preserves display spelling but rejects usernames differing only by case, including disabled users", async () => {
     const user = await usersService.createUser({ username: "MixedCase", password: "supersecret1", role: "USER" });
     expect(user.username).toBe("MixedCase");

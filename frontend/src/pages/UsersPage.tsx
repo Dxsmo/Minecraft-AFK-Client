@@ -5,7 +5,7 @@ import type { BannedIp, ManagedUser } from "../lib/types";
 export function UsersPage() {
   const [users, setUsers] = useState<ManagedUser[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState({ username: "", password: "", role: "USER" as "ADMIN" | "USER" });
+  const [form, setForm] = useState({ username: "", password: "", minecraftUsername: "", role: "USER" as "ADMIN" | "USER" });
   const [creating, setCreating] = useState(false);
 
   async function load() {
@@ -26,7 +26,7 @@ export function UsersPage() {
     setError(null);
     try {
       await api.post("/users", form);
-      setForm({ username: "", password: "", role: "USER" });
+      setForm({ username: "", password: "", minecraftUsername: "", role: "USER" });
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to create user");
@@ -91,6 +91,13 @@ export function UsersPage() {
           />
         </div>
         <div>
+          <label className="label" htmlFor="new-user-minecraft">Minecraft-Name (optional)</label>
+          <input id="new-user-minecraft" value={form.minecraftUsername}
+            onChange={(e) => setForm({ ...form, minecraftUsername: e.target.value })}
+            className="input w-44" autoComplete="off" maxLength={16} pattern="[a-zA-Z0-9_]{3,16}"
+            placeholder="z. B. Desmodus" />
+        </div>
+        <div>
           <label className="label">Role</label>
           <select
             value={form.role}
@@ -106,11 +113,12 @@ export function UsersPage() {
         </button>
       </form>
 
-      <div className="card overflow-hidden">
+      <div className="card overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
               <Th>Username</Th>
+              <Th>Minecraft-Name</Th>
               <Th>Role</Th>
               <Th>Status</Th>
               <Th>Last login</Th>
@@ -121,6 +129,10 @@ export function UsersPage() {
             {(users ?? []).map((u) => (
               <tr key={u.id} style={{ borderTop: "1px solid var(--border)" }}>
                 <Td><span style={{ color: "var(--text)" }} className="font-medium">{u.username}</span></Td>
+                <Td>
+                  <MinecraftUsernameField user={u} onSaved={(updated) =>
+                    setUsers((previous) => previous?.map((entry) => entry.id === updated.id ? updated : entry) ?? null)} />
+                </Td>
                 <Td>{u.role}</Td>
                 <Td>
                   <span style={{ color: u.status === "ACTIVE" ? "#38bdf8" : "var(--text-subtle)" }}>{u.status}</span>
@@ -149,6 +161,48 @@ export function UsersPage() {
 
       <IpBanCard />
     </div>
+  );
+}
+
+function MinecraftUsernameField({ user, onSaved }: { user: ManagedUser; onSaved: (user: ManagedUser) => void }) {
+  const [value, setValue] = useState(user.minecraftUsername ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const changed = (value.trim() || null) !== user.minecraftUsername;
+
+  useEffect(() => { setValue(user.minecraftUsername ?? ""); }, [user.minecraftUsername]);
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (busy || !changed) return;
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const updated = await api.patch<ManagedUser>(`/users/${user.id}`, { minecraftUsername: value.trim() || null });
+      onSaved(updated);
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Minecraft-Name konnte nicht gespeichert werden");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={(event) => void save(event)} className="min-w-64">
+      <div className="flex items-center gap-2">
+        <input value={value} onChange={(event) => { setValue(event.target.value); setSaved(false); setError(null); }}
+          aria-label={`Minecraft-Name für ${user.username}`} placeholder="Nicht zugewiesen" disabled={busy}
+          className="input w-40" autoComplete="off" spellCheck={false} maxLength={16} pattern="[a-zA-Z0-9_]{3,16}" />
+        <button type="submit" disabled={busy || !changed} className="btn btn-secondary btn-sm">
+          {busy ? "Speichern…" : "Speichern"}
+        </button>
+      </div>
+      {error && <p className="mt-1 text-xs" role="alert" style={{ color: "var(--danger)" }}>{error}</p>}
+      {saved && <p className="mt-1 text-xs" role="status" style={{ color: "var(--text-muted)" }}>Gespeichert</p>}
+    </form>
   );
 }
 

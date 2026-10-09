@@ -7,17 +7,17 @@ import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { CreateAccountDialog } from "../components/CreateAccountDialog";
 import { AccountImageButton } from "../components/AccountImageButton";
+import { AccountCreatorAvatar } from "../components/AccountCreatorAvatar";
 
 export function DashboardPage() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "ADMIN";
   const [accounts, setAccounts] = useState<MinecraftAccount[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [reorderBusy, setReorderBusy] = useState(false);
-  // Admin-only: locally censor (blur) individual account cards, e.g. while
-  // screen-sharing. Persisted per admin in localStorage so it survives reloads.
+  // Locally censor individual account cards, e.g. while screen-sharing.
+  // Persisted per website user so the preference survives reloads.
   const blurKey = user ? `afk.blurredAccounts.${user.id}` : null;
   const [blurred, setBlurred] = useState<Set<string>>(new Set());
   function updateImage(update: { id: string; imageUrl: string }) {
@@ -38,8 +38,11 @@ export function DashboardPage() {
   function toggleBlur(id: string) {
     setBlurred((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      if (blurKey) localStorage.setItem(blurKey, JSON.stringify(Array.from(next)));
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      try {
+        if (blurKey) localStorage.setItem(blurKey, JSON.stringify(Array.from(next)));
+      } catch { /* Blurring remains usable when browser storage is unavailable. */ }
       return next;
     });
   }
@@ -247,16 +250,17 @@ export function DashboardPage() {
                 </div>
 
                 <div className="account-actions relative z-20 flex items-center">
-                  {isAdmin && (
-                    <button
-                      onClick={() => toggleBlur(account.id)}
-                      className="btn btn-ghost btn-sm"
-                      title={isBlurred ? "Reveal account" : "Blur / censor account"}
-                      aria-label={isBlurred ? "Reveal account" : "Blur account"}
-                    >
-                      <EyeIcon off={isBlurred} />
-                    </button>
-                  )}
+                  <AccountCreatorAvatar account={account} blurred={isBlurred} />
+                  <button
+                    type="button"
+                    onClick={() => toggleBlur(account.id)}
+                    className="btn btn-ghost btn-sm"
+                    title={isBlurred ? "Reveal account" : "Blur / censor account"}
+                    aria-label={isBlurred ? "Reveal account" : "Blur account"}
+                    aria-pressed={isBlurred}
+                  >
+                    <EyeIcon off={isBlurred} />
+                  </button>
                   <button
                     disabled={busy || status === "ONLINE" || status === "CONNECTING"}
                     onClick={() => void runAction(account.id, "start")}
@@ -351,7 +355,7 @@ function NotesField({ accountId, initial, disabled }: { accountId: string; initi
   );
 }
 
-/** Eye / eye-off icon used for the admin blur toggle. */
+/** Eye / eye-off icon used for the local blur toggle. */
 function EyeIcon({ off }: { off: boolean }) {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
