@@ -324,6 +324,28 @@ The Microsoft account email (`credentialsSecret`) is **never** included in
 any API response sent to the frontend — only account metadata and live
 status are exposed.
 
+### Bedrock UDP connection diagnostics
+
+If Microsoft authentication succeeds but Bedrock repeatedly reports a
+`RakNet/UDP connection ... Connect timed out`, run this from the repository
+on the affected host. It uses the existing backend container's network,
+without rebuilding the image or stopping accounts:
+
+```sh
+git pull --ff-only
+docker compose exec -T backend node --input-type=module < backend/scripts/diagnose-bedrock.mjs
+```
+
+The default target is `HugoSMP.net:19132`. A custom target can be tested with
+`node backend/scripts/diagnose-bedrock.mjs hostname 19132` where Node is installed.
+The test reports the resolved IPv4 address, status advertisement, and both
+offline RakNet handshake steps (including cookie negotiation and four MTU
+sizes). It sends no Microsoft credentials, account name, Minecraft login or
+commands. An answered status ping alone does not prove a server accepts
+connections. Even a successful offline handshake does not prove native
+transport completion or a world join; compare with a normal Bedrock client
+using the same network.
+
 ### Server resource/texture packs
 
 If the target server requires accepting a resource pack before letting a
