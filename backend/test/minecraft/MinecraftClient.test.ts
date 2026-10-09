@@ -170,31 +170,30 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
       await tick();
       const commands = first.stdin.write.mock.calls.map(([line]) => JSON.parse(String(line)));
       expect(commands.find((cmd) => cmd.type === "pause_autosell")).toEqual({
-        type: "pause_autosell", autosell_pause_after_ms: 20_000, autosell_resume_after_ms: 330_000,
+        type: "pause_autosell", autosell_pause_after_ms: 20_000, autosell_resume_after_ms: 210_000,
       });
-      // A later countdown refers to the same restart rather than restarting five minutes from now.
+      // A later countdown refers to the same restart rather than restarting three minutes from now.
       vi.advanceTimersByTime(25_000);
       first.send({ type: "chat", sender: null, message: "Die Welt wird in 5 Sekunden neu gestartet!" });
       await tick();
       expect(JSON.parse(String(first.stdin.write.mock.calls.at(-1)![0]))).toEqual({
-        type: "pause_autosell", autosell_pause_after_ms: 0, autosell_resume_after_ms: 305_000,
+        type: "pause_autosell", autosell_pause_after_ms: 0, autosell_resume_after_ms: 185_000,
       });
       first.exitWith(1);
       await tick();
-      vi.advanceTimersByTime(33_000);
+      vi.advanceTimersByTime(15_000);
       const replacement = lastChild();
       expect(replacement).not.toBe(first);
       const config = JSON.parse(String(replacement.stdin.write.mock.calls[0][0]));
       expect(config.autosell_pause_after_ms).toBe(0);
-      expect(config.autosell_resume_after_ms).toBeGreaterThanOrEqual(273_000);
-      expect(config.autosell_resume_after_ms).toBeLessThanOrEqual(275_000);
+      expect(config.autosell_resume_after_ms).toBe(170_000);
       replacement.send({ type: "spawn" });
       await tick();
       client.updateConfig(baseConfig({ edition, autoSellEnabled: true, autoSellIntervalSeconds: 5 }));
       expect(JSON.parse(String(replacement.stdin.write.mock.calls.at(-1)![0]))).toMatchObject({
         type: "configure", autosell_enabled: true, autosell_interval_seconds: 5,
       });
-      vi.advanceTimersByTime(272_000);
+      vi.advanceTimersByTime(170_000);
       client.restart();
       const expiredConfig = JSON.parse(String(lastChild().stdin.write.mock.calls[0][0]));
       expect(expiredConfig.autosell_resume_after_ms).toBe(0);
@@ -228,7 +227,7 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
       await tick();
       const commands = child.stdin.write.mock.calls.map(([line]) => JSON.parse(String(line)));
       expect(commands.find((cmd) => cmd.type === "pause_autosell")).toEqual({
-        type: "pause_autosell", autosell_pause_after_ms: 50_000, autosell_resume_after_ms: 360_000,
+        type: "pause_autosell", autosell_pause_after_ms: 50_000, autosell_resume_after_ms: 240_000,
       });
       client.dispose();
     } finally {
@@ -348,6 +347,55 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     await tick();
     expect(client.getStatus().status).toBe("RECONNECTING");
     expect(client.getStatus().lastError).toContain("code 1");
+  });
+
+  it("reconnects at exactly 15 seconds on every attempt, without jitter", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const client = makeClient(); client.connect();
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const failed = lastChild(); failed.exitWith(1); await tick();
+        vi.advanceTimersByTime(14_999);
+        expect(lastChild()).toBe(failed);
+        vi.advanceTimersByTime(1);
+        expect(lastChild()).not.toBe(failed);
+      }
+    } finally { for (const client of active) client.dispose(); vi.useRealTimers(); }
+  });
+
+  it.each(["JAVA", "BEDROCK"] as const)("checks enabled %s crouch at each of the next five minutes without duplicating the countdown", async edition => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const client = makeClient({ edition, crouchEnabled: true }); client.connect();
+      const child = lastChild(); child.send({ type: "spawn" });
+      child.send({ type: "chat", sender: "HugoSMP", message: "Diese Welt wird in 10 Sekunden neugestartet. Droppe am besten keine Items mehr!" });
+      await tick();
+      vi.advanceTimersByTime(5000);
+      child.send({ type: "chat", sender: "HugoSMP", message: "Die Welt wird in 5 Sekunden neugestartet!" });
+      await tick();
+      for (let minute = 1; minute <= 6; minute++) {
+        for (let step = 0; step < 3; step++) {
+          child.send({ type: "heartbeat" }); await tick(); vi.advanceTimersByTime(20_000);
+        }
+        const checks = child.stdin.write.mock.calls.map(([line]) => JSON.parse(String(line))).filter(command => command.type === "check_crouch");
+        expect(checks).toHaveLength(Math.min(minute, 5));
+      }
+    } finally { for (const client of active) client.dispose(); vi.useRealTimers(); }
+  });
+
+  it("performs a missed restart crouch check on rejoin within the five-minute window", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const client = makeClient({ crouchEnabled: true }); client.connect();
+      const first = lastChild(); first.send({ type: "spawn" });
+      first.send({ type: "chat", sender: null, message: "Diese Welt wird in 10 Sekunden neugestartet." }); await tick();
+      // Keep the first process alive until just before the first scheduled check.
+      for (let step = 0; step < 2; step++) { first.send({ type: "heartbeat" }); await tick(); vi.advanceTimersByTime(20_000); }
+      vi.advanceTimersByTime(15_000); first.exitWith(1); await tick();
+      vi.advanceTimersByTime(15_000);
+      const replacement = lastChild(); replacement.send({ type: "spawn" }); await tick();
+      expect(replacement.stdin.write.mock.calls.map(([line]) => JSON.parse(String(line))).filter(command => command.type === "check_crouch")).toHaveLength(1);
+    } finally { for (const client of active) client.dispose(); vi.useRealTimers(); }
   });
 
   it("goes ERROR (no reconnect) on unexpected exit when autoReconnect is disabled", async () => {

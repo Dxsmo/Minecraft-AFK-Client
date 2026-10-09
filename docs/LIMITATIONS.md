@@ -37,7 +37,11 @@ dashboard) is edition-agnostic.
   commands, interval auto-sell, crouch, health telemetry, sell chat parsing.
 - **Crouch:** emits `player_auth_input` at 20 Hz with held sneak flags and the
   server's own player position; acknowledges teleport input and reasserts sneak
-  after transfers and HugoSMP home/TPA confirmations. Packet failures are retryable.
+  after transfers and HugoSMP home/TPA confirmations. Only the local player's
+  server metadata confirms crouch. Transfers/negative feedback and explicit
+  restart checks resynchronize Geyser's cached shift with release and press in
+  separate input ticks; normal held input stays pressed. Packet failures keep
+  the resync pending for retry.
 - **Auto-sell:** associates a chest-style container with its own `/sell` request,
   waits for container/inventory content, and moves occupied inventory/hotbar
   slots into empty container slots. Geyser chest titles also identify late or
@@ -71,7 +75,7 @@ but it has **not** been runtime-tested against a real Bedrock server. A live
 connect should be verified before relying on Bedrock accounts in production.
 
 The Bedrock input/GUI implementation follows Geyser's
-[PlayerAuthInput handling](https://github.com/GeyserMC/Geyser/blob/master/core/src/main/java/org/geysermc/geyser/session/cache/InputCache.java)
+[PlayerAuthInput handling and cached Java shift state](https://github.com/GeyserMC/Geyser/blob/master/core/src/main/java/org/geysermc/geyser/session/cache/InputCache.java)
 and [container title transport](https://github.com/GeyserMC/Geyser/blob/master/core/src/main/java/org/geysermc/geyser/inventory/holder/BlockInventoryHolder.java).
 The pinned local packet schemas and codec regression tests define the supported
 wire shapes; these checks do not substitute for a live HugoSMP connection.

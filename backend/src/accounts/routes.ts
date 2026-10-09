@@ -93,6 +93,17 @@ export default async function accountsRoutes(app: FastifyInstance) {
     reply.send(await accountsService.getEarningsSummary(id));
   });
 
+  app.get("/api/minecraft/accounts/:id/earnings/history", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    reply.header("Cache-Control", "private, no-store");
+    if (!(await accountsService.getAccountForSession(req.session!, id))) {
+      return reply.code(404).send({ error: "Account not found" });
+    }
+    const query = parseOrReject(z.object({ range: z.enum(["1h", "6h", "24h"]).default("1h") }).strict(), req.query, reply);
+    if (!query) return;
+    reply.send(await accountsService.getEarningsHistory(id, query.range));
+  });
+
   // ---- Management ----
   // Creating an account is open to any authenticated user (they become the
   // sole assignee automatically); editing/deleting an account is allowed for

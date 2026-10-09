@@ -98,6 +98,8 @@ pub enum Command {
     /// spawner within reach (without walking to it), drop the items in the
     /// container it opens, and close it. Pauses auto-sell for the duration.
     CleanSpawner,
+    /// Verify and reassert enabled crouch after a world restart.
+    CheckCrouch,
     /// Schedule the restart pause independently of behavior settings and world transitions.
     PauseAutosell {
         autosell_pause_after_ms: u64,

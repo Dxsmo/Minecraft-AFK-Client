@@ -10,4 +10,4 @@ export function parseWorldRestartSeconds(message: string): number | null {
 }
 
 export const WORLD_RESTART_SELL_LEAD_MS = 10_000;
-export const WORLD_RESTART_SELL_COOLDOWN_MS = 5 * 60_000;
+export const WORLD_RESTART_SELL_COOLDOWN_MS = 3 * 60_000;

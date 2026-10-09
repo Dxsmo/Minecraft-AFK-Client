@@ -51,6 +51,7 @@ export type Command =
   | { type: "background_chat"; text: string }
   | ({ type: "configure" } & BehaviorConfig)
   | { type: "clean_spawner" }
+  | { type: "check_crouch" }
   | { type: "pause_autosell"; autosell_pause_after_ms: number; autosell_resume_after_ms: number }
   | { type: "disconnect" };
 

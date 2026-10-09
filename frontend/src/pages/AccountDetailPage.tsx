@@ -6,6 +6,7 @@ import { useAccountConsole } from "../lib/sockets";
 import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { ConsoleView } from "../components/ConsoleView";
+import { EarningsBox } from "../components/EarningsBox";
 import { AccountSettingsPanel } from "../components/AccountSettingsPanel";
 
 export function AccountDetailPage() {
@@ -272,7 +273,7 @@ export function AccountDetailPage() {
             </button>
           </form>
           {commandError && <p role="alert" className="alert-error">{commandError}</p>}
-          {id && <EarningsBox accountId={id} />}
+          {id && <EarningsBox key={id} accountId={id} />}
         </div>
       )}
 
@@ -338,62 +339,5 @@ function TabIcon({ name }: { name: "console" | "settings" }) {
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
-  );
-}
-
-interface Earnings {
-  last5m: number;
-  last1h: number;
-  last24h: number;
-}
-
-/** Rolling sell earnings box, polled every 15s. Shown under the console. */
-function EarningsBox({ accountId }: { accountId: string }) {
-  const [earnings, setEarnings] = useState<Earnings | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    async function poll() {
-      try {
-        const data = await api.get<Earnings>(`/minecraft/accounts/${accountId}/earnings`);
-        if (active) setEarnings(data);
-      } catch {
-        /* transient; retry on next tick */
-      }
-    }
-    void poll();
-    const t = setInterval(poll, 15_000);
-    return () => {
-      active = false;
-      clearInterval(t);
-    };
-  }, [accountId]);
-
-  const fmt = (n: number) => `$${n.toLocaleString("de-DE", { maximumFractionDigits: 2 })}`;
-
-  return (
-    <div className="card p-3.5 text-sm">
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>
-        Sell earnings
-      </h3>
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <EarningStat label="5 min" value={earnings ? fmt(earnings.last5m) : "—"} />
-        <EarningStat label="1 h" value={earnings ? fmt(earnings.last1h) : "—"} />
-        <EarningStat label="24 h" value={earnings ? fmt(earnings.last24h) : "—"} />
-      </div>
-    </div>
-  );
-}
-
-function EarningStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <p className="text-[11px]" style={{ color: "var(--text-subtle)" }}>
-        {label}
-      </p>
-      <p className="mt-0.5 font-semibold tabular-nums" style={{ color: "var(--accent)" }}>
-        {value}
-      </p>
-    </div>
   );
 }

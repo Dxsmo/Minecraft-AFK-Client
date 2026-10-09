@@ -257,6 +257,7 @@ fn process_pending_commands(bot: &Client) {
                 shared().lock().behavior.enqueue_background_chat(text)
             }
             Command::Configure(cfg) => shared().lock().behavior.update_config(cfg),
+            Command::CheckCrouch => shared().lock().behavior.check_crouch(&bot),
             Command::CleanSpawner => shared().lock().behavior.enqueue_clean_spawner(),
             Command::PauseAutosell {
                 autosell_pause_after_ms,

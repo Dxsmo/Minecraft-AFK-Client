@@ -213,3 +213,37 @@ export async function getEarningsSummary(id: string) {
   const totals = rows[0];
   return { last5m: Number(totals.last5m) / 100, last1h: Number(totals.last1h) / 100, last24h: Number(totals.last24h) / 100 };
 }
+
+
+export type EarningsRange = "1h" | "6h" | "24h";
+const EARNINGS_WINDOWS = {
+  "1h": { durationMs: 60 * 60_000, bucketMs: 60_000 },
+  "6h": { durationMs: 6 * 60 * 60_000, bucketMs: 5 * 60_000 },
+  "24h": { durationMs: 24 * 60 * 60_000, bucketMs: 15 * 60_000 },
+} as const;
+
+/** A bounded time series, aggregated in SQLite using the account/time index. */
+export async function getEarningsHistory(id: string, range: EarningsRange, now = Date.now()) {
+  const { durationMs, bucketMs } = EARNINGS_WINDOWS[range];
+  const start = now - durationMs;
+  const count = durationMs / bucketMs;
+  const rows = await prisma.$queryRaw<Array<{ bucket: number | bigint; cents: number | bigint }>>`
+    SELECT CAST((CAST("createdAt" AS INTEGER) - ${start}) / ${bucketMs} AS INTEGER) AS "bucket",
+      SUM(ROUND("amount" * 100)) AS "cents"
+    FROM "SellEarning"
+    WHERE "minecraftAccountId" = ${id}
+      AND "createdAt" >= ${new Date(start)} AND "createdAt" <= ${new Date(now)}
+    GROUP BY "bucket"
+  `;
+  const cents = Array<number>(count).fill(0);
+  for (const row of rows) {
+    // A sale at exactly 'now' belongs to the last visible interval.
+    const index = Math.min(count - 1, Number(row.bucket));
+    if (index >= 0 && index < count) cents[index] += Number(row.cents);
+  }
+  return {
+    range, start: new Date(start).toISOString(), end: new Date(now).toISOString(), bucketMs,
+    total: cents.reduce((sum, value) => sum + value, 0) / 100,
+    points: cents.map((value, index) => ({ at: new Date(start + index * bucketMs).toISOString(), amount: value / 100 })),
+  };
+}

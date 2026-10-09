@@ -216,8 +216,12 @@ additional users access afterwards in the account's **Settings** panel):
   menu from missing inventory data. Teleports/world changes cancel stale cycles.
   Empty or stale local inventory snapshots do not delay the configured interval.
   World-restart countdowns pause automatic selling from 10 seconds before the
-  announced restart until 5 minutes afterwards, including bot reconnects.
+  announced restart until 3 minutes afterwards, including bot reconnects.
   HugoSMP announcements are recognized in both system messages and named chat.
+  From the announcement at ten seconds or less, enabled crouch is checked once
+  per minute for five minutes. Checks inspect server sneak metadata, reassert
+  held input, and survive bot reconnects; a missed check runs on rejoin within
+  that window.
   Auto-sell recognizes HugoSMP's `Items verkaufen` menu from the current
   inventory state, even when spawn events or delayed callbacks have cleared
   the request association. Populated late sell menus are reused for selling.
@@ -251,6 +255,12 @@ additional users access afterwards in the account's **Settings** panel):
   diagnostic per connection. Valid one-byte bundle delimiters remain intact.
   Other parse warnings include the payload length and protocol state, are limited
   to one per 30 seconds, and do not prevent processing subsequent packets.
+- Sell earnings under the console keep the rolling 5m/1h/24h totals. The small
+  bottom-left arrow expands a live graph for the last 1h, 6h or 24h, with time
+  labels below and amounts on the right. Points aggregate sales per minute,
+  five minutes or fifteen minutes respectively; hover/touch or arrow keys show
+  individual intervals. Only users with access to the account can read its
+  history. The existing 24-hour earnings retention also applies to the graph.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once
@@ -287,7 +297,7 @@ additional users access afterwards in the account's **Settings** panel):
   otherwise flood the list with false positives. *Verlauf* is a permanent
   archive: every scan's complete price list is stored, so a newer scan never
   destroys an older one and any past price stand stays retrievable.
-- `autoReconnect` – fixed 30s retry delay (±2s jitter) after a dropped
+- `autoReconnect` – fixed 15s retry delay (no jitter) after a dropped
   connection, retried indefinitely as long as the client isn't manually
   stopped; can be disabled per account at any time
 - Any admin or user assigned to the account can edit its settings,
@@ -314,7 +324,7 @@ packet arrives and `spawn` once the player is fully in a loaded world. The
 Node side marks the client `ONLINE` on `spawn`. If a connection attempt
 neither spawns nor fails within 5 minutes (a hung subprocess), it's
 recycled and retried. When the connection later ends, the Rust process
-exits and Node schedules the next attempt on its fixed 30s timer — Node,
+exits and Node schedules the next attempt on its fixed 15s timer — Node,
 not Azalea, owns the reconnect policy.
 
 ### Azalea version pin (tracking new Minecraft releases)

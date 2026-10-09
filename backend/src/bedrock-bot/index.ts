@@ -194,6 +194,11 @@ async function main(): Promise<void> {
   c.on("container_close", p => behavior.inventory.onClose(p as Parameters<typeof behavior.inventory.onClose>[0]));
   c.on("item_stack_response", p => behavior.inventory.onResponse(p as Parameters<typeof behavior.inventory.onResponse>[0]));
 
+  c.on("set_entity_data", (packet: unknown) => {
+    const sneaking = sender.observeSneakMetadata(packet);
+    if (sneaking !== null) behavior.onSneakStatus(sneaking);
+  });
+
   c.on("set_health", (packet: unknown) => {
     try {
       const p = packet as { health?: number };
@@ -251,6 +256,9 @@ function handleCommand(
       break;
     case "configure":
       behavior.updateConfig(cmd);
+      break;
+    case "check_crouch":
+      behavior.checkCrouch();
       break;
     case "clean_spawner":
       behavior.enqueueCleanSpawner();

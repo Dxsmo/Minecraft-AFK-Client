@@ -505,6 +505,19 @@ impl BehaviorState {
         self.crouch_resync_pending = true;
     }
 
+    pub fn check_crouch(&mut self, bot: &Client) {
+        if !self.config.crouch_enabled {
+            return;
+        }
+        let status = bot
+            .component::<azalea::entity::metadata::AbstractEntityShiftKeyDown>()
+            .map(|flag| if **flag { "bestätigt" } else { "nicht aktiv" })
+            .unwrap_or("noch nicht bestätigt");
+        emit(&OutEvent::BehaviorLog { message: format!("Crouch-Check nach Weltneustart: Serverstatus {status}; Sneak wird erneut angefordert") });
+        self.crouch_resync_pending = true;
+        self.next_crouch_check_at = Instant::now();
+    }
+
     /// Initial join, respawn and proxy/world switches reset the server's input.
     pub fn on_spawn(&mut self, bot: &Client) {
         let now = Instant::now();
@@ -1702,7 +1715,7 @@ mod tests {
     fn restart_pause_cancels_pending_clicks_and_survives_world_and_config_changes() {
         let (client, mut state) = sell_client();
         let clicks = capture_sell_clicks(&client);
-        state.pause_autosell(20_000, 330_000);
+        state.pause_autosell(20_000, 210_000);
         let (start, end) = state.restart_sell_pause.unwrap();
         tick_sell(&client, &mut state, start - Duration::from_millis(1));
         assert_eq!(take_commands(&client), vec!["/sell"]);
@@ -2672,6 +2685,33 @@ mod tests {
         state.on_tick(&client);
         send_input(&client);
         assert_eq!(*packets.lock(), vec![true]);
+    }
+
+    #[test]
+    fn restart_crouch_check_reasserts_input_for_positive_and_negative_server_flags() {
+        let (client, mut state, packets) = crouch_client(true);
+        state.spawned = true;
+        state.automation_ready_at = Instant::now();
+        for server_sneaking in [true, false] {
+            client.ecs.write().entity_mut(client.entity).insert((
+                azalea::entity::metadata::AbstractEntityShiftKeyDown(server_sneaking),
+                LastSentInput(ServerboundPlayerInput {
+                    shift: true,
+                    ..Default::default()
+                }),
+            ));
+            state.check_crouch(&client);
+            state.on_tick(&client);
+            send_input(&client);
+        }
+        assert_eq!(*packets.lock(), vec![true, true]);
+        state.config.crouch_enabled = false;
+        state.crouch_resync_pending = false;
+        state.check_crouch(&client);
+        assert!(
+            !state.crouch_resync_pending,
+            "disabled crouch is never enabled by a restart check"
+        );
     }
 
     #[test]

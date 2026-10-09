@@ -27,6 +27,8 @@ export class BotSender {
   private inputTick = 0n;
   private sneaking = false;
   private sneakEdge = true;
+  private releaseForSneakResync = false;
+  private sneakPressPending = false;
   private handledTeleport = false;
   private lastWarningAt = new Map<string, number>();
   authoritativeInventory = true;
@@ -119,23 +121,41 @@ export class BotSender {
 
   setInputTick(tick: bigint): void { this.inputTick = tick; }
 
-  setSneak(sneaking: boolean): void {
+  /** Geyser caches Java input: START alone may leave its held shift unchanged
+   * after a proxy transfer. A resync sends release and press in separate ticks. */
+  setSneak(sneaking: boolean, resync = false): void {
+    if (sneaking && resync && this.sneaking && !this.sneakPressPending) this.releaseForSneakResync = true;
+    if (!sneaking) { this.releaseForSneakResync = false; this.sneakPressPending = false; }
     this.sneaking = sneaking;
     this.sneakEdge = true;
+  }
+
+  /** Only the local player's authoritative flags count as sneak confirmation. */
+  observeSneakMetadata(packet: unknown): boolean | null {
+    const p = packet as { runtime_entity_id?: unknown; metadata?: { key?: unknown; value?: unknown }[] } | null;
+    try {
+      if (p?.runtime_entity_id == null || BigInt(p.runtime_entity_id as bigint) !== this.runtimeEntityId || !Array.isArray(p.metadata)) return null;
+      const flags = p.metadata.find(entry => entry.key === "flags" || entry.key === 0)?.value;
+      if (flags && typeof flags === "object" && "sneaking" in flags && typeof flags.sneaking === "boolean") return flags.sneaking;
+      if (typeof flags === "bigint" || (typeof flags === "number" && Number.isSafeInteger(flags))) return (BigInt(flags) & 2n) !== 0n;
+    } catch { /* Ignore malformed or unrelated metadata. */ }
+    return null;
   }
 
   /** Modern Bedrock/Geyser reads held keys from PlayerAuthInput every game tick. */
   tickInput(): boolean {
     if (this.runtimeEntityId == null || !this.position) return false;
+    const heldSneak = this.sneaking && !this.releaseForSneakResync;
     const sent = this.packet("player_auth_input", {
       pitch: this.pitch, yaw: this.yaw, head_yaw: this.yaw, position: this.position,
       move_vector: { x: 0, z: 0 }, analogue_move_vector: { x: 0, z: 0 }, raw_move_vector: { x: 0, z: 0 },
       input_data: {
-        sneaking: this.sneaking, sneak_down: this.sneaking, sneak_current_raw: this.sneaking,
-        start_sneaking: this.sneaking && this.sneakEdge,
-        stop_sneaking: !this.sneaking && this.sneakEdge,
-        sneak_pressed_raw: this.sneaking && this.sneakEdge,
-        sneak_released_raw: !this.sneaking && this.sneakEdge,
+        sneaking: heldSneak, sneak_down: heldSneak, sneak_current_raw: heldSneak,
+        persist_sneak: heldSneak,
+        start_sneaking: heldSneak && this.sneakEdge,
+        stop_sneaking: !heldSneak && this.sneakEdge,
+        sneak_pressed_raw: heldSneak && this.sneakEdge,
+        sneak_released_raw: !heldSneak && this.sneakEdge,
         handled_teleport: this.handledTeleport,
       },
       input_mode: "mouse", play_mode: "normal", interaction_model: "crosshair",
@@ -147,7 +167,17 @@ export class BotSender {
         z: Math.cos(this.yaw * Math.PI / 180) * Math.cos(this.pitch * Math.PI / 180),
       },
     });
-    if (sent) { this.sneakEdge = false; this.handledTeleport = false; }
+    if (sent) {
+      if (this.releaseForSneakResync) {
+        this.releaseForSneakResync = false;
+        this.sneakPressPending = true;
+        this.sneakEdge = true;
+      } else {
+        this.sneakPressPending = false;
+        this.sneakEdge = false;
+      }
+      this.handledTeleport = false;
+    }
     return sent;
   }
 

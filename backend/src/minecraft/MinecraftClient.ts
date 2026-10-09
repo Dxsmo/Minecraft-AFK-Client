@@ -20,11 +20,8 @@ import { accountLogger } from "../logging/logger.js";
 import { config as appConfig } from "../config/config.js";
 import type { Logger } from "pino";
 
-// Fixed-interval reconnect: ~30 seconds per retry (no exponential backoff), as
-// requested. A little jitter avoids thundering-herd reconnects when many bots
-// drop at once.
-const RECONNECT_DELAY_MS = 30_000;
-const RECONNECT_JITTER_MS = 2_000;
+// Fixed, locked retry interval for every account and every attempt.
+const RECONNECT_DELAY_MS = 15_000;
 
 // Safety net: if a spawned bot never reaches ONLINE or reports a failure within
 // this window, we treat the attempt as hung and recycle it.
@@ -84,6 +81,10 @@ export class MinecraftClient extends EventEmitter {
 
   /** Kept by the supervisor so a subprocess reconnect cannot bypass the pause. */
   private worldRestartAt: number | null = null;
+  private restartCrouchTimer: NodeJS.Timeout | null = null;
+  private restartCrouchWindowEnd = 0;
+  private lastCrouchRestartAt: number | null = null;
+  private pendingRestartCrouchCheck = false;
 
   private health = 20;
   private food = 20;
@@ -100,6 +101,8 @@ export class MinecraftClient extends EventEmitter {
 
   /** Stops all timers and disconnects; call when the account is removed. */
   dispose(): void {
+    if (this.restartCrouchTimer) clearInterval(this.restartCrouchTimer);
+    this.restartCrouchTimer = null;
     if (this.schedulerTimer) {
       clearInterval(this.schedulerTimer);
       this.schedulerTimer = null;
@@ -363,6 +366,29 @@ export class MinecraftClient extends EventEmitter {
     };
   }
 
+  /** Five minute checks anchored to the <=10s announcement, retained across bot reconnects. */
+  private scheduleRestartCrouchChecks(restartAt: number): void {
+    if (this.lastCrouchRestartAt !== null && Math.abs(restartAt - this.lastCrouchRestartAt) <= 5000) return;
+    this.lastCrouchRestartAt = restartAt;
+    if (this.restartCrouchTimer) clearInterval(this.restartCrouchTimer);
+    this.restartCrouchWindowEnd = Date.now() + 5 * 60_000;
+    this.pendingRestartCrouchCheck = false;
+    let remaining = 5;
+    this.restartCrouchTimer = setInterval(() => {
+      if (this.config.crouchEnabled) {
+        this.pendingRestartCrouchCheck = !this.sendRestartCrouchCheck();
+      }
+      if (--remaining === 0 && this.restartCrouchTimer) {
+        clearInterval(this.restartCrouchTimer);
+        this.restartCrouchTimer = null;
+      }
+    }, 60_000);
+  }
+
+  private sendRestartCrouchCheck(): boolean {
+    return this.status === "ONLINE" && this.config.crouchEnabled && this.sendToBot({ type: "check_crouch" });
+  }
+
   private handleRustBotEvent(event: Record<string, unknown>): void {
     const type = event.type as string;
 
@@ -406,6 +432,9 @@ export class MinecraftClient extends EventEmitter {
         this.reconnectAttempt = 0;
         this.setStatus("ONLINE");
         this.emitConsole("SYSTEM", "Spawned into the world");
+        if (this.pendingRestartCrouchCheck && Date.now() <= this.restartCrouchWindowEnd && this.sendRestartCrouchCheck()) {
+          this.pendingRestartCrouchCheck = false;
+        }
         break;
 
       case "chat": {
@@ -416,8 +445,9 @@ export class MinecraftClient extends EventEmitter {
           const seconds = parseWorldRestartSeconds(clean);
           if (seconds !== null) {
             this.worldRestartAt = Date.now() + seconds * 1000;
+            if (seconds <= 10) this.scheduleRestartCrouchChecks(this.worldRestartAt);
             this.sendToBot({ type: "pause_autosell", ...this.sellPauseWindow() });
-            this.emitConsole("SYSTEM", "Weltneustart: AutoSell pausiert ab 10 Sekunden vorher bis 5 Minuten danach");
+            this.emitConsole("SYSTEM", "Weltneustart: AutoSell pausiert ab 10 Sekunden vorher bis 3 Minuten danach");
           }
         }
         const amount = parseSellEarning(clean);
@@ -494,7 +524,7 @@ export class MinecraftClient extends EventEmitter {
       return;
     }
 
-    const delay = RECONNECT_DELAY_MS + Math.random() * RECONNECT_JITTER_MS;
+    const delay = RECONNECT_DELAY_MS;
     const seconds = Math.round(delay / 1000);
     this.setStatus("RECONNECTING");
     this.emitConsole("SYSTEM", `Reconnecting in ${seconds}s (attempt ${this.reconnectAttempt + 1})...`);

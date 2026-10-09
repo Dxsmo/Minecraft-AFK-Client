@@ -27,7 +27,7 @@ describe("Bedrock crouch after world transitions", () => {
     behavior.markSpawned();
     vi.advanceTimersByTime(300);
     behavior.onTick();
-    expect(sender.setSneak).toHaveBeenCalledExactlyOnceWith(true);
+    expect(sender.setSneak).toHaveBeenCalledExactlyOnceWith(true, true);
     for (let i = 0; i < 2; i++) {
       behavior.markJoining();
       behavior.onTick();
@@ -51,7 +51,7 @@ describe("Bedrock crouch after world transitions", () => {
     behavior.markTeleported();
     vi.advanceTimersByTime(150);
     behavior.onTick();
-    expect(sender.setSneak.mock.calls).toEqual([[true], [true]]);
+    expect(sender.setSneak.mock.calls).toEqual([[true, true], [true, true]]);
   });
 
   it("leaves crouch disabled when it is switched off", () => {
@@ -100,14 +100,14 @@ describe("Bedrock crouch after world transitions", () => {
     }
   });
 
-  it("pauses ten seconds before restart and resumes five minutes afterwards across world and config changes", () => {
+  it("pauses ten seconds before restart and resumes three minutes afterwards across world and config changes", () => {
     const { sender, behavior } = setup();
     const cfg = { crouch_enabled: true, autosell_enabled: true, autosell_interval_seconds: 5 };
     behavior.updateConfig(cfg);
     behavior.markSpawned();
     vi.advanceTimersByTime(300);
     behavior.onTick();
-    behavior.pauseAutosell(20_000, 330_000);
+    behavior.pauseAutosell(20_000, 210_000);
     vi.advanceTimersByTime(19_999);
     behavior.onTick();
     expect(sender.command).toHaveBeenCalledTimes(2);
@@ -120,7 +120,7 @@ describe("Bedrock crouch after world transitions", () => {
     behavior.enqueueChat("/home");
     behavior.onTick();
     expect(sender.send).toHaveBeenCalledWith("/home");
-    vi.advanceTimersByTime(309_999);
+    vi.advanceTimersByTime(189_999);
     behavior.onTick();
     expect(sender.command).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(1);
@@ -160,7 +160,7 @@ describe("Bedrock crouch after world transitions", () => {
     vi.advanceTimersByTime(4200);
     behavior.onTick();
     expect(sender.send).toHaveBeenLastCalledWith("/background");
-    expect(sender.setSneak).toHaveBeenCalledWith(true);
+    expect(sender.setSneak).toHaveBeenCalledWith(true, true);
   });
 
   it("keeps auto-sell paused for five seconds after a manual command despite teleport or inventory-loading replies", () => {

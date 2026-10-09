@@ -61,6 +61,8 @@ export class BehaviorState {
   private queue: ForegroundTask[] = [];
 
   private sneaking = false;
+  private serverSneaking: boolean | null = null;
+  private crouchResyncGraceUntil = 0;
   private crouchResyncPending = false;
   private lastHealth: { health: number; food: number } | null = null;
 
@@ -104,12 +106,14 @@ export class BehaviorState {
     this.automationReadyAt = now + SPAWN_STABILIZE_MS;
     this.nextAutosellAt = this.automationReadyAt;
     this.crouchResyncPending = true;
+    this.serverSneaking = null;
   }
 
   markJoining(): void {
     this.inventory.reset();
     this.spawned = false;
     this.crouchResyncPending = true;
+    this.serverSneaking = null;
     this.automationReadyAt = Number.POSITIVE_INFINITY;
   }
 
@@ -119,6 +123,7 @@ export class BehaviorState {
     this.automationReadyAt = Date.now() + TELEPORT_STABILIZE_MS;
     this.nextAutosellAt = this.automationReadyAt;
     this.crouchResyncPending = true;
+    this.serverSneaking = null;
   }
 
   // --- Foreground task enqueue (called from stdin command handling) ---
@@ -150,7 +155,9 @@ export class BehaviorState {
     // World switches/teleports may clear server input while our local value
     // remains true. Re-send start_sneak after the destination has settled.
     if (this.spawned && now >= this.automationReadyAt && this.cfg.crouch_enabled && (!this.sneaking || this.crouchResyncPending || now >= this.nextCrouchCheckAt)) {
-      this.applyCrouch(true);
+      const resync = this.crouchResyncPending || this.serverSneaking === false;
+      this.applyCrouch(true, resync);
+      if (resync) this.crouchResyncGraceUntil = now + 2000;
       this.crouchResyncPending = false;
       this.nextCrouchCheckAt = now + 2000;
     }
@@ -221,6 +228,7 @@ export class BehaviorState {
       /^[^:]+ hat deine Teleportations-Anfrage angenommen!$/.test(plain)
     )) {
       this.crouchResyncPending = true;
+      this.serverSneaking = null;
       this.nextCrouchCheckAt = now;
     }
     if (isInventoryBusyMessage(message)) {
@@ -236,6 +244,24 @@ export class BehaviorState {
     this.nextAutosellAt = Math.max(this.nextAutosellAt, until);
   }
 
+  onSneakStatus(sneaking: boolean): void {
+    this.serverSneaking = sneaking;
+    // The release's own delayed metadata must not start another release/press
+    // cycle. Keep its status, then retry on the regular check if still false.
+    if (!sneaking && this.cfg.crouch_enabled && Date.now() >= this.crouchResyncGraceUntil) {
+      this.crouchResyncPending = true;
+      this.nextCrouchCheckAt = Date.now();
+    }
+  }
+
+  checkCrouch(): void {
+    if (!this.cfg.crouch_enabled) return;
+    const status = this.serverSneaking === true ? "bestätigt" : this.serverSneaking === false ? "nicht aktiv" : "noch nicht bestätigt";
+    emit({ type: "behavior_log", message: `Crouch-Check nach Weltneustart: Serverstatus ${status}; Sneak wird erneut angefordert` });
+    this.crouchResyncPending = true;
+    this.nextCrouchCheckAt = Date.now();
+  }
+
   // --- Health / food ---
 
   reportHealth(health: number | null, food: number | null): void {
@@ -246,8 +272,8 @@ export class BehaviorState {
     emit({ type: "health", health: h, food: f } satisfies OutEvent);
   }
 
-  private applyCrouch(on: boolean): void {
+  private applyCrouch(on: boolean, resync = false): void {
     this.sneaking = on;
-    this.sender.setSneak(on);
+    this.sender.setSneak(on, resync);
   }
 }
