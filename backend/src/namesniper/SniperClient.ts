@@ -13,6 +13,7 @@ import type { ClientStatus, MsaSignInPrompt } from "../minecraft/types.js";
 import { accountLogger } from "../logging/logger.js";
 import { config as appConfig } from "../config/config.js";
 import type { Logger } from "pino";
+import { terminateSubprocess } from "../utils/terminateSubprocess.js";
 
 // Safety net: if the subprocess never authenticates within this window, treat
 // it as hung and recycle it (mirrors MinecraftClient's connect hang timer).
@@ -328,12 +329,7 @@ export class SniperClient extends EventEmitter {
       /* stdin may already be gone */
     }
 
-    setTimeout(() => {
-      if (!child.killed) child.kill("SIGTERM");
-      setTimeout(() => {
-        if (!child.killed) child.kill("SIGKILL");
-      }, 1500);
-    }, 500);
+    terminateSubprocess(child);
   }
 
   private sendToBot(payload: Record<string, unknown>): void {

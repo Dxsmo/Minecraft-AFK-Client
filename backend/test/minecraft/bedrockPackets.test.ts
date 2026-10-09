@@ -45,6 +45,24 @@ describe("Bedrock automation with the installed wire codec", () => {
   beforeEach(() => { vi.useFakeTimers(); vi.spyOn(process.stdout, "write").mockImplementation(() => true); });
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
+  it.each([false, true])("sends no game packets during a pending join with crouch=%s", crouch => {
+    const { sender, packets, queue } = setup("1.26.51");
+    const behavior = new BehaviorState({
+      host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "",
+      crouch_enabled: crouch, autosell_enabled: true, autosell_interval_seconds: 1,
+    }, sender);
+    behavior.enqueueChat("/home");
+    behavior.checkCrouch();
+    // Even if early game data already supplied an entity id and position,
+    // the automation must wait for spawn instead of interfering with login.
+    for (let i = 0; i < 3600; i++) { vi.advanceTimersByTime(50); behavior.onTick(); }
+    behavior.updateConfig({ crouch_enabled: !crouch, autosell_enabled: true });
+    behavior.onTick();
+    expect(queue).not.toHaveBeenCalled();
+    behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
+    expect(packets.map(packet => packet.name)).toEqual(["player_auth_input", "command_request"]);
+  });
+
   it.each(["1.21.50", "1.21.130", "1.26.40", "1.26.51"])("holds and releases sneak using auth input in %s", version => {
     const { sender, packets } = setup(version);
     sender.setSneak(true);

@@ -19,6 +19,7 @@ import type {
 import { accountLogger } from "../logging/logger.js";
 import { config as appConfig } from "../config/config.js";
 import type { Logger } from "pino";
+import { terminateSubprocess } from "../utils/terminateSubprocess.js";
 
 // Fixed, locked retry interval for every account and every attempt.
 const RECONNECT_DELAY_MS = 15_000;
@@ -551,13 +552,7 @@ export class MinecraftClient extends EventEmitter {
       /* stdin may already be gone */
     }
 
-    // Give the bot a moment to exit gracefully, then force it.
-    setTimeout(() => {
-      if (!child.killed) child.kill("SIGTERM");
-      setTimeout(() => {
-        if (!child.killed) child.kill("SIGKILL");
-      }, 1500);
-    }, 500);
+    terminateSubprocess(child);
   }
 
   private sendToBot(payload: Record<string, unknown>): boolean {

@@ -15,9 +15,12 @@ class FakeChild extends EventEmitter {
   stdout = new PassThrough();
   stderr = new PassThrough();
   killed = false;
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
   pid = 4242;
   kill = vi.fn((signal?: NodeJS.Signals) => {
     this.killed = true;
+    this.signalCode = signal ?? "SIGTERM";
     this.emit("exit", null, signal ?? "SIGTERM");
     this.emit("close", null, signal ?? "SIGTERM");
     return true;
@@ -30,6 +33,7 @@ class FakeChild extends EventEmitter {
 
   /** Simulate the process ending on its own (crash / connection dropped). */
   exitWith(code: number | null): void {
+    this.exitCode = code;
     this.stdout.end();
     this.emit("exit", code, null);
     this.emit("close", code, null);
@@ -143,6 +147,51 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(config.auth_type).toBe("offline");
     expect(config).not.toHaveProperty("auto_command_enabled");
     expect(config).not.toHaveProperty("tpauto_enabled");
+  });
+
+  it.each(["JAVA", "BEDROCK"] as const)("force-kills an old stuck %s process without signaling the replacement", edition => {
+    vi.useFakeTimers();
+    try {
+      const client = makeClient({ edition });
+      client.connect();
+      const old = lastChild();
+      old.kill.mockImplementation(signal => {
+        old.killed = true;
+        if (signal === "SIGKILL") {
+          old.signalCode = signal;
+          old.emit("exit", null, signal);
+          old.emit("close", null, signal);
+        }
+        return true;
+      });
+      client.restart();
+      const replacement = lastChild();
+      expect(replacement).not.toBe(old);
+      vi.advanceTimersByTime(2000);
+      expect(old.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+      expect(replacement.kill).not.toHaveBeenCalled();
+      expect(client.getStatus().status).toBe("CONNECTING");
+      client.dispose();
+      vi.advanceTimersByTime(2000);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("force-kills a stuck Name Sniper subprocess when it is stopped", () => {
+    vi.useFakeTimers();
+    try {
+      const sniper = makeSniper();
+      sniper.start();
+      const child = lastChild();
+      child.kill.mockImplementation(() => { child.killed = true; return true; });
+      sniper.stop();
+      vi.advanceTimersByTime(2000);
+      expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+      expect(sniper.getStatus().status).toBe("OFFLINE");
+      child.signalCode = "SIGKILL";
+      child.emit("exit", null, "SIGKILL");
+      child.emit("close", null, "SIGKILL");
+      sniper.dispose();
+    } finally { vi.useRealTimers(); }
   });
 
   it("never automatically queries /homes on joins, scheduling or /sethome", async () => {
