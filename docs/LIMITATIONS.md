@@ -87,6 +87,26 @@ and [container title transport](https://github.com/GeyserMC/Geyser/blob/master/c
 The pinned local packet schemas and codec regression tests define the supported
 wire shapes; these checks do not substitute for a live HugoSMP connection.
 
+## Fixed view distance and server simulation distance
+
+Java and Bedrock accounts always request a view distance of **6 chunks**.
+This is fixed in the bot code, with no per-account or website override.
+Java sends `ClientInformation.view_distance = 6`; Bedrock sets both the
+`viewDistance` option and the client property read by the installed library's
+`request_chunk_radius` handler. The server can impose a lower actual radius.
+
+**Simulation distance cannot be locked to 6 by this client.** Neither the Java
+client settings packet nor Bedrock's chunk-radius request exposes a client
+setting that changes the remote server's simulation radius. Java server
+operators configure `simulation-distance=6`; vanilla Bedrock server operators
+configure `tick-distance=6`. On HugoSMP, this requires the server operator;
+the website does not administer that server. There is no placeholder setting
+claiming a simulation distance that the client cannot enforce.
+
+References: [Java simulation-distance server property](https://feedback.minecraft.net/hc/en-us/articles/4409891990285-Minecraft-Java-Edition-Snapshot-21w38a),
+[Bedrock server properties](https://learn.microsoft.com/en-us/minecraft/creator/documents/bedrockserver/server-properties?view=minecraft-bedrock-experimental),
+[Bedrock chunk-radius packet](https://mojang.github.io/bedrock-protocol-docs/1.26.51/packets/request-chunk-radius-packet/).
+
 ## 2. Live View / automatic screenshots (not possible)
 
 **Status: not possible with the current stack.**

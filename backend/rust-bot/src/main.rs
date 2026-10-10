@@ -286,10 +286,10 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
     let is_tick = matches!(&event, Event::Tick);
     match event {
         Event::Init => {
-            // A small view distance keeps memory/CPU low, which matters on a
-            // Raspberry Pi and doesn't affect account automation.
+            // Fixed view distance for every Java account; independent of
+            // account settings. Simulation distance is controlled by the server.
             let _ = bot.set_client_information(ClientInformation {
-                view_distance: 4,
+                view_distance: 6,
                 ..Default::default()
             });
             emit(&OutEvent::BehaviorLog {

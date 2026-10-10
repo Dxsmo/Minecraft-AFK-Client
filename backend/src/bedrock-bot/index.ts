@@ -77,6 +77,7 @@ async function main(): Promise<void> {
       port: config.port || 19132,
       username: config.username,
       offline: !isMicrosoft,
+      viewDistance: 6,
       // A proxy may advertise its internal/default port instead of the public
       // port entered on the website. Always use the configured endpoint.
       followPort: false,
@@ -105,6 +106,9 @@ async function main(): Promise<void> {
         progress.waitForDeviceCode(data.expires_in);
       },
     });
+    // The installed library reads client.viewDistance, not options.viewDistance,
+    // when sending request_chunk_radius. Keep all Bedrock accounts fixed at 6.
+    Object.assign(client, { viewDistance: 6 });
   } catch (err) {
     emit({ type: "fatal_error", error: `Failed to start Bedrock client: ${errMsg(err)}` });
     endProcess(1);
