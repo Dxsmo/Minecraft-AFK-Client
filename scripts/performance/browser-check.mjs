@@ -73,7 +73,11 @@ try {
     await page.locator('input[type="password"]').fill('test');
     await page.locator('button[type="submit"]').click();
     await page.locator('a[href="/accounts/bench?tab=console"]').first().click();
+    await page.waitForFunction(() => document.querySelectorAll('.console-output > div').length === 6);
+    const compactHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
+    await page.getByRole('button', { name: 'Konsole ausklappen', exact: true }).click();
     await page.waitForFunction(n => document.querySelectorAll('.console-output > div').length === n, count);
+    const expandedHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
     const historyMs = await page.evaluate(() => performance.now() - window.__historyStart);
     const live = await page.evaluate(async () => {
       const result = [];
@@ -134,9 +138,20 @@ try {
     await input.press('Enter');
     await page.waitForTimeout(150);
     const draftAfterFailure = await input.inputValue();
-    report.scenarios.push({ count, historyMs: +historyMs.toFixed(1), live, httpCommands,
+    const retainedCount = await page.locator('.console-output > div').count();
+    await page.getByRole('button', { name: 'Konsole einklappen', exact: true }).click();
+    await page.waitForFunction(() => document.querySelectorAll('.console-output > div').length === 6);
+    await page.evaluate(() => window.__sockets.findLast(s => s.url.endsWith('/ws/accounts/bench')).deliver({
+      type: 'console', event: { minecraftAccountId: 'bench', type: 'CHAT', message: 'Latest compact line', timestamp: new Date().toISOString() },
+    }));
+    await page.waitForFunction(() => document.querySelector('.console-output').lastElementChild.textContent.includes('Latest compact line'));
+    await page.getByRole('button', { name: 'Konsole ausklappen', exact: true }).click();
+    const restoredCount = await page.locator('.console-output > div').count();
+    report.scenarios.push({ count, compactHeight, expandedHeight, restoredCount, historyMs: +historyMs.toFixed(1), live, httpCommands,
       draftAfterSend, draftAfterFailure, readingAnchorDelta, historyAnchorDelta, errors });
     if (process.env.PERF_VERIFY === '1') {
+      if (compactHeight !== 160 || expandedHeight !== 560) throw new Error('Console toggle did not preserve the expected heights');
+      if (restoredCount !== Math.min(20_000, retainedCount + 1)) throw new Error('Console toggle lost buffered history');
       if (JSON.stringify(httpCommands) !== JSON.stringify(['/tpahere Steve', '/home'])) throw new Error('Manual commands were dropped');
       if (draftAfterFailure !== '/homes') throw new Error('Failed command draft was lost');
       if (Math.abs(readingAnchorDelta) > 1) throw new Error('Console reading position jumped');

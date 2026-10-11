@@ -24,7 +24,9 @@ use crate::protocol::{BehaviorConfig, Config, OutEvent};
 
 /// Allow slow servers/proxies to finish opening and synchronizing the menu.
 /// Healthy cycles still proceed immediately; this only bounds missing replies.
-const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_secs(5);
+const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_secs(2);
+/// Give manually requested menus time to open without automation taking over.
+const MANUAL_MENU_GUARD_TIMEOUT: Duration = Duration::from_secs(5);
 /// Never overlap sell commands, and cap even very short configured intervals
 /// at four commands per second.
 const AUTOSELL_MIN_COMMAND_INTERVAL: Duration = Duration::from_millis(250);
@@ -307,7 +309,7 @@ impl BehaviorState {
         } else if manual_sell {
             self.cancelled_sell_until = None;
         }
-        self.manual_priority_until = Some(now + AUTOSELL_MENU_TIMEOUT);
+        self.manual_priority_until = Some(now + MANUAL_MENU_GUARD_TIMEOUT);
         self.close_open_menu(bot);
         // Closing is deferred in Azalea's ECS. Interrupting again before it
         // settles would send a second close for the same container.
@@ -321,7 +323,9 @@ impl BehaviorState {
         // Manual GUIs stay open until the server closes them, a teleport
         // completes, or the user issues another command. /home may open a GUI.
         self.command_menu_close_at = None;
-        self.manual_menu_guard_until = text.starts_with('/').then_some(now + AUTOSELL_MENU_TIMEOUT);
+        self.manual_menu_guard_until = text
+            .starts_with('/')
+            .then_some(now + MANUAL_MENU_GUARD_TIMEOUT);
         emit(&OutEvent::BehaviorLog {
             message: format!("Command dispatched: {text}"),
         });
@@ -1132,7 +1136,10 @@ impl BehaviorState {
                         self.next_autosell_at = self.next_autosell_at.max(retry_at);
                     }
                     if !started_empty || player_item_count(bot) > 0 {
-                        self.log_autosell_failure(now, &format!("{failure} (5s Timeout)"));
+                        self.log_autosell_failure(
+                            now,
+                            &format!("{failure} ({}s Timeout)", AUTOSELL_MENU_TIMEOUT.as_secs()),
+                        );
                     }
                 }
             }
@@ -2549,12 +2556,12 @@ mod tests {
                 started_empty,
                 content_received: None,
             };
-            tick_sell(&client, &mut state, since + Duration::from_millis(50));
+            tick_sell(&client, &mut state, since + Duration::from_millis(1999));
             assert!(matches!(
                 state.autosell_phase,
                 AutoSellPhase::WaitingForMenu { .. }
             ));
-            tick_sell(&client, &mut state, since + AUTOSELL_MENU_TIMEOUT);
+            tick_sell(&client, &mut state, since + Duration::from_secs(2));
             assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
             assert_eq!(client.get_inventory().unwrap().id(), 0);
             tick_sell(

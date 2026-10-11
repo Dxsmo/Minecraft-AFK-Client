@@ -255,7 +255,7 @@ export function AccountDetailPage() {
       {/* Tab content — keyed so it re-mounts and animates on switch. */}
       {tab === "console" && (
         <div key="console" className="tab-panel space-y-3">
-          <ConsoleView logs={logs} className="h-[560px]" />
+          <ConsoleView key={id} logs={logs} className="h-[560px]" />
           {hasOlderLogs && (
             <button type="button" onClick={() => void loadOlderLogs()} disabled={loadingOlderLogs} className="btn btn-secondary btn-sm">
               {loadingOlderLogs ? "Logs werden geladen…" : "Ältere Logs laden"}

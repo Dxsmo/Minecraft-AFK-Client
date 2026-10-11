@@ -326,7 +326,7 @@ export function SniperAccountDetailPage() {
         <h2 className="text-sm font-semibold" style={{ color: "var(--text)" }}>
           Konsole
         </h2>
-        <ConsoleView logs={logs} className="h-[420px]" />
+        <ConsoleView key={id} logs={logs} className="h-[420px]" />
       </div>
     </div>
   );
