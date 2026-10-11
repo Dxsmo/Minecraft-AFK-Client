@@ -100,6 +100,7 @@ model Session {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([expiresAt])
 }
 
 model MinecraftAccount {
@@ -195,6 +196,7 @@ model MinecraftAccount {
   consoleLogs  ConsoleLog[]
   sellEarnings SellEarning[]
   image        AccountImage?
+  @@index([dashboardOrder, name])
 }
 
 // Shared website image, kept separate so bot configuration reads never load it.
@@ -281,7 +283,8 @@ model SellEarning {
   amount             Float
   createdAt          DateTime         @default(now())
 
-  @@index([minecraftAccountId, createdAt])
+  @@index([minecraftAccountId, createdAt, amount])
+  @@index([createdAt])
 }
 
 model UserMinecraftAccount {
@@ -375,7 +378,7 @@ model SniperLog {
 
   sniperAccount SniperAccount @relation(fields: [sniperAccountId], references: [id], onDelete: Cascade)
 
-  @@index([sniperAccountId, createdAt])
+  @@index([sniperAccountId, createdAt, id])
 }
 
 // IP addresses blocked from accessing the service. Enforced by a global

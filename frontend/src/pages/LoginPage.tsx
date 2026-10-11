@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { ApiError } from "../lib/api";
 import { rememberedUsername, rememberUsername, restoreBrowserPassword, storeBrowserPassword } from "../lib/rememberLogin";
+import { loadDashboardPage } from "../lib/pageLoaders";
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -34,6 +35,7 @@ export function LoginPage() {
     const enteredPassword = String(values.get("password") ?? "");
     setError(null);
     setSubmitting(true);
+    void loadDashboardPage().catch(() => {});
     try {
       await login(enteredUsername, enteredPassword);
       rememberUsername(remember ? enteredUsername : null);

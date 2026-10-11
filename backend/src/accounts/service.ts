@@ -68,6 +68,24 @@ export async function listAccountsForSession(session: SessionContext) {
   return accounts.map(present);
 }
 
+/** Dashboard cards need neither assignment lists nor all behavior settings. */
+export async function listDashboardAccountsForSession(session: SessionContext) {
+  const accounts = await prisma.minecraftAccount.findMany({
+    where: session.user.role === "ADMIN" ? {} : { assignments: { some: { userId: session.user.id } } },
+    orderBy: [{ dashboardOrder: "asc" }, { name: "asc" }],
+    select: {
+      id: true, name: true, displayName: true, minecraftVersion: true,
+      serverHost: true, serverPort: true, edition: true, notes: true,
+      status: true, lastSellAt: true,
+      image: { select: { revision: true } },
+      createdBy: publicAccountSelect.createdBy,
+    },
+  });
+  return accounts.map(({ image, ...account }) => ({
+    ...account, imageUrl: image ? `/api/minecraft/accounts/${account.id}/image?v=${image.revision}` : null,
+  }));
+}
+
 export async function getAccountForSession(session: SessionContext, id: string) {
   const account = await prisma.minecraftAccount.findUnique({ where: { id }, select: publicAccountSelect });
   if (!account) return null;
@@ -82,8 +100,17 @@ export async function canAccessAccount(session: SessionContext, id: string): Pro
   if (session.user.role === "ADMIN") return true;
   const assignment = await prisma.userMinecraftAccount.findUnique({
     where: { userId_minecraftAccountId: { userId: session.user.id, minecraftAccountId: id } },
+    select: { id: true },
   });
   return !!assignment;
+}
+
+/** Existence and current access in one small query, without loading settings or relations. */
+export async function hasAccountAccess(session: SessionContext, id: string): Promise<boolean> {
+  return !!await prisma.minecraftAccount.findFirst({
+    where: { id, ...(session.user.role === "ADMIN" ? {} : { assignments: { some: { userId: session.user.id } } }) },
+    select: { id: true },
+  });
 }
 
 /**
@@ -151,6 +178,7 @@ export async function purgeStoredPasswords(): Promise<number> {
 
 export async function deleteAccount(id: string) {
   await prisma.minecraftAccount.delete({ where: { id } });
+  invalidateEarningsHistory(id);
 }
 
 export async function setAssignments(accountId: string, userIds: string[]) {
@@ -196,7 +224,9 @@ export async function getFullAccount(id: string) {
 
 /** Keep a buffer so the oldest completed 24h graph interval stays intact. */
 export async function pruneOldEarnings(now = Date.now()) {
-  return prisma.sellEarning.deleteMany({ where: { createdAt: { lt: new Date(now - 25 * 60 * 60_000) } } });
+  const result = await prisma.sellEarning.deleteMany({ where: { createdAt: { lt: new Date(now - 25 * 60 * 60_000) } } });
+  historyCache.clear();
+  return result;
 }
 
 /** Aggregate in SQLite: return three numbers rather than every sale in 24h. */
@@ -224,8 +254,32 @@ const EARNINGS_WINDOWS = {
   "24h": { durationMs: 24 * 60 * 60_000, bucketMs: 5 * 60_000 },
 } as const;
 
-/** Completed clock-aligned intervals, aggregated with the account/time index. */
-export async function getEarningsHistory(id: string, range: EarningsRange, now = Date.now()) {
+type EarningsHistory = Awaited<ReturnType<typeof aggregateEarningsHistory>>;
+const historyCache = new Map<string, { end: number; expiresAt: number; data: Promise<EarningsHistory> }>();
+const MAX_HISTORY_CACHE_ENTRIES = 256;
+
+/** Invalidating pending entries also prevents an older result from being reused after a sale. */
+export function invalidateEarningsHistory(id: string) {
+  for (const range of Object.keys(EARNINGS_WINDOWS)) historyCache.delete(`${id}:${range}`);
+}
+
+/** Only completed intervals are cached; authorization is still checked on every HTTP request. */
+export function getEarningsHistory(id: string, range: EarningsRange, now = Date.now()) {
+  const bucketMs = EARNINGS_WINDOWS[range].bucketMs;
+  const end = Math.floor(now / bucketMs) * bucketMs;
+  const key = `${id}:${range}`;
+  const existing = historyCache.get(key);
+  if (existing && existing.end === end && existing.expiresAt > Date.now()) return existing.data;
+  historyCache.delete(key);
+  if (historyCache.size >= MAX_HISTORY_CACHE_ENTRIES) historyCache.delete(historyCache.keys().next().value!);
+  const entry = { end, expiresAt: Date.now() + bucketMs - now % bucketMs, data: aggregateEarningsHistory(id, range, now) };
+  historyCache.set(key, entry);
+  void entry.data.catch(() => { if (historyCache.get(key) === entry) historyCache.delete(key); });
+  return entry.data;
+}
+
+/** Completed clock-aligned intervals, aggregated with the account/time covering index. */
+async function aggregateEarningsHistory(id: string, range: EarningsRange, now: number) {
   const { durationMs, bucketMs } = EARNINGS_WINDOWS[range];
   const end = Math.floor(now / bucketMs) * bucketMs;
   const start = end - durationMs;

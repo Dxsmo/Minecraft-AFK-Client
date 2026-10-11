@@ -54,11 +54,9 @@ export class SniperManager {
    * enabled before the process/host restarted. */
   async loadAll(): Promise<void> {
     const accounts = await prisma.sniperAccount.findMany();
+    await prisma.sniperAccount.updateMany({ where: { status: { not: "OFFLINE" } }, data: { status: "OFFLINE" } });
     for (const account of accounts) {
       this.register(account);
-      if (account.status !== "OFFLINE") {
-        await prisma.sniperAccount.update({ where: { id: account.id }, data: { status: "OFFLINE" } });
-      }
     }
     const toResume = accounts.filter((a) => a.enabled);
     for (const account of toResume) {

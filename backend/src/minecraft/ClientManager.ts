@@ -3,7 +3,8 @@ import type { ClientRuntimeConfig, ClientStatusSnapshot, ConsoleEvent } from "./
 import { prisma } from "../database/prisma.js";
 import { persistConsoleLog } from "../logging/consoleLogService.js";
 import { logger } from "../logging/logger.js";
-import { parseDailyTimes } from "../accounts/service.js";
+import { parseDailyTimes, invalidateEarningsHistory } from "../accounts/service.js";
+import { createStatusPersistence } from "./statusPersistence.js";
 import { parseSpawnerActions, resolveSpawnerActions } from "./spawners.js";
 import type { MinecraftAccount } from "@prisma/client";
 
@@ -75,13 +76,9 @@ export class ClientManager {
    * auto-connects the ones that were running before the process/host restarted. */
   async loadAll(): Promise<void> {
     const accounts = await prisma.minecraftAccount.findMany();
+    await prisma.minecraftAccount.updateMany({ where: { status: { not: "OFFLINE" } }, data: { status: "OFFLINE" } });
     for (const account of accounts) {
       this.register(account);
-      // Reset any stale ONLINE/CONNECTING status left over from a previous
-      // process that crashed/was killed without a clean shutdown.
-      if (account.status !== "OFFLINE") {
-        await prisma.minecraftAccount.update({ where: { id: account.id }, data: { status: "OFFLINE" } });
-      }
     }
     const toResume = accounts.filter((a) => a.autoStart);
     for (const account of toResume) {
@@ -113,15 +110,19 @@ export class ClientManager {
         }
       }
     });
+    // Newly registered clients start OFFLINE, including after startup resets.
+    const persistStatus = createStatusPersistence("OFFLINE",
+      status => prisma.minecraftAccount.update({ where: { id: account.id }, data: { status } }),
+      (err) => {
+        // P2025 = record not found: expected/harmless when the account was
+        // just deleted while its client was still emitting a final status
+        // event (e.g. disconnect during teardown). Anything else is logged.
+        if (!err || typeof err !== "object" || !("code" in err) || err.code !== "P2025") {
+          logger.error({ err }, "Failed to persist client status");
+        }
+      });
     client.on("status", (status: ClientStatusSnapshot) => {
-      prisma.minecraftAccount
-        .update({ where: { id: status.id }, data: { status: status.status } })
-        .catch((err) => {
-          // P2025 = record not found: expected/harmless when the account was
-          // just deleted while its client was still emitting a final status
-          // event (e.g. disconnect during teardown). Anything else is logged.
-          if (err?.code !== "P2025") logger.error({ err }, "Failed to persist client status");
-        });
+      void persistStatus(status.status);
       for (const listener of this.statusListeners) {
         try {
           listener(status);
@@ -149,6 +150,7 @@ export class ClientManager {
         }),
       ])
         .then(() => {
+          invalidateEarningsHistory(minecraftAccountId);
           for (const listener of this.sellListeners) {
             try {
               listener({ id: minecraftAccountId, lastSellAt: createdAt.toISOString() });

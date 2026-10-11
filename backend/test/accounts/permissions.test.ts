@@ -3,6 +3,7 @@ import { prisma } from "../../src/database/prisma.js";
 import { hashPassword } from "../../src/auth/password.js";
 import {
   listAccountsForSession,
+  listDashboardAccountsForSession,
   canAccessAccount,
   setAssignments,
 } from "../../src/accounts/service.js";
@@ -60,5 +61,25 @@ describe("account assignment permissions", () => {
 
     await setAssignments(account.id, [user.id]);
     expect(await canAccessAccount(toSession(user as any), account.id)).toBe(true);
+  });
+
+  it("loads small dashboard summaries with the same visibility and ordering as full accounts", async () => {
+    const user = await prisma.user.create({ data: { username: "dashboard-perm", passwordHash: "test", role: "USER" } });
+    const first = await prisma.minecraftAccount.create({ data: { name: "Dash_B", serverHost: "localhost", dashboardOrder: 0, createdById: user.id } });
+    const second = await prisma.minecraftAccount.create({ data: { name: "Dash_A", serverHost: "localhost", dashboardOrder: 1 } });
+    await prisma.minecraftAccount.create({ data: { name: "Hidden_Dash", serverHost: "localhost" } });
+    await setAssignments(first.id, [user.id]);
+    await setAssignments(second.id, [user.id]);
+    const session = toSession(user);
+    const summaries = await listDashboardAccountsForSession(session);
+    expect(summaries.map(a => a.id)).toEqual((await listAccountsForSession(session)).map(a => a.id));
+    expect(summaries[0]).toMatchObject({ name: "Dash_B", imageUrl: null, createdBy: { username: user.username } });
+    for (const summary of summaries) {
+      expect(summary).not.toHaveProperty("assignments");
+      expect(summary).not.toHaveProperty("credentialsSecret");
+      expect(summary).not.toHaveProperty("spawnerActions");
+    }
+    await setAssignments(first.id, []);
+    expect((await listDashboardAccountsForSession(session)).map(a => a.id)).toEqual([second.id]);
   });
 });

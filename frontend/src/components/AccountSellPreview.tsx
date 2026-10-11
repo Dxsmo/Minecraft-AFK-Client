@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { apiFetch } from "../lib/api";
+import { api } from "../lib/api";
 import type { EarningsHistory } from "../lib/types";
 
 const intervalMs = 5 * 60_000;
@@ -31,7 +31,7 @@ export function AccountSellPreview({ accountId, active, blurred }: { accountId: 
       const end = Math.floor(Date.now() / intervalMs) * intervalMs;
       try {
         if (!cached.current || Date.parse(cached.current.end) !== end) {
-          const data = await apiFetch<EarningsHistory>(`/minecraft/accounts/${accountId}/earnings/history?range=30m`, { signal: controller.signal });
+          const data = await api.get<EarningsHistory>(`/minecraft/accounts/${accountId}/earnings/history?range=30m`, { signal: controller.signal });
           if (controller.signal.aborted) return;
           cached.current = data;
           setHistory(data);

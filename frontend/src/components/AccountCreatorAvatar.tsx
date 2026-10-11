@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { MinecraftAccount } from "../lib/types";
 
-export function AccountCreatorAvatar({ account, blurred }: { account: MinecraftAccount; blurred: boolean }) {
+export function AccountCreatorAvatar({ account, blurred }: { account: Pick<MinecraftAccount, "id" | "createdBy">; blurred: boolean }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const creator = account.createdBy;
   const username = creator?.minecraftUsername;

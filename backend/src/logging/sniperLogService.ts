@@ -1,7 +1,27 @@
 import { prisma } from "../database/prisma.js";
-import type { ConsoleLogType } from "@prisma/client";
+import type { ConsoleLogType, Prisma } from "@prisma/client";
+import { createBufferedWriter } from "./bufferedWriter.js";
 
 const MAX_LOGS_PER_ACCOUNT = 2000;
+
+const writer = createBufferedWriter<Prisma.SniperLogCreateManyInput>(async rows => {
+  const accountIds = [...new Set(rows.map(row => row.sniperAccountId))];
+  await prisma.$transaction([
+    prisma.sniperLog.createMany({ data: rows }),
+    ...accountIds.map(accountId => prisma.$executeRaw`
+      DELETE FROM "SniperLog"
+      WHERE "sniperAccountId" = ${accountId}
+        AND ("createdAt", "id") < (
+          SELECT "createdAt", "id" FROM "SniperLog"
+          WHERE "sniperAccountId" = ${accountId}
+          ORDER BY "createdAt" DESC, "id" DESC
+          LIMIT 1 OFFSET ${MAX_LOGS_PER_ACCOUNT - 1}
+        )
+    `),
+  ]);
+});
+
+export const flushSniperLogs = () => writer.flush();
 
 /**
  * Persists a console line for a Name Sniper account and prunes old entries so
@@ -14,27 +34,13 @@ export async function persistSniperLog(
   type: ConsoleLogType,
   message: string,
 ): Promise<void> {
-  await prisma.sniperLog.create({
-    data: { sniperAccountId, type, message },
-  });
-
-  const count = await prisma.sniperLog.count({ where: { sniperAccountId } });
-  if (count > MAX_LOGS_PER_ACCOUNT) {
-    const excess = count - MAX_LOGS_PER_ACCOUNT;
-    const oldest = await prisma.sniperLog.findMany({
-      where: { sniperAccountId },
-      orderBy: { createdAt: "asc" },
-      take: excess,
-      select: { id: true },
-    });
-    await prisma.sniperLog.deleteMany({ where: { id: { in: oldest.map((o) => o.id) } } });
-  }
+  await writer.enqueue({ sniperAccountId, type, message, createdAt: new Date() });
 }
 
 export async function getSniperLogs(sniperAccountId: string, limit = 200) {
   return prisma.sniperLog.findMany({
     where: { sniperAccountId },
-    orderBy: { createdAt: "desc" },
-    take: limit,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: Number.isFinite(limit) ? Math.max(1, Math.min(MAX_LOGS_PER_ACCOUNT, Math.floor(limit))) : 200,
   }).then((logs) => logs.reverse());
 }

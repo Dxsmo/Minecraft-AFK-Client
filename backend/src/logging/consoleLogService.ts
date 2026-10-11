@@ -1,8 +1,28 @@
 import { prisma } from "../database/prisma.js";
-import type { ConsoleLogType } from "@prisma/client";
+import type { ConsoleLogType, Prisma } from "@prisma/client";
+import { createBufferedWriter } from "./bufferedWriter.js";
 
 export const MAX_LOGS_PER_ACCOUNT = 20_000;
 export const CONSOLE_HISTORY_PAGE_SIZE = 2000;
+
+const writer = createBufferedWriter<Prisma.ConsoleLogCreateManyInput>(async rows => {
+  const accountIds = [...new Set(rows.map(row => row.minecraftAccountId))];
+  await prisma.$transaction([
+    prisma.consoleLog.createMany({ data: rows }),
+    ...accountIds.map(accountId => prisma.$executeRaw`
+      DELETE FROM "ConsoleLog"
+      WHERE "minecraftAccountId" = ${accountId}
+        AND ("createdAt", "id") < (
+          SELECT "createdAt", "id" FROM "ConsoleLog"
+          WHERE "minecraftAccountId" = ${accountId}
+          ORDER BY "createdAt" DESC, "id" DESC
+          LIMIT 1 OFFSET ${MAX_LOGS_PER_ACCOUNT - 1}
+        )
+    `),
+  ]);
+});
+
+export const flushConsoleLogs = () => writer.flush();
 
 /**
  * Persists a console line for a Minecraft account and prunes old entries so
@@ -13,22 +33,8 @@ export async function persistConsoleLog(
   type: ConsoleLogType,
   message: string,
 ): Promise<void> {
-  await prisma.consoleLog.create({
-    data: { minecraftAccountId, type, message },
-  });
-
-  // One indexed, atomic prune replaces count + select + delete. The row at
-  // offset 19,999 is the oldest one we keep; tuple ordering also handles ties.
-  await prisma.$executeRaw`
-    DELETE FROM "ConsoleLog"
-    WHERE "minecraftAccountId" = ${minecraftAccountId}
-      AND ("createdAt", "id") < (
-        SELECT "createdAt", "id" FROM "ConsoleLog"
-        WHERE "minecraftAccountId" = ${minecraftAccountId}
-        ORDER BY "createdAt" DESC, "id" DESC
-        LIMIT 1 OFFSET ${MAX_LOGS_PER_ACCOUNT - 1}
-      )
-  `;
+  // Timestamp the event now, not when its batch eventually reaches SQLite.
+  await writer.enqueue({ minecraftAccountId, type, message, createdAt: new Date() });
 }
 
 export async function getConsoleLogs(minecraftAccountId: string, limit = CONSOLE_HISTORY_PAGE_SIZE, before?: string) {

@@ -1,0 +1,75 @@
+{
+  "browser": "154.0.8037.99",
+  "scenarios": [
+    {
+      "count": 2000,
+      "historyMs": 82.4,
+      "live": [
+        {
+          "commitMs": 10.200000047683716,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 3.5,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 3.399999976158142,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 12.399999976158142,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 3,
+          "repeatedDateFormats": 0
+        }
+      ],
+      "httpCommands": [
+        "/tpahere Steve",
+        "/home"
+      ],
+      "draftAfterSend": "",
+      "draftAfterFailure": "/homes",
+      "readingAnchorDelta": 0,
+      "historyAnchorDelta": -0.5,
+      "errors": []
+    },
+    {
+      "count": 20000,
+      "historyMs": 1765.2,
+      "live": [
+        {
+          "commitMs": 51.90000003576279,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 169.5,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 162.4000000357628,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 148.5999999642372,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 147.30000001192093,
+          "repeatedDateFormats": 0
+        }
+      ],
+      "httpCommands": [
+        "/tpahere Steve",
+        "/home"
+      ],
+      "draftAfterSend": "",
+      "draftAfterFailure": "/homes",
+      "readingAnchorDelta": -0.34375,
+      "historyAnchorDelta": null,
+      "errors": []
+    }
+  ]
+}

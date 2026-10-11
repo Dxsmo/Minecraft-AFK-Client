@@ -60,7 +60,7 @@ export function AccountImageButton({ accountId, imageUrl, blurred, onUpdated, on
       <button type="button" className="account-image-button" title={label} aria-label={label}
         aria-busy={uploading} disabled={uploading} onClick={() => input.current?.click()}>
         {imageUrl && failedUrl !== imageUrl ? (
-          <img src={imageUrl} alt="" className="h-full w-full object-cover" draggable={false}
+          <img src={imageUrl} alt="" className="h-full w-full object-cover" draggable={false} loading="lazy" decoding="async"
             style={{ filter: blurred ? "blur(8px)" : undefined }} onError={() => setFailedUrl(imageUrl)} />
         ) : (
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">

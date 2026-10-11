@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConsoleLogEntry, LiveStatus, SniperLiveStatus } from "./types";
-import { api } from "./api";
+import { api, clearApiReadCache, invalidateAccountHistory } from "./api";
 
 const MAX_ACCOUNT_CONSOLE_LOGS = 20_000;
 const CONSOLE_HISTORY_PAGE_SIZE = 2000;
@@ -44,6 +44,35 @@ export function useAccountConsole(accountId: string | undefined) {
     setLoadingOlderLogs(false);
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout>;
+    let receivedHistory = false;
+    const controller = new AbortController();
+    // HTTP history remains available when a proxy delays/blocks the socket.
+    // Normal connections deliver history first and never need this request.
+    const historyTimer = setTimeout(() => {
+      if (receivedHistory) return;
+      void api.get<ConsoleLogEntry[]>(`/minecraft/accounts/${accountId}/logs?limit=${CONSOLE_HISTORY_PAGE_SIZE}`, { signal: controller.signal })
+        .then(history => {
+          if (cancelled || receivedHistory) return;
+          receivedHistory = true;
+          olderCursorRef.current = history[0]?.id ?? null;
+          setHasOlderLogs(history.length === CONSOLE_HISTORY_PAGE_SIZE);
+          // Preserve live lines delivered while the HTTP request was pending.
+          setLogs(live => {
+            const key = (line: ConsoleLogEntry) => JSON.stringify([line.createdAt, line.type, line.message]);
+            const counts = new Map<string, number>();
+            for (const line of history) counts.set(key(line), (counts.get(key(line)) ?? 0) + 1);
+            const extra = live.filter(line => {
+              const remaining = counts.get(key(line)) ?? 0;
+              if (!remaining) return true;
+              counts.set(key(line), remaining - 1);
+              return false;
+            });
+            return [...history, ...extra].slice(-MAX_ACCOUNT_CONSOLE_LOGS);
+          });
+        }).catch(() => {
+          if (!cancelled && !receivedHistory) setHistoryError("Konsolenverlauf konnte nicht geladen werden. Bitte erneut versuchen.");
+        });
+    }, 1500);
 
     function connect() {
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -62,6 +91,10 @@ export function useAccountConsole(accountId: string | undefined) {
         if (cancelled || socketRef.current !== socket) return;
         const msg: ConsoleEventMsg = JSON.parse(ev.data);
         if (msg.type === "history" && msg.logs) {
+          receivedHistory = true;
+          clearTimeout(historyTimer);
+          controller.abort();
+          setHistoryError(null);
           setLogs(msg.logs);
           olderCursorRef.current = msg.logs[0]?.id ?? null;
           setHasOlderLogs(msg.logs.length === CONSOLE_HISTORY_PAGE_SIZE);
@@ -81,6 +114,8 @@ export function useAccountConsole(accountId: string | undefined) {
     return () => {
       cancelled = true;
       clearTimeout(retryTimer);
+      clearTimeout(historyTimer);
+      controller.abort();
       socketRef.current?.close();
     };
   }, [accountId]);
@@ -137,6 +172,7 @@ export function useDashboardSocket(
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout>;
     let socket: WebSocket;
+    let receivedInitialStatuses = false;
 
     function connect() {
       const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -152,12 +188,18 @@ export function useDashboardSocket(
           const map: Record<string, LiveStatus> = {};
           for (const s of msg.statuses as LiveStatus[]) map[s.id] = s;
           setStatuses(map);
-          refreshCallback.current?.();
+          // The page loads accounts on mount. Only reconnects need another list fetch.
+          if (receivedInitialStatuses) {
+            clearApiReadCache();
+            refreshCallback.current?.();
+          }
+          receivedInitialStatuses = true;
         } else if (msg.type === "status") {
           setStatuses((prev) => ({ ...prev, [msg.status.id]: msg.status }));
         } else if (msg.type === "account_image") {
           imageCallback.current?.({ id: msg.id, imageUrl: msg.imageUrl });
         } else if (msg.type === "account_sale") {
+          invalidateAccountHistory(msg.id);
           sellCallback.current?.({ id: msg.id, lastSellAt: msg.lastSellAt });
         }
       };

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -7,7 +7,7 @@ import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { ConsoleView } from "../components/ConsoleView";
 import { EarningsBox } from "../components/EarningsBox";
-import { AccountSettingsPanel } from "../components/AccountSettingsPanel";
+const AccountSettingsPanel = lazy(() => import("../components/AccountSettingsPanel").then(module => ({ default: module.AccountSettingsPanel })));
 
 export function AccountDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -34,13 +34,16 @@ export function AccountDetailPage() {
   async function load() {
     if (!id) return;
     try {
-      setAccount(await api.get<MinecraftAccount>(`/minecraft/accounts/${id}`));
+      const loaded = await api.get<MinecraftAccount>(`/minecraft/accounts/${id}`);
+      if (accountIdRef.current === id) { setAccount(loaded); setError(null); }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to load account");
+      if (accountIdRef.current === id) setError(err instanceof ApiError ? err.message : "Failed to load account");
     }
   }
 
   useEffect(() => {
+    setAccount(null);
+    setError(null);
     setSendingCommand(false);
     setCommandError(null);
     setCommand("");
@@ -99,7 +102,7 @@ export function AccountDetailPage() {
     }
   }
 
-  if (!account) {
+  if (!account || account.id !== id) {
     return <p className="text-sm" style={{ color: "var(--text-subtle)" }}>{error ?? "Loading…"}</p>;
   }
 
@@ -279,12 +282,14 @@ export function AccountDetailPage() {
 
       {tab === "settings" && (
         <div key="settings" className="tab-panel">
-          <AccountSettingsPanel
-            account={account}
-            canManageAccess={canManageAccess}
-            currentUserId={user?.id}
-            onUpdated={load}
-          />
+          <Suspense fallback={<p className="text-sm">Loading settings…</p>}>
+            <AccountSettingsPanel
+              account={account}
+              canManageAccess={canManageAccess}
+              currentUserId={user?.id}
+              onUpdated={load}
+            />
+          </Suspense>
         </div>
       )}
     </div>

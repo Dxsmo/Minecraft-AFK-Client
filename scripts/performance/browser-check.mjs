@@ -72,7 +72,7 @@ try {
     await page.locator('input').nth(0).fill('Performance');
     await page.locator('input[type="password"]').fill('test');
     await page.locator('button[type="submit"]').click();
-    await page.locator('a[href="/accounts/bench"]').first().click();
+    await page.locator('a[href="/accounts/bench?tab=console"]').first().click();
     await page.waitForFunction(n => document.querySelectorAll('.console-output > div').length === n, count);
     const historyMs = await page.evaluate(() => performance.now() - window.__historyStart);
     const live = await page.evaluate(async () => {
@@ -143,7 +143,7 @@ try {
       if (historyAnchorDelta !== null && Math.abs(historyAnchorDelta) > 1) throw new Error('Older history changed the reading position');
       if (!(await page.getByRole('alert').textContent()).includes('OFFLINE')) throw new Error('Failed command error is invisible');
       if (errors.length) throw new Error(errors.join('; '));
-      if (await page.locator('.version-text').textContent() !== 'V1.6.1') throw new Error('Wrong website version');
+      if (!(await page.locator('.version-text').textContent())?.match(/^V\d+\.\d+\.\d+$/)) throw new Error('Website version is missing');
     }
     await context.close();
   }

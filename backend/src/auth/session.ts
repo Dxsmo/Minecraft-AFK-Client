@@ -49,7 +49,10 @@ export async function createSession(
 export async function getSession(sessionId: string): Promise<SessionContext | null> {
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
-    include: { user: true },
+    select: {
+      id: true, csrfToken: true, expiresAt: true,
+      user: { select: { id: true, username: true, role: true, status: true } },
+    },
   });
 
   if (!session) return null;

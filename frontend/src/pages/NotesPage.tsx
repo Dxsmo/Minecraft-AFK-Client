@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import type { Note, NoteSummary } from "../lib/notes";
-import { NoteEditor, type NoteEditorHandle } from "../components/NoteEditor";
+import type { NoteEditorHandle } from "../components/NoteEditor";
+const NoteEditor = lazy(() => import("../components/NoteEditor").then(module => ({ default: module.NoteEditor })));
 
 export function NotesPage() {
   const { id } = useParams<{ id: string }>();
@@ -79,9 +80,11 @@ export function NotesPage() {
         </nav>
         {id && <div className="min-w-0">
           {loading ? <div className="card p-10 text-center text-sm">Notiz wird geladen…</div> : note ? (
+            <Suspense fallback={<div className="card p-10 text-center text-sm">Editor wird geladen…</div>}>
             <NoteEditor key={note.id} ref={editor} note={note} onSaved={saved} onReload={() => void reload()}
               onDeleted={() => { setNotes((prev) => prev.filter((entry) => entry.id !== note.id)); navigate("/notes"); }}
               onCopied={(created) => { setNotes((prev) => [created, ...prev]); navigate(`/notes/${created.id}`); }} />
+            </Suspense>
           ) : null}
         </div>}
       </div>

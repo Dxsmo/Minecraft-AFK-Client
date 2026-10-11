@@ -53,3 +53,12 @@ it("defaults to one hour and rejects unsupported or repeated ranges", async () =
     expect((await app.inject({ url: base + suffix, headers })).statusCode).toBe(400);
   }
 });
+
+it("rechecks permissions even when the graph is cached", async () => {
+  const url = `/api/minecraft/accounts/${accountId}/earnings/history?range=24h`;
+  const headers = { cookie: cookies[1] };
+  expect((await app.inject({ url, headers })).statusCode).toBe(200);
+  await prisma.userMinecraftAccount.deleteMany({ where: { userId: users[1], minecraftAccountId: accountId } });
+  expect((await app.inject({ url, headers })).statusCode).toBe(404);
+  expect((await app.inject({ url, headers: { cookie: cookies[0] } })).statusCode).toBe(200);
+});

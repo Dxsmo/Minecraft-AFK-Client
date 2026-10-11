@@ -1,5 +1,8 @@
 # Performance-Prüfung und Command-Korrekturen – V1.6.1
 
+Aktuelle Prüfung vom 11.10.2026: [Login, Accounts, Graphen und Datenabfragen](PERFORMANCE-2026-10-11.md).
+Der folgende Bericht dokumentiert den früheren Stand vom 06.10.2026.
+
 Stand: 06.10.2026. Vergleichsbasis: Commit `dc04bc9`.
 
 Geprüft wurden Produktions-Build, Seitenladen, Live-Konsole, längere Log-Historie,

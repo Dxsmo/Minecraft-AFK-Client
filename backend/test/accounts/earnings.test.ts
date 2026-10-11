@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../../src/database/prisma.js";
-import { getEarningsSummary, getEarningsHistory, pruneOldEarnings } from "../../src/accounts/service.js";
+import { getEarningsSummary, getEarningsHistory, pruneOldEarnings, invalidateEarningsHistory } from "../../src/accounts/service.js";
 
 describe("rolling sell revenue", () => {
   beforeEach(async () => {
@@ -76,6 +76,26 @@ describe("rolling sell revenue", () => {
     expect(history.total).toBe(0);
     expect(history.points).toHaveLength(288);
     expect(history.points.every(point => point.amount === 0)).toBe(true);
+  });
+
+  it("coalesces graph reads, invalidates late committed sales and expires at the next bucket", async () => {
+    const account = await prisma.minecraftAccount.create({ data: { name: "CachedGraph", serverHost: "localhost" } });
+    const now = Date.now();
+    const end = Math.floor(now / 300_000) * 300_000;
+    const query = vi.spyOn(prisma, "$queryRaw");
+    try {
+      const [first, second] = await Promise.all([
+        getEarningsHistory(account.id, "1h", now), getEarningsHistory(account.id, "1h", now),
+      ]);
+      expect(first).toEqual(second);
+      expect(query).toHaveBeenCalledTimes(1);
+      await prisma.sellEarning.create({ data: { minecraftAccountId: account.id, amount: 42, createdAt: new Date(end - 1) } });
+      invalidateEarningsHistory(account.id);
+      expect((await getEarningsHistory(account.id, "1h", now)).total).toBe(42);
+      expect(query).toHaveBeenCalledTimes(2);
+      expect((await getEarningsHistory(account.id, "1h", end + 300_000)).total).toBe(42);
+      expect(query).toHaveBeenCalledTimes(3);
+    } finally { query.mockRestore(); }
   });
 
   it.each([['30m', 5], ['1h', 5], ['6h', 5], ['24h', 5]] as const)("keeps %s stable inside an interval and includes a sale exactly once after the boundary", async (range, minutes) => {

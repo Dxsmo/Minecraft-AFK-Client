@@ -9,6 +9,8 @@ import { sniperManager } from "./namesniper/SniperManager.js";
 import { disconnectDatabase } from "./database/prisma.js";
 import { pruneOldEarnings, purgeStoredPasswords } from "./accounts/service.js";
 import { loadBannedIps } from "./security/ipBans.js";
+import { flushConsoleLogs } from "./logging/consoleLogService.js";
+import { flushSniperLogs } from "./logging/sniperLogService.js";
 
 const SESSION_PRUNE_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
@@ -47,6 +49,7 @@ async function main() {
     clientManager.shutdownAll();
     sniperManager.shutdownAll();
     await app.close();
+    await Promise.all([flushConsoleLogs(), flushSniperLogs()]);
     await disconnectDatabase();
     process.exit(0);
   };

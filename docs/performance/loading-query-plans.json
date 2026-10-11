@@ -1,0 +1,34 @@
+{
+  "earnings": [
+    {
+      "id": 3,
+      "parent": 0,
+      "notused": 0,
+      "detail": "SEARCH SellEarning USING COVERING INDEX SellEarning_minecraftAccountId_createdAt_amount_idx (minecraftAccountId=? AND createdAt>?)"
+    }
+  ],
+  "username": [
+    {
+      "id": 4,
+      "parent": 0,
+      "notused": 0,
+      "detail": "SEARCH User USING INDEX User_username_nocase_idx (username=?)"
+    }
+  ],
+  "accounts": [
+    {
+      "id": 4,
+      "parent": 0,
+      "notused": 0,
+      "detail": "SCAN MinecraftAccount USING INDEX MinecraftAccount_dashboardOrder_name_idx"
+    }
+  ],
+  "retention": [
+    {
+      "id": 3,
+      "parent": 0,
+      "notused": 0,
+      "detail": "SEARCH SellEarning USING INDEX SellEarning_createdAt_idx (createdAt<?)"
+    }
+  ]
+}

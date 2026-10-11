@@ -1,33 +1,25 @@
-import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { apiFetch } from "../lib/api";
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { api } from "../lib/api";
+import { usePolling } from "../lib/polling";
 import type { EarningsHistory as History } from "../lib/types";
 
 type Range = "1h" | "6h" | "24h";
 interface Earnings { last5m: number; last1h: number; last24h: number }
-const money = (amount: number) => `$${amount.toLocaleString("de-DE", { maximumFractionDigits: 2 })}`;
-const time = (at: string | number) => new Date(at).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+const moneyFormatter = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 2 });
+const axisFormatter = new Intl.NumberFormat("de-DE", { notation: "compact", maximumFractionDigits: 1 });
+const timeFormatter = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" });
+const money = (amount: number) => `$${moneyFormatter.format(amount)}`;
+const time = (at: string | number) => timeFormatter.format(new Date(at));
 
 export function EarningsBox({ accountId }: { accountId: string }) {
   const [earnings, setEarnings] = useState<Earnings | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [range, setRange] = useState<Range>("1h");
   const panelId = useId();
-  useEffect(() => {
-    const controller = new AbortController();
-    let busy = false;
-    async function poll() {
-      if (busy) return;
-      busy = true;
-      try {
-        const data = await apiFetch<Earnings>(`/minecraft/accounts/${accountId}/earnings`, { signal: controller.signal });
-        if (!controller.signal.aborted) setEarnings(data);
-      } catch { /* Retry on the next poll. */ }
-      finally { busy = false; }
-    }
-    void poll();
-    const timer = setInterval(poll, 15_000);
-    return () => { controller.abort(); clearInterval(timer); };
-  }, [accountId]);
+  usePolling(async signal => {
+    const data = await api.get<Earnings>(`/minecraft/accounts/${accountId}/earnings`, { signal });
+    if (!signal.aborted) setEarnings(data);
+  }, 15_000);
 
   return (
     <section className="card p-3.5 text-sm" aria-label="Sell earnings">
@@ -83,33 +75,62 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
     observer.observe(node);
     return () => observer.disconnect();
   }, [hasHistory]);
-  useEffect(() => {
-    const controller = new AbortController();
-    const refreshMs = 5 * 60_000;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      let retry = false;
-      try {
-        const data = await apiFetch<History>(`/minecraft/accounts/${accountId}/earnings/history?range=${range}`, { signal: controller.signal });
-        if (!controller.signal.aborted) { setHistory(data); setError(false); }
-      } catch {
-        retry = true;
-        if (!controller.signal.aborted) setError(true);
-      } finally {
-        if (!controller.signal.aborted) {
-          // Refresh once the next complete interval is available, not every 15s.
-          timer = setTimeout(poll, retry ? 15_000 : refreshMs - Date.now() % refreshMs + 100);
-        }
-      }
+  usePolling(async signal => {
+    try {
+      const data = await api.get<History>(`/minecraft/accounts/${accountId}/earnings/history?range=${range}`, { signal });
+      if (!signal.aborted) { setHistory(data); setError(false); }
+    } catch (error) {
+      if (!signal.aborted) setError(true);
+      throw error;
     }
-    void poll();
-    return () => { controller.abort(); clearTimeout(timer); };
-  }, [accountId, range]);
+  }, 5 * 60_000, true, true);
+
+  // The axes and hundreds of labels are static while the pointer moves.
+  const chart = useMemo(() => history ? buildChart(history, width, gradientId) : null, [history, width, gradientId]);
 
   if (!history) return <div className="flex h-[240px] items-center justify-center text-xs" role="status" style={{ color: "var(--text-subtle)" }}>
     {error ? "Verkaufsverlauf konnte nicht geladen werden. Erneuter Versuch folgt." : "Verkaufsverlauf wird geladen…"}
   </div>;
 
+  const { left, top, plotWidth, plotHeight, x, y, series } = chart!;
+  const active = selected == null ? null : history.points[selected];
+  const interval = history.bucketMs / 60_000;
+  function selectFromPointer(event: ReactPointerEvent<SVGSVGElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const pointerX = (event.clientX - bounds.left) / bounds.width * width;
+    setSelected(Math.max(0, Math.min(history!.points.length - 1, Math.floor((pointerX - left) / plotWidth * history!.points.length))));
+  }
+
+  return <div>
+    <div className="mb-1 flex min-h-5 flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums" style={{ color: "var(--text-muted)" }}>
+      <span aria-live="polite">{active ? `${time(active.at)}–${time(new Date(active.at).getTime() + history.bucketMs)} · ${money(active.amount)}` : `Verkäufe pro ${interval} Minuten`}</span>
+      <span>Gesamt <strong style={{ color: "var(--text)" }}>{money(history.total)}</strong></span>
+    </div>
+    <svg ref={svgRef} style={{ height: 240, outlineColor: "var(--accent)" }} className="w-full rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2" viewBox={`0 0 ${width} 240`}
+      role="img" tabIndex={0} aria-label={`Verkaufsgraph der letzten ${range === "1h" ? "Stunde" : range === "6h" ? "6 Stunden" : "24 Stunden"}. Gesamt ${money(history.total)}.`}
+      aria-describedby={hintId} onPointerLeave={event => { if (event.pointerType !== "touch") setSelected(null); }} onBlur={() => setSelected(null)}
+      onPointerMove={selectFromPointer} onPointerDown={selectFromPointer}
+      onKeyDown={event => {
+        if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+          event.preventDefault();
+          setSelected(current => event.key === "Home" ? 0 : event.key === "End" ? history.points.length - 1 : Math.max(0, Math.min(history.points.length - 1, (current ?? 0) + (event.key === "ArrowLeft" ? -1 : 1))));
+        }
+      }}>
+      {series}
+      {selected != null && active && <g>
+        <line x1={x(selected)} x2={x(selected)} y1={top} y2={top + plotHeight} stroke="var(--text-muted)" strokeDasharray="3 4" />
+        <circle cx={x(selected)} cy={y(active.amount)} r="4" fill="var(--accent)" stroke="var(--bg)" strokeWidth="2" />
+      </g>}
+      {history.total === 0 && <text x={left + plotWidth / 2} y={top + plotHeight / 2} textAnchor="middle" fill="var(--text-subtle)" fontSize="12">Keine Verkäufe in diesem Zeitraum</text>}
+    </svg>
+    <p className="mt-1 text-[10px]" style={{ color: "var(--text-subtle)" }}>Abgeschlossene Intervalle · Aktualisierung alle 5 Minuten</p>
+    <p id={hintId} className="sr-only">Einzelne Zeiträume mit dem Zeiger oder den Pfeiltasten auswählen.</p>
+    {error && <p className="mt-1 text-[11px]" role="status" style={{ color: "var(--text-subtle)" }}>Aktualisierung fehlgeschlagen. Der letzte Stand wird angezeigt.</p>}
+  </div>;
+}
+
+/** Build once per data/size change, including formatted labels and tick titles. */
+function buildChart(history: History, width: number, gradientId: string) {
   const height = 240, left = 8, right = 80, top = 16;
   const plotWidth = width - left - right;
   // Every five-minute point stays selectable. Thin only the printed labels
@@ -133,30 +154,8 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
   const x = (index: number) => left + (index + 0.5) / history.points.length * plotWidth;
   const y = (amount: number) => top + plotHeight * (1 - amount / max);
   const line = history.points.map((point, index) => `${x(index)},${y(point.amount)}`).join(" ");
-  const active = selected == null ? null : history.points[selected];
-  const interval = history.bucketMs / 60_000;
-  const axisMoney = (amount: number) => `$${new Intl.NumberFormat("de-DE", { notation: "compact", maximumFractionDigits: 1 }).format(amount)}`;
-  function selectFromPointer(event: ReactPointerEvent<SVGSVGElement>) {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const pointerX = (event.clientX - bounds.left) / bounds.width * width;
-    setSelected(Math.max(0, Math.min(history!.points.length - 1, Math.floor((pointerX - left) / plotWidth * history!.points.length))));
-  }
-
-  return <div>
-    <div className="mb-1 flex min-h-5 flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums" style={{ color: "var(--text-muted)" }}>
-      <span aria-live="polite">{active ? `${time(active.at)}–${time(new Date(active.at).getTime() + history.bucketMs)} · ${money(active.amount)}` : `Verkäufe pro ${interval} Minuten`}</span>
-      <span>Gesamt <strong style={{ color: "var(--text)" }}>{money(history.total)}</strong></span>
-    </div>
-    <svg ref={svgRef} style={{ height: 240, outlineColor: "var(--accent)" }} className="w-full rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2" viewBox={`0 0 ${width} ${height}`}
-      role="img" tabIndex={0} aria-label={`Verkaufsgraph der letzten ${range === "1h" ? "Stunde" : range === "6h" ? "6 Stunden" : "24 Stunden"}. Gesamt ${money(history.total)}.`}
-      aria-describedby={hintId} onPointerLeave={event => { if (event.pointerType !== "touch") setSelected(null); }} onBlur={() => setSelected(null)}
-      onPointerMove={selectFromPointer} onPointerDown={selectFromPointer}
-      onKeyDown={event => {
-        if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-          event.preventDefault();
-          setSelected(current => event.key === "Home" ? 0 : event.key === "End" ? history.points.length - 1 : Math.max(0, Math.min(history.points.length - 1, (current ?? 0) + (event.key === "ArrowLeft" ? -1 : 1))));
-        }
-      }}>
+  const axisMoney = (amount: number) => `$${axisFormatter.format(amount)}`;
+  const series = <g>
       <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1"><stop stopColor="var(--accent)" stopOpacity=".2" /><stop offset="1" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>
       {[0, 1, 2, 3, 4].map(index => <g key={index}>
         <line x1={left} x2={left + plotWidth} y1={top + plotHeight * index / 4} y2={top + plotHeight * index / 4} stroke="var(--border)" strokeDasharray={index === 4 ? undefined : "3 5"} />
@@ -176,14 +175,6 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
             fill="var(--text-subtle)" fontSize="11">{time(point.at)}</text>}
         </g>;
       })}
-      {selected != null && active && <g>
-        <line x1={x(selected)} x2={x(selected)} y1={top} y2={top + plotHeight} stroke="var(--text-muted)" strokeDasharray="3 4" />
-        <circle cx={x(selected)} cy={y(active.amount)} r="4" fill="var(--accent)" stroke="var(--bg)" strokeWidth="2" />
-      </g>}
-      {history.total === 0 && <text x={left + plotWidth / 2} y={top + plotHeight / 2} textAnchor="middle" fill="var(--text-subtle)" fontSize="12">Keine Verkäufe in diesem Zeitraum</text>}
-    </svg>
-    <p className="mt-1 text-[10px]" style={{ color: "var(--text-subtle)" }}>Abgeschlossene Intervalle · Aktualisierung alle 5 Minuten</p>
-    <p id={hintId} className="sr-only">Einzelne Zeiträume mit dem Zeiger oder den Pfeiltasten auswählen.</p>
-    {error && <p className="mt-1 text-[11px]" role="status" style={{ color: "var(--text-subtle)" }}>Aktualisierung fehlgeschlagen. Der letzte Stand wird angezeigt.</p>}
-  </div>;
+  </g>;
+  return { left, top, plotWidth, plotHeight, x, y, series };
 }

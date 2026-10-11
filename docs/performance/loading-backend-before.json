@@ -1,0 +1,32 @@
+{
+  "fixture": {
+    "logs": 20000,
+    "sales": 100000,
+    "accounts": 100
+  },
+  "accounts100": {
+    "medianMs": 3.05,
+    "p95Ms": 3.36
+  },
+  "session": {
+    "medianMs": 0.18,
+    "p95Ms": 0.3
+  },
+  "graph24h": {
+    "medianMs": 50.02,
+    "p95Ms": 51.19
+  },
+  "earnings": {
+    "medianMs": 31.52,
+    "p95Ms": 32.21
+  },
+  "history2000": {
+    "medianMs": 6.96,
+    "p95Ms": 7.79
+  },
+  "logWriteAtCapacity": {
+    "medianMs": 2.89,
+    "p95Ms": 3.91
+  },
+  "retainedLogs": 20000
+}

@@ -33,7 +33,11 @@ export default async function accountsRoutes(app: FastifyInstance) {
   }
 
   app.get("/api/minecraft/accounts", async (req, reply) => {
-    const accounts = await accountsService.listAccountsForSession(req.session!);
+    const query = parseOrReject(z.object({ view: z.enum(["full", "dashboard"]).default("full") }).strict(), req.query, reply);
+    if (!query) return;
+    const accounts = query.view === "dashboard"
+      ? await accountsService.listDashboardAccountsForSession(req.session!)
+      : await accountsService.listAccountsForSession(req.session!);
     const statuses = new Map(clientManager.getAllStatuses().map((s) => [s.id, s]));
     reply.send(accounts.map((a) => ({ ...a, live: statuses.get(a.id) })));
   });
@@ -50,7 +54,10 @@ export default async function accountsRoutes(app: FastifyInstance) {
 
   app.get("/api/minecraft/accounts/:id/creator-avatar", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const account = await accountsService.getAccountForSession(req.session!, id);
+    const account = await prisma.minecraftAccount.findFirst({
+      where: { id, ...(req.session!.user.role === "ADMIN" ? {} : { assignments: { some: { userId: req.session!.user.id } } }) },
+      select: { createdBy: { select: { minecraftUsername: true } } },
+    });
     if (!account) return reply.code(404).send({ error: "Account not found" });
     const username = account.createdBy?.minecraftUsername;
     if (!username) return reply.code(404).send({ error: "Minecraft username not assigned" });
@@ -62,7 +69,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
   app.get("/api/minecraft/accounts/:id/image", async (req, reply) => {
     const { id } = req.params as { id: string };
     reply.header("Cache-Control", "private, no-store");
-    if (!(await accountsService.getAccountForSession(req.session!, id))) {
+    if (!(await accountsService.hasAccountAccess(req.session!, id))) {
       return reply.code(404).send({ error: "Account not found" });
     }
     const image = await prisma.accountImage.findUnique({ where: { minecraftAccountId: id } });
@@ -72,7 +79,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
 
   app.put("/api/minecraft/accounts/:id/image", { preHandler: app.requireCsrf }, async (req, reply) => {
     const { id } = req.params as { id: string };
-    if (!(await accountsService.getAccountForSession(req.session!, id))) {
+    if (!(await accountsService.hasAccountAccess(req.session!, id))) {
       return reply.code(404).send({ error: "Account not found" });
     }
     const body = parseOrReject(z.object({ image: z.string().max(MAX_ACCOUNT_IMAGE_BASE64) }).strict(), req.body, reply);
@@ -86,8 +93,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
 
   app.get("/api/minecraft/accounts/:id/logs", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const account = await accountsService.getAccountForSession(req.session!, id);
-    if (!account) {
+    if (!(await accountsService.hasAccountAccess(req.session!, id))) {
       reply.code(404).send({ error: "Account not found" });
       return;
     }
@@ -97,8 +103,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
 
   app.get("/api/minecraft/accounts/:id/earnings", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const account = await accountsService.getAccountForSession(req.session!, id);
-    if (!account) {
+    if (!(await accountsService.hasAccountAccess(req.session!, id))) {
       reply.code(404).send({ error: "Account not found" });
       return;
     }
@@ -108,7 +113,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
   app.get("/api/minecraft/accounts/:id/earnings/history", async (req, reply) => {
     const { id } = req.params as { id: string };
     reply.header("Cache-Control", "private, no-store");
-    if (!(await accountsService.getAccountForSession(req.session!, id))) {
+    if (!(await accountsService.hasAccountAccess(req.session!, id))) {
       return reply.code(404).send({ error: "Account not found" });
     }
     const query = parseOrReject(z.object({ range: z.enum(["30m", "1h", "6h", "24h"]).default("1h") }).strict(), req.query, reply);

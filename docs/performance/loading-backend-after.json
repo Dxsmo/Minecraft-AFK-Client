@@ -1,0 +1,42 @@
+{
+  "fixture": {
+    "logs": 20000,
+    "sales": 100000,
+    "accounts": 100
+  },
+  "dashboardPayloadBytes": 24691,
+  "fullPayloadBytes": 70891,
+  "accounts100Dashboard": {
+    "medianMs": 1.13,
+    "p95Ms": 1.26
+  },
+  "accounts100": {
+    "medianMs": 3.07,
+    "p95Ms": 3.59
+  },
+  "session": {
+    "medianMs": 0.2,
+    "p95Ms": 1.17
+  },
+  "graph24hCold": {
+    "medianMs": 31.36,
+    "p95Ms": 32.43
+  },
+  "graph24h": {
+    "medianMs": 0,
+    "p95Ms": 0
+  },
+  "earnings": {
+    "medianMs": 14.23,
+    "p95Ms": 14.55
+  },
+  "history2000": {
+    "medianMs": 7.18,
+    "p95Ms": 8.81
+  },
+  "logWriteAtCapacity": {
+    "medianMs": 2.11,
+    "p95Ms": 2.55
+  },
+  "retainedLogs": 20000
+}

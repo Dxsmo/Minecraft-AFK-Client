@@ -1,5 +1,4 @@
 import type { FastifyInstance } from "fastify";
-import { canAccessAccount } from "../accounts/service.js";
 import { clientManager } from "../minecraft/ClientManager.js";
 import { getConsoleLogs } from "../logging/consoleLogService.js";
 import { executeCommand } from "../commands/service.js";
@@ -9,6 +8,30 @@ import { onAccountImageUpdated } from "../accounts/images.js";
 import { commandSchema } from "../accounts/schemas.js";
 import { recordAuditLog } from "../logging/auditLog.js";
 import { authorizeSocket } from "./authorization.js";
+import { prisma } from "../database/prisma.js";
+import type { SessionContext } from "../auth/session.js";
+import type { ClientStatusSnapshot } from "../minecraft/types.js";
+
+function batchLiveEvents(socket: import("ws").WebSocket, connection: NonNullable<ReturnType<typeof authorizeSocket>>) {
+  let messages: unknown[] = [];
+  const latest = new Map<string, unknown>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  connection.subscribe(() => clearTimeout(timer));
+  return (message: unknown, key?: string) => {
+    if (socket.readyState !== socket.OPEN) return;
+    if (key) latest.set(key, message);
+    else messages.push(message);
+    if (messages.length > 2000) { socket.close(4429, "Slow consumer"); return; }
+    timer ??= setTimeout(() => {
+      timer = undefined;
+      const batch = [...messages, ...latest.values()];
+      messages = []; latest.clear();
+      // Recheck permissions for the batch, rather than querying SQLite for
+      // every chat line. Commands still get their own authorization check.
+      connection.run(() => { for (const entry of batch) connection.send(entry); });
+    }, 25);
+  };
+}
 
 /** Cookie-authenticated website sockets require a trusted Origin (app.ts). */
 export default async function registerWebsocketRoutes(app: FastifyInstance) {
@@ -17,6 +40,7 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
     const connection = authorizeSocket(socket, req, { accountId });
     if (!connection) return;
     const { run, send, subscribe } = connection;
+    const publish = batchLiveEvents(socket, connection);
     run(async () => {
       const history = await getConsoleLogs(accountId);
       send({ type: "history", logs: history });
@@ -24,10 +48,10 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
       if (status) send({ type: "status", status });
     });
     subscribe(clientManager.onConsoleEvent((event) => {
-      if (event.minecraftAccountId === accountId) run(() => send({ type: "console", event }));
+      if (event.minecraftAccountId === accountId) publish({ type: "console", event });
     }));
     subscribe(clientManager.onStatusEvent((status) => {
-      if (status.id === accountId) run(() => send({ type: "status", status }));
+      if (status.id === accountId) publish({ type: "status", status }, "status");
     }));
     let messages = 0, windowStart = Date.now();
     socket.on("message", (raw, binary) => {
@@ -53,19 +77,49 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
     const connection = authorizeSocket(socket, req);
     if (!connection) return;
     const { run, send, subscribe } = connection;
+    async function allowedAccountIds(session: SessionContext) {
+      if (session.user.role === "ADMIN") return null;
+      const assignments = await prisma.userMinecraftAccount.findMany({
+        where: { userId: session.user.id }, select: { minecraftAccountId: true },
+      });
+      return new Set(assignments.map(a => a.minecraftAccountId));
+    }
     run(async (session) => {
       const statuses = clientManager.getAllStatuses();
-      const allowed = await Promise.all(statuses.map((status) => canAccessAccount(session, status.id)));
-      send({ type: "statuses", statuses: statuses.filter((_, index) => allowed[index]) });
+      const allowed = await allowedAccountIds(session);
+      send({ type: "statuses", statuses: allowed ? statuses.filter(status => allowed.has(status.id)) : statuses });
     });
+    // Coalesce short bursts from many bots. Each batch checks the current
+    // session and assignments once, without caching authorization decisions.
+    const statuses = new Map<string, ClientStatusSnapshot>();
+    const images = new Map<string, { id: string; imageUrl: string }>();
+    const sales = new Map<string, { id: string; lastSellAt: string }>();
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    function scheduleFlush() {
+      if (flushTimer) return;
+      flushTimer = setTimeout(() => {
+        flushTimer = undefined;
+        const batch = [
+          ...Array.from(statuses.values(), status => ({ id: status.id, message: { type: "status", status } })),
+          ...Array.from(images.values(), update => ({ id: update.id, message: { type: "account_image", ...update } })),
+          ...Array.from(sales.values(), update => ({ id: update.id, message: { type: "account_sale", ...update } })),
+        ];
+        statuses.clear(); images.clear(); sales.clear();
+        run(async session => {
+          const allowed = await allowedAccountIds(session);
+          for (const entry of batch) if (!allowed || allowed.has(entry.id)) send(entry.message);
+        });
+      }, 25);
+    }
+    subscribe(() => clearTimeout(flushTimer));
     subscribe(clientManager.onStatusEvent((status) => {
-      run(async (session) => { if (await canAccessAccount(session, status.id)) send({ type: "status", status }); });
+      statuses.set(status.id, status); scheduleFlush();
     }));
     subscribe(onAccountImageUpdated((update) => {
-      run(async (session) => { if (await canAccessAccount(session, update.id)) send({ type: "account_image", ...update }); });
+      images.set(update.id, update); scheduleFlush();
     }));
     subscribe(clientManager.onSellEvent((update) => {
-      run(async (session) => { if (await canAccessAccount(session, update.id)) send({ type: "account_sale", ...update }); });
+      sales.set(update.id, update); scheduleFlush();
     }));
   });
 
@@ -74,16 +128,17 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
     const connection = authorizeSocket(socket, req, { adminOnly: true });
     if (!connection) return;
     const { run, send, subscribe } = connection;
+    const publish = batchLiveEvents(socket, connection);
     run(async () => {
       send({ type: "history", logs: await getSniperLogs(accountId, 200) });
       const status = sniperManager.get(accountId)?.getStatus();
       if (status) send({ type: "status", status });
     });
     subscribe(sniperManager.onConsoleEvent((event) => {
-      if (event.sniperAccountId === accountId) run(() => send({ type: "console", event }));
+      if (event.sniperAccountId === accountId) publish({ type: "console", event });
     }));
     subscribe(sniperManager.onStatusEvent((status) => {
-      if (status.id === accountId) run(() => send({ type: "status", status }));
+      if (status.id === accountId) publish({ type: "status", status }, "status");
     }));
   });
 

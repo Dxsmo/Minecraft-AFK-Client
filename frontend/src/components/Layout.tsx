@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useAuth } from "../lib/auth";
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 
 type IconName = "notes" | "minigames" | "dashboard" | "sniper" | "worth" | "users" | "logs" | "settings";
 
@@ -166,7 +166,9 @@ export function Layout() {
         <main className="min-w-0 flex-1 p-3 sm:p-6">
           <div className="mx-auto max-w-6xl">
             <ErrorBoundary resetKey={location.pathname}>
-              <Outlet />
+              <Suspense fallback={<p role="status" className="text-sm text-slate-400">Seite wird geladen…</p>}>
+                <Outlet />
+              </Suspense>
             </ErrorBoundary>
           </div>
         </main>

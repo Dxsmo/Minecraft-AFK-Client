@@ -1,0 +1,48 @@
+{
+  "browser": "154.0.8037.99",
+  "fixture": {
+    "accounts": 100,
+    "apiDelayMs": 100,
+    "startupLogoutDelayMs": 800
+  },
+  "loginFormMs": 107,
+  "dashboardMs": 1148,
+  "initialAccountRequests": 1,
+  "graphRequests": 1,
+  "interactions": [
+    {
+      "commitMs": 0.7,
+      "repeatedDateFormats": 0
+    },
+    {
+      "commitMs": 0.1,
+      "repeatedDateFormats": 0
+    },
+    {
+      "commitMs": 0.1,
+      "repeatedDateFormats": 0
+    },
+    {
+      "commitMs": 0,
+      "repeatedDateFormats": 0
+    },
+    {
+      "commitMs": 0.1,
+      "repeatedDateFormats": 0
+    }
+  ],
+  "backgroundRequests": 0,
+  "slowDashboardRequests": 1,
+  "pageChecks": [
+    "account-settings",
+    "/item-worth",
+    "/namesniper",
+    "/users",
+    "/logs",
+    "/settings",
+    "/notes",
+    "/notes/note",
+    "create-account-dialog"
+  ],
+  "errors": []
+}

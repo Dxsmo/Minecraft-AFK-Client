@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "../lib/api";
+import { usePolling } from "../lib/polling";
 import type {
   ItemWorthAccount,
   ItemWorthRunDetail,
@@ -91,17 +92,15 @@ export function ItemWorthPage() {
   // The selection is only pre-filled once, so polling never fights the user.
   const [selectionInit, setSelectionInit] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      setState(await api.get<ItemWorthState>("/item-worth"));
+      const data = await api.get<ItemWorthState>("/item-worth", { signal });
+      if (!signal?.aborted) { setState(data); setError(null); }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Item-Werte konnten nicht geladen werden");
+      if (!signal?.aborted) setError(err instanceof ApiError ? err.message : "Item-Werte konnten nicht geladen werden");
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
 
   // Adopt the running scan's settings so a page reload shows what is going on.
   useEffect(() => {
@@ -114,13 +113,7 @@ export function ItemWorthPage() {
   }, [state, selectionInit]);
 
   const active = state?.status === "RUNNING" || state?.status === "PAUSED";
-  useEffect(() => {
-    const timer = setInterval(
-      () => void load(),
-      active ? POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS,
-    );
-    return () => clearInterval(timer);
-  }, [active, load]);
+  usePolling(load, active ? POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS);
 
   function toggleAccount(account: ItemWorthAccount) {
     if (!account.online) return;

@@ -1,0 +1,24 @@
+{
+  "fixture": {
+    "accounts": 10,
+    "existingLogs": 200000,
+    "burstLogs": 2000,
+    "concurrentAccountRequests": 20
+  },
+  "unbuffered": {
+    "totalBurstMs": 5554.75,
+    "persistedBurstLogs": 1995,
+    "accountRequestMedianMs": 5474.86,
+    "accountRequestP95Ms": 5481.51,
+    "failedWrites": 5,
+    "failedReads": 0
+  },
+  "buffered": {
+    "totalBurstMs": 461.83,
+    "persistedBurstLogs": 2000,
+    "accountRequestMedianMs": 7.67,
+    "accountRequestP95Ms": 8.48,
+    "failedWrites": 0,
+    "failedReads": 0
+  }
+}

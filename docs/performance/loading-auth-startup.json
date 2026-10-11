@@ -1,0 +1,14 @@
+[
+  {
+    "hangingLogout": false,
+    "loginFormMs": 87,
+    "loginToDashboardMs": 2031,
+    "errors": []
+  },
+  {
+    "hangingLogout": true,
+    "loginFormMs": 88,
+    "loginToDashboardMs": 3566,
+    "errors": []
+  }
+]

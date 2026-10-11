@@ -32,6 +32,10 @@ export default fp(async function authPlugin(app: FastifyInstance) {
   });
 
   app.addHook("preHandler", async (req) => {
+    const route = req.routeOptions.url;
+    // Public textures and login never use a session. Hundreds of item icons
+    // must not compete with protected data requests for SQLite reads.
+    if (route?.startsWith("/api/assets/") || route === "/api/health" || route === "/api/auth/login") return;
     const sessionId = req.cookies?.[config.session.cookieName];
     req.session = sessionId ? await getSession(sessionId) : null;
   });

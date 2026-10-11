@@ -97,6 +97,10 @@ export interface MinecraftAccount {
   live?: LiveStatus;
 }
 
+export type DashboardAccount = Pick<MinecraftAccount,
+  "id" | "name" | "displayName" | "minecraftVersion" | "serverHost" | "serverPort" |
+  "edition" | "notes" | "status" | "lastSellAt" | "imageUrl" | "createdBy" | "live">;
+
 export interface ConsoleLogEntry {
   id: string;
   minecraftAccountId: string;
