@@ -24,12 +24,6 @@ export function useAccountConsole(accountId: string | undefined) {
   const [status, setStatus] = useState<LiveStatus | null>(null);
   const [connected, setConnected] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
-  const olderCursorRef = useRef<string | null>(null);
-  const loadingOlderRef = useRef(false);
-  const currentAccountRef = useRef(accountId);
-  currentAccountRef.current = accountId;
-  const [hasOlderLogs, setHasOlderLogs] = useState(false);
-  const [loadingOlderLogs, setLoadingOlderLogs] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -37,11 +31,7 @@ export function useAccountConsole(accountId: string | undefined) {
     setLogs([]);
     setStatus(null);
     setConnected(false);
-    setHasOlderLogs(false);
     setHistoryError(null);
-    olderCursorRef.current = null;
-    loadingOlderRef.current = false;
-    setLoadingOlderLogs(false);
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout>;
     let receivedHistory = false;
@@ -54,8 +44,6 @@ export function useAccountConsole(accountId: string | undefined) {
         .then(history => {
           if (cancelled || receivedHistory) return;
           receivedHistory = true;
-          olderCursorRef.current = history[0]?.id ?? null;
-          setHasOlderLogs(history.length === CONSOLE_HISTORY_PAGE_SIZE);
           // Preserve live lines delivered while the HTTP request was pending.
           setLogs(live => {
             const key = (line: ConsoleLogEntry) => JSON.stringify([line.createdAt, line.type, line.message]);
@@ -96,8 +84,6 @@ export function useAccountConsole(accountId: string | undefined) {
           controller.abort();
           setHistoryError(null);
           setLogs(msg.logs);
-          olderCursorRef.current = msg.logs[0]?.id ?? null;
-          setHasOlderLogs(msg.logs.length === CONSOLE_HISTORY_PAGE_SIZE);
         } else if (msg.type === "console" && msg.event) {
           const e = msg.event;
           setLogs((prev) => [
@@ -120,38 +106,7 @@ export function useAccountConsole(accountId: string | undefined) {
     };
   }, [accountId]);
 
-  async function loadOlderLogs() {
-    if (!accountId || !olderCursorRef.current || loadingOlderRef.current) return;
-    const requestAccount = accountId;
-    const cursor = olderCursorRef.current;
-    loadingOlderRef.current = true;
-    setLoadingOlderLogs(true);
-    setHistoryError(null);
-    try {
-      const older = await api.get<ConsoleLogEntry[]>(
-        `/minecraft/accounts/${accountId}/logs?limit=${CONSOLE_HISTORY_PAGE_SIZE}&before=${encodeURIComponent(cursor)}`,
-      );
-      if (currentAccountRef.current !== requestAccount || olderCursorRef.current !== cursor) return;
-      olderCursorRef.current = older[0]?.id ?? null;
-      setHasOlderLogs(older.length === CONSOLE_HISTORY_PAGE_SIZE);
-      setLogs((prev) => {
-        const known = new Set(prev.map((log) => log.id));
-        return [...older.filter((log) => !known.has(log.id)), ...prev].slice(-MAX_ACCOUNT_CONSOLE_LOGS);
-      });
-    } catch {
-      if (currentAccountRef.current === requestAccount) setHistoryError("Ältere Logs konnten nicht geladen werden. Bitte erneut versuchen.");
-    } finally {
-      if (currentAccountRef.current === requestAccount) {
-        loadingOlderRef.current = false;
-        setLoadingOlderLogs(false);
-      }
-    }
-  }
-
-  return {
-    logs, status, connected, loadOlderLogs, loadingOlderLogs, historyError,
-    hasOlderLogs: hasOlderLogs && logs.length < MAX_ACCOUNT_CONSOLE_LOGS,
-  };
+  return { logs, status, connected, historyError };
 }
 
 /** Live status snapshots for every account visible to the current user. */

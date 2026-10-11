@@ -20,7 +20,7 @@ const TYPE_LABEL: Record<ConsoleLogEntry["type"], string> = {
 };
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
-const COMPACT_LINE_COUNT = 6;
+const COMPACT_LINE_COUNT = 10;
 const ConsoleRow = memo(function ConsoleRow({ log }: { log: ConsoleLogEntry }) {
   return (
     <div className="flex gap-2 whitespace-pre-wrap break-words">
@@ -87,14 +87,15 @@ export const ConsoleView = memo(function ConsoleView({ logs, className = "h-[440
           aria-expanded={expanded} aria-controls={outputId}
           aria-label={expanded ? "Konsole einklappen" : "Konsole ausklappen"}
           title={expanded ? "Konsole einklappen" : "Konsole ausklappen"}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d={expanded ? "m6 15 6-6 6 6" : "m6 9 6 6 6-6"} />
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"
+            className={`transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}>
+            <path d="m9 6 6 6-6 6" />
           </svg>
           <span>Konsole</span>
         </button>
         {!expanded && <span className="pr-2 text-xs" style={{ color: "var(--text-subtle)" }}>Neueste {COMPACT_LINE_COUNT} Zeilen</span>}
       </div>
-      <div id={outputId} ref={containerRef} onScroll={handleScroll} className={`console-output ${expanded ? className : "h-[160px]"}`}
+      <div id={outputId} ref={containerRef} onScroll={handleScroll} className={`console-output ${expanded ? className : "h-[240px]"}`}
         style={{ border: 0, borderRadius: 0 }}>
         {logs.length === 0 && (
           <p style={{ color: "#52525b" }}>No console output yet. Start the client to see live output.</p>

@@ -37,7 +37,7 @@ export function EarningsBox({ accountId }: { accountId: string }) {
         className="mt-3 flex items-center gap-1.5 rounded-md px-1 py-1 text-[11px] transition-colors hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2"
         style={{ color: "var(--text-muted)" }}>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"
-          className={`transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg>
+          className={`transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}><path d="m9 6 6 6-6 6" /></svg>
         Verlauf
       </button>
       <div id={panelId} hidden={!expanded}>

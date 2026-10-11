@@ -25,7 +25,7 @@ export function AccountDetailPage() {
   function setTab(next: "console" | "settings") {
     setSearchParams((params) => { params.set("tab", next); return params; });
   }
-  const { logs, status, loadOlderLogs, loadingOlderLogs, hasOlderLogs, historyError } = useAccountConsole(id);
+  const { logs, status, historyError } = useAccountConsole(id);
   const inputRef = useRef<HTMLInputElement>(null);
   const isAdmin = user?.role === "ADMIN";
   const isCreator = !!account && !!user && account.createdBy?.id === user.id;
@@ -256,11 +256,6 @@ export function AccountDetailPage() {
       {tab === "console" && (
         <div key="console" className="tab-panel space-y-3">
           <ConsoleView key={id} logs={logs} className="h-[560px]" />
-          {hasOlderLogs && (
-            <button type="button" onClick={() => void loadOlderLogs()} disabled={loadingOlderLogs} className="btn btn-secondary btn-sm">
-              {loadingOlderLogs ? "Logs werden geladen…" : "Ältere Logs laden"}
-            </button>
-          )}
           {historyError && <p className="alert-error">{historyError}</p>}
           <form onSubmit={handleSendCommand} className="flex gap-2">
             <input

@@ -308,7 +308,7 @@ const AccountCard = memo(function AccountCard({ account, live, index, total, bus
             aria-label={expanded ? "Verkaufsdetails einklappen" : "Verkaufsdetails ausklappen"}
             onClick={() => setExpandedId(current => current === account.id ? null : account.id)}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"
-              style={{ transform: expanded ? "rotate(180deg)" : undefined, transition: "transform 300ms ease" }}><path d="m6 9 6 6 6-6" /></svg>
+              style={{ transform: expanded ? "rotate(90deg)" : undefined, transition: "transform 300ms ease" }}><path d="m9 6 6 6-6 6" /></svg>
           </button>
         </div>
         <AccountImageButton accountId={account.id} imageUrl={account.imageUrl} blurred={isBlurred}

@@ -73,7 +73,7 @@ try {
     await page.locator('input[type="password"]').fill('test');
     await page.locator('button[type="submit"]').click();
     await page.locator('a[href="/accounts/bench?tab=console"]').first().click();
-    await page.waitForFunction(() => document.querySelectorAll('.console-output > div').length === 6);
+    await page.waitForFunction(() => document.querySelectorAll('.console-output > div').length === 10);
     const compactHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
     await page.getByRole('button', { name: 'Konsole ausklappen', exact: true }).click();
     await page.waitForFunction(n => document.querySelectorAll('.console-output > div').length === n, count);
@@ -116,14 +116,6 @@ try {
       const row = Array.from(el.children).find(child => child.textContent === anchor.text);
       return row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top;
     }, readingAnchor);
-    let historyAnchorDelta = null;
-    if (count === 2000) {
-      const anchorBefore = await page.locator('.console-output > div').first().evaluate(el => el.getBoundingClientRect().top - el.parentElement.getBoundingClientRect().top);
-      await page.getByRole('button', { name: 'Ältere Logs laden' }).click();
-      await page.waitForFunction(() => document.querySelectorAll('.console-output > div').length === 4006);
-      const anchorAfter = await page.locator('.console-output > div').filter({ hasText: 'History line 0' }).evaluate(el => el.getBoundingClientRect().top - el.parentElement.getBoundingClientRect().top);
-      historyAnchorDelta = anchorAfter - anchorBefore;
-    }
     const input = page.locator('input[placeholder="/gamemode creative"]');
     await page.evaluate(() => window.__sockets.findLast(s => s.url.endsWith('/ws/accounts/bench')).close());
     await input.fill('/tpahere Steve');
@@ -140,7 +132,7 @@ try {
     const draftAfterFailure = await input.inputValue();
     const retainedCount = await page.locator('.console-output > div').count();
     await page.getByRole('button', { name: 'Konsole einklappen', exact: true }).click();
-    await page.waitForFunction(() => document.querySelectorAll('.console-output > div').length === 6);
+    await page.waitForFunction(() => document.querySelectorAll('.console-output > div').length === 10);
     await page.evaluate(() => window.__sockets.findLast(s => s.url.endsWith('/ws/accounts/bench')).deliver({
       type: 'console', event: { minecraftAccountId: 'bench', type: 'CHAT', message: 'Latest compact line', timestamp: new Date().toISOString() },
     }));
@@ -148,14 +140,14 @@ try {
     await page.getByRole('button', { name: 'Konsole ausklappen', exact: true }).click();
     const restoredCount = await page.locator('.console-output > div').count();
     report.scenarios.push({ count, compactHeight, expandedHeight, restoredCount, historyMs: +historyMs.toFixed(1), live, httpCommands,
-      draftAfterSend, draftAfterFailure, readingAnchorDelta, historyAnchorDelta, errors });
+      draftAfterSend, draftAfterFailure, readingAnchorDelta, errors });
     if (process.env.PERF_VERIFY === '1') {
-      if (compactHeight !== 160 || expandedHeight !== 560) throw new Error('Console toggle did not preserve the expected heights');
+      if (compactHeight !== 240 || expandedHeight !== 560) throw new Error('Console toggle did not preserve the expected heights');
+      if (await page.getByRole('button', { name: 'Ältere Logs laden' }).count()) throw new Error('Removed history button is still visible');
       if (restoredCount !== Math.min(20_000, retainedCount + 1)) throw new Error('Console toggle lost buffered history');
       if (JSON.stringify(httpCommands) !== JSON.stringify(['/tpahere Steve', '/home'])) throw new Error('Manual commands were dropped');
       if (draftAfterFailure !== '/homes') throw new Error('Failed command draft was lost');
       if (Math.abs(readingAnchorDelta) > 1) throw new Error('Console reading position jumped');
-      if (historyAnchorDelta !== null && Math.abs(historyAnchorDelta) > 1) throw new Error('Older history changed the reading position');
       if (!(await page.getByRole('alert').textContent()).includes('OFFLINE')) throw new Error('Failed command error is invisible');
       if (errors.length) throw new Error(errors.join('; '));
       if (!(await page.locator('.version-text').textContent())?.match(/^V\d+\.\d+\.\d+$/)) throw new Error('Website version is missing');
