@@ -97,8 +97,10 @@ try {
   await page.waitForTimeout(250);
   const initialAccountRequests = [...requests.entries()].filter(([key]) => key.split('?', 1)[0] === '/api/minecraft/accounts').reduce((sum, [, count]) => sum + count, 0);
   await page.locator('a[href="/accounts/bench-0?tab=console"]').click();
+  const consoleHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
   await page.getByRole('button', { name: 'Verkaufsgraph ausklappen' }).click();
   await page.getByRole('img', { name: /Verkaufsgraph der letzten Stunde/ }).waitFor();
+  if (verify) ensure(await page.locator('.console-output').evaluate(el => el.getBoundingClientRect().height >= 160), 'Expanded graph hid the console');
   await page.getByRole('button', { name: '24 Stunden', exact: true }).click();
   const chart = page.getByRole('img', { name: /Verkaufsgraph der letzten 24 Stunden/ });
   await chart.waitFor();
@@ -120,6 +122,10 @@ try {
   await page.getByRole('button', { name: '1 Stunde', exact: true }).click();
   await page.getByRole('img', { name: /Verkaufsgraph der letzten Stunde/ }).waitFor();
   await page.getByRole('button', { name: 'Verkaufsgraph einklappen' }).click();
+  if (verify) {
+    ensure(await page.locator('.console-output').evaluate((el, height) => el.clientHeight === height, consoleHeight), 'Collapsing the graph did not restore console height');
+    ensure(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1), 'Collapsed graph left the account page scrolling');
+  }
   await page.getByRole('button', { name: 'Verkaufsgraph ausklappen' }).click();
   await page.getByRole('img', { name: /Verkaufsgraph der letzten Stunde/ }).waitFor();
   const graphRequests = requests.get('/api/minecraft/accounts/bench-0/earnings/history?range=1h');

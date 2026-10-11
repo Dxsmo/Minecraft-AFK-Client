@@ -14,7 +14,7 @@ const user = { id: 'admin', username: 'Performance', role: 'ADMIN', status: 'ACT
 const report = { browser: await browser.version(), scenarios: [] };
 try {
   for (const count of [2000, 20_000]) {
-    const context = await browser.newContext();
+    const context = await browser.newContext({ viewport: { width: 1365, height: 900 } });
     const page = await context.newPage();
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
@@ -73,12 +73,32 @@ try {
     await page.locator('input[type="password"]').fill('test');
     await page.locator('button[type="submit"]').click();
     await page.locator('a[href="/accounts/bench?tab=console"]').first().click();
-    await page.waitForFunction(() => document.querySelectorAll('.console-output > div').length === 10);
-    const compactHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
-    await page.getByRole('button', { name: 'Konsole ausklappen', exact: true }).click();
     await page.waitForFunction(n => document.querySelectorAll('.console-output > div').length === n, count);
-    const expandedHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
     const historyMs = await page.evaluate(() => performance.now() - window.__historyStart);
+    const layouts = [];
+    for (const viewport of [{ width: 1365, height: 720 }, { width: 1365, height: 768 }, { width: 1365, height: 900 }, { width: 1920, height: 1080 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      // Wait for the tab's entry animation before measuring its bottom edge.
+      await page.waitForTimeout(250);
+      const layout = await page.evaluate(() => {
+        const el = document.querySelector('.console-output');
+        const style = getComputedStyle(el);
+        const earnings = document.querySelector('[aria-label="Sell earnings"]');
+        return {
+          consoleHeight: el.clientHeight,
+          visibleLines: +((el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)) / parseFloat(style.lineHeight)).toFixed(1),
+          pageOverflow: document.documentElement.scrollHeight - innerHeight,
+          bottomGap: innerHeight - earnings.getBoundingClientRect().bottom,
+          expectedBottomGap: parseFloat(getComputedStyle(document.querySelector('main')).paddingBottom),
+        };
+      });
+      layouts.push({ ...viewport, ...layout });
+      if (process.env.PERF_VERIFY === '1' && (layout.pageOverflow > 1 || Math.abs(layout.bottomGap - layout.expectedBottomGap) > 1)) {
+        throw new Error(`Account page does not fit the viewport: ${JSON.stringify(layout)}`);
+      }
+    }
+    await page.setViewportSize({ width: 1365, height: 900 });
+    if (process.env.PERF_SCREENSHOT) await page.screenshot({ path: process.env.PERF_SCREENSHOT });
     const live = await page.evaluate(async () => {
       const result = [];
       for (let i = 0; i < 5; i++) {
@@ -131,20 +151,17 @@ try {
     await page.waitForTimeout(150);
     const draftAfterFailure = await input.inputValue();
     const retainedCount = await page.locator('.console-output > div').count();
-    await page.getByRole('button', { name: 'Konsole einklappen', exact: true }).click();
-    await page.waitForFunction(() => document.querySelectorAll('.console-output > div').length === 10);
     await page.evaluate(() => window.__sockets.findLast(s => s.url.endsWith('/ws/accounts/bench')).deliver({
-      type: 'console', event: { minecraftAccountId: 'bench', type: 'CHAT', message: 'Latest compact line', timestamp: new Date().toISOString() },
+      type: 'console', event: { minecraftAccountId: 'bench', type: 'CHAT', message: 'Latest console line', timestamp: new Date().toISOString() },
     }));
-    await page.waitForFunction(() => document.querySelector('.console-output').lastElementChild.textContent.includes('Latest compact line'));
-    await page.getByRole('button', { name: 'Konsole ausklappen', exact: true }).click();
-    const restoredCount = await page.locator('.console-output > div').count();
-    report.scenarios.push({ count, compactHeight, expandedHeight, restoredCount, historyMs: +historyMs.toFixed(1), live, httpCommands,
+    await page.waitForFunction(() => document.querySelector('.console-output').lastElementChild.textContent.includes('Latest console line'));
+    const finalCount = await page.locator('.console-output > div').count();
+    report.scenarios.push({ count, layouts, finalCount, historyMs: +historyMs.toFixed(1), live, httpCommands,
       draftAfterSend, draftAfterFailure, readingAnchorDelta, errors });
     if (process.env.PERF_VERIFY === '1') {
-      if (compactHeight !== 240 || expandedHeight !== 560) throw new Error('Console toggle did not preserve the expected heights');
+      if (await page.getByRole('button', { name: /Konsole (aus|ein)klappen/ }).count()) throw new Error('Removed console toggle is still visible');
       if (await page.getByRole('button', { name: 'Ältere Logs laden' }).count()) throw new Error('Removed history button is still visible');
-      if (restoredCount !== Math.min(20_000, retainedCount + 1)) throw new Error('Console toggle lost buffered history');
+      if (finalCount !== Math.min(20_000, retainedCount + 1)) throw new Error('Console lost buffered history');
       if (JSON.stringify(httpCommands) !== JSON.stringify(['/tpahere Steve', '/home'])) throw new Error('Manual commands were dropped');
       if (draftAfterFailure !== '/homes') throw new Error('Failed command draft was lost');
       if (Math.abs(readingAnchorDelta) > 1) throw new Error('Console reading position jumped');

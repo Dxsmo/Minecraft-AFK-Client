@@ -111,7 +111,7 @@ export function AccountDetailPage() {
   const msaSignIn = status?.msaSignIn;
 
   return (
-    <div className="space-y-5">
+    <div className={tab === "console" ? "account-console-page" : "space-y-5"}>
       {account.edition === "BEDROCK" && (
         <div
           className="rounded-xl px-5 py-4"
@@ -254,8 +254,8 @@ export function AccountDetailPage() {
 
       {/* Tab content — keyed so it re-mounts and animates on switch. */}
       {tab === "console" && (
-        <div key="console" className="tab-panel space-y-3">
-          <ConsoleView key={id} logs={logs} className="h-[560px]" />
+        <div key="console" className="tab-panel account-console-tab">
+          <ConsoleView key={id} logs={logs} className="account-console-output" />
           {historyError && <p className="alert-error">{historyError}</p>}
           <form onSubmit={handleSendCommand} className="flex gap-2">
             <input

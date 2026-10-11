@@ -554,6 +554,34 @@ body {
     font-variant-numeric: tabular-nums;
   }
 
+  /* Use the remaining screen height for the console, leaving earnings visible.
+     Extra notices or an expanded graph can still make the page grow normally. */
+  .account-console-page {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    min-height: calc(100dvh - var(--app-header-height) - 1.5rem);
+  }
+  @media (min-width: 640px) {
+    .account-console-page {
+      min-height: calc(100dvh - var(--app-header-height) - 3rem);
+    }
+  }
+  .account-console-page > *,
+  .account-console-tab > * {
+    flex-shrink: 0;
+  }
+  .account-console-tab {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    gap: 0.75rem;
+  }
+  .account-console-output {
+    flex: 1 0 160px;
+    min-height: 160px;
+  }
+
   /* Terminal-style console, intentionally distinct from the rest of the app. */
   .console-output {
     background: linear-gradient(150deg, #0c0c0e, #101011);
