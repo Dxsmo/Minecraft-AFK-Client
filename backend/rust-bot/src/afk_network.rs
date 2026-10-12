@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use azalea::app::{App, Plugin, PreUpdate};
 use azalea::buf::AzBufVar;
+use azalea::client_chat::ChatPacket;
 use azalea::connection::{NetworkDiagnostics, RawConnection};
 use azalea::core::entity_id::MinecraftEntityId;
 use azalea::disconnect::DisconnectEvent;
@@ -128,6 +129,7 @@ struct ItemFilter {
     diagnostics_reported: bool,
     writer_failed_at: Option<Instant>,
     server_disconnect_received: bool,
+    server_tooltip_text: Option<String>,
 }
 
 impl ItemFilter {
@@ -243,10 +245,11 @@ fn diagnostics_message(ecs: &World, entity: Entity, filter: &ItemFilter) -> Stri
         ),
     );
     format!(
-        "AFK-Verbindungsdiagnose: Status {:?}; Keepalive erhalten {}, letzter vor {}; letzte Daten vor {}; {writes}; leere Pakete {}; Lesefehler {}{}",
+        "AFK-Verbindungsdiagnose: Status {:?}; Keepalive erhalten {}, letzter vor {}; letzte Daten vor {}; {writes}; leere Pakete {}; Lesefehler {}{}{}",
         filter.last_protocol, filter.keepalives_received, age(filter.last_keepalive_at),
         age(filter.last_received_at), filter.empty_payloads, filter.read_errors,
         filter.last_read_error.as_ref().map_or_else(String::new, |error| format!("; letzter Fehler: {error}")),
+        filter.server_tooltip_text.as_ref().map_or_else(String::new, |text| format!("; Server-Tooltip: {text}")),
     )
 }
 
@@ -316,15 +319,29 @@ fn process_packet(
             }
             filter.server_disconnect_received |=
                 matches!(&packet, ClientboundGamePacket::Disconnect(_));
-            if let ClientboundGamePacket::SystemChat(chat) = &packet {
-                if !filter.diagnostics_reported && is_failed_server_message(None, &chat.content.to_string()) {
-                    // Capture the old server's state before later packets in
-                    // this batch can configure or spawn the fallback world.
-                    emit(&OutEvent::BehaviorLog {
-                        message: diagnostics_message(ecs, entity, filter),
-                    });
-                    filter.diagnostics_reported = true;
+            let failed_server = match &packet {
+                ClientboundGamePacket::SystemChat(chat) => {
+                    let (sender, message) = ChatPacket::System(Arc::new(chat.clone()))
+                        .split_sender_and_content();
+                    is_failed_server_message(sender.as_deref(), &message)
                 }
+                ClientboundGamePacket::DisguisedChat(chat) => {
+                    is_failed_server_message(
+                        Some(&chat.chat_type.name.to_string()), &chat.message.to_string(),
+                    )
+                }
+                _ => false,
+            };
+            if failed_server || matches!(&packet, ClientboundGamePacket::Disconnect(_)) {
+                filter.server_tooltip_text = Some(crate::server_message_details::packet_tooltip(raw));
+            }
+            if failed_server && !filter.diagnostics_reported {
+                // Capture the old server's state before later packets in
+                // this batch can configure or spawn the fallback world.
+                emit(&OutEvent::BehaviorLog {
+                    message: diagnostics_message(ecs, entity, filter),
+                });
+                filter.diagnostics_reported = true;
             }
             let callback = needs_callback(&packet);
             game::process_packet(ecs, entity, &packet);
@@ -349,6 +366,9 @@ fn process_packet(
             let packet = Arc::new(deserialize_packet::<ClientboundConfigPacket>(stream)?);
             filter.server_disconnect_received |=
                 matches!(&*packet, ClientboundConfigPacket::Disconnect(_));
+            if filter.server_disconnect_received {
+                filter.server_tooltip_text = Some(crate::server_message_details::packet_tooltip(raw));
+            }
             if matches!(&*packet, ClientboundConfigPacket::KeepAlive(_)) {
                 filter.keepalives_received = filter.keepalives_received.saturating_add(1);
                 filter.last_keepalive_at = Some(Instant::now());
@@ -1410,6 +1430,96 @@ mod tests {
     }
 
     #[test]
+    fn fallback_diagnostics_preserve_tooltip_text_from_the_wire() {
+        use azalea::buf::AzBufVar;
+        use simdnbt::owned::{BaseNbt, NbtCompound};
+
+        let message = "Verbindung zum vorherigen Server verloren – du wurdest auf einen anderen Server verschoben.";
+        let reason = "Timed out waiting for teleport confirmation";
+        for (hover_key, value_key) in [("hover_event", "value"), ("hoverEvent", "contents")] {
+            for sender in [None, Some("HugoSMP")] {
+                let caption =
+                    sender.map_or_else(|| message.to_owned(), |name| format!("<{name}> {message}"));
+                let mut tooltip = NbtCompound::new();
+                tooltip.insert("action", "show_text");
+                tooltip.insert(value_key, reason);
+                let mut content = NbtCompound::new();
+                content.insert("text", caption.as_str());
+                content.insert(hover_key, tooltip);
+                let mut raw = Vec::new();
+                ClientboundSystemChat {
+                    content: message.into(),
+                    overlay: false,
+                }
+                .into_variant()
+                .id()
+                .azalea_write_var(&mut raw)
+                .unwrap();
+                BaseNbt::new("", content).write_unnamed(&mut raw);
+                raw.push(0); // Not an action-bar overlay.
+                let mut sim = simulation();
+                sim.app
+                    .world_mut()
+                    .get_mut::<RawConnection>(sim.entity)
+                    .unwrap()
+                    .injected_clientbound_packets
+                    .push(raw.into_boxed_slice());
+                sim.tick();
+                let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
+                assert!(filter.diagnostics_reported);
+                assert!(
+                    diagnostics_message(sim.app.world(), sim.entity, filter).contains(reason),
+                    "a reason in the server's tooltip must survive chat flattening"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn game_and_configuration_disconnects_preserve_tooltip_text() {
+        use simdnbt::owned::{BaseNbt, NbtCompound};
+
+        let message = "Disconnected by the server";
+        for state in [ConnectionProtocol::Game, ConnectionProtocol::Configuration] {
+            let mut tooltip = NbtCompound::new();
+            tooltip.insert("action", "show_text");
+            tooltip.insert("value", "actual additional reason");
+            let mut content = NbtCompound::new();
+            content.insert("text", message);
+            content.insert("hover_event", tooltip);
+            let packet_id = match state {
+                ConnectionProtocol::Game => ClientboundDisconnect {
+                    reason: message.into(),
+                }
+                .into_variant()
+                .id(),
+                ConnectionProtocol::Configuration => {
+                    azalea::protocol::packets::config::ClientboundDisconnect {
+                        reason: message.into(),
+                    }
+                    .into_variant()
+                    .id()
+                }
+                _ => unreachable!(),
+            };
+            let mut raw = Vec::new();
+            packet_id.azalea_write_var(&mut raw).unwrap();
+            BaseNbt::new("", content).write_unnamed(&mut raw);
+            let mut sim = simulation();
+            sim.app
+                .world_mut()
+                .get_mut::<RawConnection>(sim.entity)
+                .unwrap()
+                .state = state;
+            let mut filter = ItemFilter::default();
+            assert!(process_packet(sim.app.world_mut(), sim.entity, &raw, &mut filter).unwrap());
+            assert!(filter.server_disconnect_received);
+            assert!(diagnostics_message(sim.app.world(), sim.entity, &filter)
+                .contains("actual additional reason"));
+        }
+    }
+
+    #[test]
     fn fallback_diagnostics_capture_the_previous_world_and_ignore_player_quotes() {
         let message = "Verbindung zum vorherigen Server verloren – du wurdest auf einen anderen Server verschoben.";
         assert!(!is_failed_server_message(Some("Steve"), message));
@@ -1420,6 +1530,7 @@ mod tests {
         });
         sim.tick();
         assert!(!sim.app.world().get::<ItemFilter>(sim.entity).unwrap().diagnostics_reported);
+        assert!(sim.app.world().get::<ItemFilter>(sim.entity).unwrap().server_tooltip_text.is_none());
         sim.receive_packet(ClientboundKeepAlive { id: 123 });
         sim.receive_packet(ClientboundSystemChat {
             content: format!("§c{message}§r").into(), overlay: false,

@@ -17,6 +17,7 @@ mod behaviors;
 mod msauth;
 mod mspassword;
 mod protocol;
+mod server_message_details;
 
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};

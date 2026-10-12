@@ -280,6 +280,15 @@ additional users access afterwards in the account's **Settings** panel):
   a queued kick/disconnect reason. A received server reason takes priority;
   otherwise the connection reports the TCP read/write failure. Write diagnostics
   preserve the packet name, I/O error kind and operating-system error code.
+  Failure diagnostics also inspect the original server message for `show_text`
+  tooltips before Azalea flattens the chat component and discards hover metadata.
+  The `Server-Tooltip` field records any supplied text, or explicitly says the
+  message has no text tooltip. It handles nested components and legacy/modern
+  hover field names. Extraction is limited to trusted server-loss announcements
+  and game/configuration disconnect packets; routine chat and item/click metadata
+  are not logged as failure details. Output is limited to 1,024 characters.
+  This improves diagnostics, but cannot reveal a
+  reason the proxy did not send or prevent an external server from disconnecting.
 - Sell earnings under the console keep the rolling 5m/1h/24h totals. Hovering
   over the earnings or using the arrow opens a live graph for the last 1h, 6h or 24h, with time
   labels below and amounts on the right. All views use completed, clock-aligned
