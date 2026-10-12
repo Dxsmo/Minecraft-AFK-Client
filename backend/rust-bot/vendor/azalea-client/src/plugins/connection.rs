@@ -1,6 +1,6 @@
 use std::{
-    fmt::Debug,
-    io::Cursor,
+    fmt::{self, Debug},
+    io::{self, Cursor},
     mem,
     sync::{
         Arc,
@@ -127,7 +127,8 @@ pub fn read_packets(ecs: &mut World) {
     queued_packet_events.write_messages(ecs);
 }
 
-fn poll_all_writer_tasks(mut conn_query: Query<&mut RawConnection>) {
+#[doc(hidden)]
+pub fn poll_all_writer_tasks(mut conn_query: Query<&mut RawConnection>) {
     for mut conn in conn_query.iter_mut() {
         if let Some(net_conn) = &mut conn.network {
             // this needs to be done at some point every update to make sure packets are
@@ -213,6 +214,7 @@ impl RawConnection {
             network_packet_writer_tx,
             writer_task,
             write_statistics,
+            writer_finished: false,
         });
 
         conn
@@ -318,6 +320,24 @@ pub struct NetworkDiagnostics {
     pub packets_written: u64,
     pub keepalives_enqueued: u64,
     pub keepalives_written: u64,
+    pub writer_error: Option<NetworkWriteError>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NetworkWriteError {
+    pub kind: io::ErrorKind,
+    pub os_code: Option<i32>,
+    pub packet_name: &'static str,
+}
+
+impl fmt::Display for NetworkWriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Paket {}: {:?}", self.packet_name, self.kind)?;
+        if let Some(code) = self.os_code {
+            write!(f, " ({})", io::Error::from_raw_os_error(code))?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -326,11 +346,12 @@ struct WriteStatistics {
     packets_written: AtomicU64,
     keepalives_enqueued: AtomicU64,
     keepalives_written: AtomicU64,
+    writer_error: parking_lot::Mutex<Option<NetworkWriteError>>,
 }
 
 struct PendingNetworkPacket {
     bytes: Box<[u8]>,
-    keepalive: bool,
+    packet_name: &'static str,
 }
 
 pub struct NetworkConnection {
@@ -345,6 +366,7 @@ pub struct NetworkConnection {
     /// and compressed and encrypted before being added here.
     network_packet_writer_tx: mpsc::UnboundedSender<PendingNetworkPacket>,
     write_statistics: Arc<WriteStatistics>,
+    writer_finished: bool,
 }
 impl NetworkConnection {
     /// Read at most one already available packet without blocking.
@@ -360,26 +382,26 @@ impl NetworkConnection {
     ) -> Result<(), WritePacketError> {
         let packet = packet.into_variant();
         let raw_packet = serialize_packet(&packet)?;
-        self.enqueue_raw(&raw_packet, packet.name() == "keep_alive")?;
+        self.enqueue_raw(&raw_packet, packet.name())?;
 
         Ok(())
     }
 
     pub fn write_raw(&mut self, raw_packet: &[u8]) -> Result<(), WritePacketError> {
-        self.enqueue_raw(raw_packet, false)
+        self.enqueue_raw(raw_packet, "raw")
     }
 
-    fn enqueue_raw(&mut self, raw_packet: &[u8], keepalive: bool) -> Result<(), WritePacketError> {
+    fn enqueue_raw(&mut self, raw_packet: &[u8], packet_name: &'static str) -> Result<(), WritePacketError> {
         let network_packet = azalea_protocol::write::encode_to_network_packet(
             raw_packet,
             self.reader.compression_threshold,
             &mut self.enc_cipher,
         );
         self.network_packet_writer_tx
-            .send(PendingNetworkPacket { bytes: network_packet.into_boxed_slice(), keepalive })
+            .send(PendingNetworkPacket { bytes: network_packet.into_boxed_slice(), packet_name })
             .map_err(|error| mpsc::error::SendError(error.0.bytes))?;
         self.write_statistics.packets_enqueued.fetch_add(1, atomic::Ordering::Relaxed);
-        if keepalive {
+        if packet_name == "keep_alive" {
             self.write_statistics.keepalives_enqueued.fetch_add(1, atomic::Ordering::Relaxed);
         }
         Ok(())
@@ -394,14 +416,20 @@ impl NetworkConnection {
             packets_written: stats.packets_written.load(atomic::Ordering::Relaxed),
             keepalives_enqueued: stats.keepalives_enqueued.load(atomic::Ordering::Relaxed),
             keepalives_written: stats.keepalives_written.load(atomic::Ordering::Relaxed),
+            writer_error: *stats.writer_error.lock(),
         }
     }
 
     /// Makes sure packets get sent and returns Some(()) if the connection has
     /// closed.
     pub fn poll_writer(&mut self) -> Option<()> {
+        if self.writer_finished {
+            return Some(());
+        }
         let poll_once_res = future::poll_once(&mut self.writer_task);
-        future::block_on(poll_once_res)
+        let finished = future::block_on(poll_once_res);
+        self.writer_finished = finished.is_some();
+        finished
     }
 
     pub fn set_compression_threshold(&mut self, threshold: Option<u32>) {
@@ -426,11 +454,16 @@ async fn write_task(
 ) {
     while let Some(network_packet) = network_packet_writer_rx.recv().await {
         if let Err(e) = write_half.write_all(&network_packet.bytes).await {
+            *statistics.writer_error.lock() = Some(NetworkWriteError {
+                kind: e.kind(),
+                os_code: e.raw_os_error(),
+                packet_name: network_packet.packet_name,
+            });
             debug!("Error writing packet to server: {e}");
             break;
         };
         statistics.packets_written.fetch_add(1, atomic::Ordering::Relaxed);
-        if network_packet.keepalive {
+        if network_packet.packet_name == "keep_alive" {
             statistics.keepalives_written.fetch_add(1, atomic::Ordering::Relaxed);
         }
     }

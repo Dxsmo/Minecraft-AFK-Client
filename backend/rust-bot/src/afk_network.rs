@@ -33,6 +33,9 @@ const MAX_PACKETS_PER_UPDATE: usize = 256;
 // backlog even though ticks and outgoing commands themselves remain responsive.
 const MAX_SCANNED_PACKETS_PER_UPDATE: usize = 8192;
 const READ_BUDGET: Duration = Duration::from_millis(4);
+// A stopped writer does not imply that all incoming frames have been read.
+// Keep the same bounded updates briefly to recover the server's kick reason.
+const WRITER_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 // Derive IDs from the pinned protocol, rather than duplicating wire constants.
 static FAST_ITEM_PACKET_IDS: LazyLock<Vec<u32>> = LazyLock::new(|| {
@@ -123,6 +126,8 @@ struct ItemFilter {
     last_protocol: Option<ConnectionProtocol>,
     last_transport: Option<NetworkDiagnostics>,
     diagnostics_reported: bool,
+    writer_failed_at: Option<Instant>,
+    server_disconnect_received: bool,
 }
 
 impl ItemFilter {
@@ -228,11 +233,12 @@ fn diagnostics_message(ecs: &World, entity: Entity, filter: &ItemFilter) -> Stri
     let writes = transport.map_or_else(
         || "TCP-Schreibdaten unbekannt".to_owned(),
         |stats| format!(
-            "Keepalive eingereiht {}, an TCP übergeben {}; Schreibqueue {} Pakete; Lesepuffer {} Bytes",
+            "Keepalive eingereiht {}, an TCP übergeben {}; Schreibqueue {} Pakete; Lesepuffer {} Bytes{}",
             stats.keepalives_enqueued,
             stats.keepalives_written,
             stats.packets_enqueued.saturating_sub(stats.packets_written),
             stats.buffered_bytes,
+            stats.writer_error.map_or_else(String::new, |error| format!("; TCP-Schreibfehler: {error}")),
         ),
     );
     format!(
@@ -307,6 +313,8 @@ fn process_packet(
                 filter.keepalives_received = filter.keepalives_received.saturating_add(1);
                 filter.last_keepalive_at = Some(Instant::now());
             }
+            filter.server_disconnect_received |=
+                matches!(&packet, ClientboundGamePacket::Disconnect(_));
             if let ClientboundGamePacket::SystemChat(chat) = &packet {
                 if !filter.diagnostics_reported && is_failed_server_message(None, &chat.content.to_string()) {
                     // Capture the old server's state before later packets in
@@ -330,12 +338,16 @@ fn process_packet(
         ConnectionProtocol::Login => {
             filter.ignored.clear();
             let packet = Arc::new(deserialize_packet::<ClientboundLoginPacket>(stream)?);
+            filter.server_disconnect_received |=
+                matches!(&*packet, ClientboundLoginPacket::LoginDisconnect(_));
             login::process_packet(ecs, entity, &packet);
             ecs.write_message(login::ReceiveLoginPacketEvent { entity, packet });
         }
         ConnectionProtocol::Configuration => {
             filter.ignored.clear();
             let packet = Arc::new(deserialize_packet::<ClientboundConfigPacket>(stream)?);
+            filter.server_disconnect_received |=
+                matches!(&*packet, ClientboundConfigPacket::Disconnect(_));
             if matches!(&*packet, ClientboundConfigPacket::KeepAlive(_)) {
                 filter.keepalives_received = filter.keepalives_received.saturating_add(1);
                 filter.last_keepalive_at = Some(Instant::now());
@@ -350,7 +362,20 @@ fn process_packet(
     Ok(true)
 }
 
-fn disconnect(ecs: &mut World, entity: Entity, filter: &mut ItemFilter) {
+fn transport_failure_reason(
+    ecs: &World,
+    entity: Entity,
+    filter: &ItemFilter,
+    fallback: String,
+) -> String {
+    ecs.get::<RawConnection>(entity)
+        .and_then(RawConnection::network_diagnostics)
+        .or(filter.last_transport)
+        .and_then(|stats| stats.writer_error)
+        .map_or(fallback, |error| format!("TCP-Schreibfehler: {error}"))
+}
+
+fn disconnect(ecs: &mut World, entity: Entity, filter: &mut ItemFilter, reason: String) {
     if let Some(stats) = ecs
         .get::<RawConnection>(entity)
         .and_then(RawConnection::network_diagnostics)
@@ -362,7 +387,7 @@ fn disconnect(ecs: &mut World, entity: Entity, filter: &mut ItemFilter) {
     ecs.entity_mut(entity).remove::<RawConnection>();
     ecs.write_message(DisconnectEvent {
         entity,
-        reason: None,
+        reason: Some(reason.into()),
     });
 }
 
@@ -386,7 +411,10 @@ fn read_packets(ecs: &mut World) {
         let started = Instant::now();
         let mut applied = 0;
         for _ in 0..MAX_SCANNED_PACKETS_PER_UPDATE {
-            if applied >= MAX_PACKETS_PER_UPDATE || started.elapsed() >= READ_BUDGET {
+            if applied >= MAX_PACKETS_PER_UPDATE
+                || started.elapsed() >= READ_BUDGET
+                || filter.server_disconnect_received
+            {
                 break;
             }
             let Some(mut connection) = ecs.get_mut::<RawConnection>(entity) else {
@@ -430,7 +458,10 @@ fn read_packets(ecs: &mut World) {
                     }
                     if closed {
                         filter.record_error(&error.to_string());
-                        disconnect(ecs, entity, &mut filter);
+                        let reason = transport_failure_reason(
+                            ecs, entity, &filter, format!("TCP-Lesefehler: {error}"),
+                        );
+                        disconnect(ecs, entity, &mut filter, reason);
                     }
                     break;
                 }
@@ -440,14 +471,23 @@ fn read_packets(ecs: &mut World) {
             // Preserve order and unread data when yielding. Poll the writer even
             // if incoming packets are still waiting: commands must get out.
             connection.injected_clientbound_packets = injected.into();
-            let writer_closed = connection
-                .net_conn()
-                .is_some_and(|network| network.poll_writer().is_some());
+            let writer_closed = !filter.server_disconnect_received
+                && connection
+                    .net_conn()
+                    .is_some_and(|network| network.poll_writer().is_some());
             filter.last_transport = connection.network_diagnostics();
             drop(connection);
             if writer_closed {
-                filter.record_error("TCP-Schreiber beendet");
-                disconnect(ecs, entity, &mut filter);
+                let reason = transport_failure_reason(
+                    ecs, entity, &filter, "TCP-Schreiber beendet".into(),
+                );
+                if filter.writer_failed_at.is_none() {
+                    filter.writer_failed_at = Some(Instant::now());
+                    filter.record_error(&reason);
+                }
+                if filter.writer_failed_at.is_some_and(|at| at.elapsed() >= WRITER_DRAIN_TIMEOUT) {
+                    disconnect(ecs, entity, &mut filter, reason);
+                }
             }
         }
         ecs.entity_mut(entity).insert(filter);
@@ -471,8 +511,9 @@ mod tests {
 
     fn simulation() -> Simulation {
         let mut simulation = Simulation::new(ConnectionProtocol::Game);
-        // Replace the stock reader, retaining Azalea's complete protocol,
-        // inventory, movement, disconnect and physics systems in the fixture.
+        // Production disables the complete ConnectionPlugin. Remove both its
+        // reader and writer poller so tests do not run a second disconnect path.
+        // Retain Azalea's protocol, inventory, movement and physics systems.
         simulation
             .app
             .world_mut()
@@ -481,6 +522,16 @@ mod tests {
                     schedule
                         .remove_systems_in_set(
                             azalea::connection::read_packets,
+                            world,
+                            ScheduleCleanupPolicy::RemoveSystemsOnly,
+                        )
+                        .unwrap(),
+                    1
+                );
+                assert_eq!(
+                    schedule
+                        .remove_systems_in_set(
+                            azalea::connection::poll_all_writer_tasks,
                             world,
                             ScheduleCleanupPolicy::RemoveSystemsOnly,
                         )
@@ -708,6 +759,119 @@ mod tests {
                 });
             }
         }
+    }
+
+    #[test]
+    fn finished_writer_does_not_discard_a_buffered_server_kick() {
+        use azalea::protocol::connect::{RawReadConnection, RawWriteConnection};
+        use azalea::protocol::write::{encode_to_network_packet, serialize_packet};
+        use tokio::net::{TcpListener, TcpStream};
+
+        let mut sim = simulation();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all().build().unwrap();
+        runtime.block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (socket, accepted) = tokio::join!(
+                TcpStream::connect(listener.local_addr().unwrap()), listener.accept(),
+            );
+            let (_server, _) = accepted.unwrap();
+            let (read_stream, write_stream) = socket.unwrap().into_split();
+            let mut bytes = Vec::new();
+            for _ in 0..=MAX_PACKETS_PER_UPDATE {
+                bytes.extend(encode_to_network_packet(&[0], None, &mut None));
+            }
+            let kick = ClientboundDisconnect { reason: "actual server kick reason".into() };
+            bytes.extend(encode_to_network_packet(
+                &serialize_packet(&kick.into_variant()).unwrap(), None, &mut None,
+            ));
+            let mut connection = RawConnection::new(
+                RawReadConnection {
+                    read_stream, buffer: Cursor::new(bytes),
+                    compression_threshold: None, dec_cipher: None,
+                },
+                RawWriteConnection { write_stream, compression_threshold: None, enc_cipher: None },
+                ConnectionProtocol::Game,
+            );
+            // Deterministically end only the writer while the reader still has
+            // more frames than the per-update quota, including the kick packet.
+            connection.net_conn().unwrap().writer_task =
+                azalea::bevy_tasks::IoTaskPool::get().spawn(async {});
+            sim.app.world_mut().entity_mut(sim.entity).insert(connection);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let mut reasons = Vec::new();
+            for _ in 0..50 {
+                sim.tick();
+                reasons.extend(sim.app.world_mut().resource_mut::<Messages<DisconnectEvent>>()
+                    .drain().map(|event| event.reason.map(|reason| reason.to_string())));
+                if sim.app.world().get::<RawConnection>(sim.entity).is_none() { break; }
+                let mut connection = sim.app.world_mut().get_mut::<RawConnection>(sim.entity).unwrap();
+                let network = connection.net_conn().unwrap();
+                assert_eq!(network.poll_writer(), Some(()));
+                assert_eq!(network.poll_writer(), Some(()));
+                drop(connection);
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            assert_eq!(reasons, vec![Some("actual server kick reason".into())]);
+            assert!(sim.app.world().get::<RawConnection>(sim.entity).is_none());
+        });
+    }
+
+    #[test]
+    fn socket_write_error_is_retained_and_failed_writer_drain_is_bounded() {
+        use azalea::protocol::connect::{RawReadConnection, RawWriteConnection};
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::{TcpListener, TcpStream};
+
+        let mut sim = simulation();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all().build().unwrap();
+        runtime.block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let (socket, accepted) = tokio::join!(
+                TcpStream::connect(listener.local_addr().unwrap()), listener.accept(),
+            );
+            let (server, _) = accepted.unwrap();
+            let (read_stream, mut write_stream) = socket.unwrap().into_split();
+            // Fail a real socket write deterministically, while leaving its
+            // reader and peer alive. There is no server kick packet to recover.
+            write_stream.shutdown().await.unwrap();
+            let mut connection = RawConnection::new(
+                RawReadConnection {
+                    read_stream, buffer: Cursor::new(Vec::new()),
+                    compression_threshold: None, dec_cipher: None,
+                },
+                RawWriteConnection { write_stream, compression_threshold: None, enc_cipher: None },
+                ConnectionProtocol::Game,
+            );
+            connection.write(ServerboundKeepAlive { id: 123 }).unwrap();
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while connection.net_conn().unwrap().poll_writer().is_none() {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }).await.expect("a failed socket writer must finish");
+            let stats = connection.network_diagnostics().unwrap();
+            let error = stats.writer_error.expect("keep the actual I/O error");
+            assert_eq!(error.packet_name, "keep_alive");
+            assert_eq!(stats.keepalives_enqueued, 1);
+            assert_eq!(stats.keepalives_written, 0);
+            sim.app.world_mut().entity_mut(sim.entity).insert(connection);
+            sim.tick();
+            assert!(sim.app.world().get::<RawConnection>(sim.entity).is_some());
+            assert!(sim.app.world_mut().resource_mut::<Messages<DisconnectEvent>>().drain().next().is_none());
+            let mut filter = sim.app.world_mut().get_mut::<ItemFilter>(sim.entity).unwrap();
+            assert!(filter.writer_failed_at.is_some());
+            filter.writer_failed_at = Some(Instant::now() - WRITER_DRAIN_TIMEOUT - Duration::from_millis(1));
+            drop(filter);
+            sim.tick();
+            assert!(sim.app.world().get::<RawConnection>(sim.entity).is_none());
+            let reasons: Vec<_> = sim.app.world_mut().resource_mut::<Messages<DisconnectEvent>>()
+                .drain().map(|event| event.reason.map(|reason| reason.to_string())).collect();
+            assert_eq!(reasons, vec![Some(format!("TCP-Schreibfehler: {error}"))]);
+            let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
+            assert!(diagnostics_message(sim.app.world(), sim.entity, filter).contains(&error.to_string()));
+            drop(server);
+        });
     }
 
     #[test]

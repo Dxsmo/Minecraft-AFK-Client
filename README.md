@@ -271,6 +271,11 @@ additional users access afterwards in the account's **Settings** panel):
   when server/proxy logs are unavailable. A completed TCP write does not prove
   the remote server received or acknowledged it, and these counters do not
   expose a kick reason the proxy withheld. Empty frames remain silent.
+  A stopped TCP writer no longer immediately discards unread server packets.
+  The reader keeps its normal per-update limits for up to two seconds to recover
+  a queued kick/disconnect reason. A received server reason takes priority;
+  otherwise the connection reports the TCP read/write failure. Write diagnostics
+  preserve the packet name, I/O error kind and operating-system error code.
 - Sell earnings under the console keep the rolling 5m/1h/24h totals. Hovering
   over the earnings or using the arrow opens a live graph for the last 1h, 6h or 24h, with time
   labels below and amounts on the right. All views use completed, clock-aligned

@@ -17,6 +17,11 @@ packet only after `write_all` succeeds; the counters distinguish queueing from
 handoff to TCP, and do not claim receipt or acknowledgement by the server.
 Keepalive packets are identified by the pinned protocol's resource name rather
 than hardcoded game/config packet IDs. Diagnostics carry no packet payloads.
+The writer also retains the failed packet's resource name, I/O error kind and
+OS error code. `poll_writer` remembers completion so callers can safely poll it
+again while incoming disconnect frames are drained. The stock writer poller is
+exposed for the simulation to disable the complete connection plugin, matching
+production; leaving it enabled would bypass the AFK reader's drain policy.
 
 Keep the patch aligned with Azalea when changing its revision. Remove the local
 copy if upstream exposes an equivalent nonblocking reader API.
