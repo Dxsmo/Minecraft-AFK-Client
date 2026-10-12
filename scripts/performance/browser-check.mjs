@@ -78,8 +78,8 @@ try {
     const layouts = [];
     for (const viewport of [{ width: 1365, height: 720 }, { width: 1365, height: 768 }, { width: 1365, height: 900 }, { width: 1920, height: 1080 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport);
-      // Wait for the tab's entry animation before measuring its bottom edge.
-      await page.waitForTimeout(250);
+      // Wait for the tab entrance and console resize before measuring its edge.
+      await page.waitForTimeout(550);
       const layout = await page.evaluate(() => {
         const el = document.querySelector('.console-output');
         const style = getComputedStyle(el);

@@ -34,7 +34,7 @@ export function EarningsBox({ accountId, onExpandedChange }: { accountId: string
     const observer = new ResizeObserver(measure);
     observer.observe(content);
     return () => observer.disconnect();
-  }, []);
+  }, [hasOpened]);
 
   function changeExpanded(next: boolean) {
     if (next === expanded) return;
@@ -116,8 +116,12 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
   // The axes and hundreds of labels are static while the pointer moves.
   const chart = useMemo(() => history ? buildChart(history, width, gradientId) : null, [history, width, gradientId]);
 
-  if (!history) return <div className="flex h-[240px] items-center justify-center text-xs" role="status" style={{ color: "var(--text-subtle)" }}>
-    {error ? "Verkaufsverlauf konnte nicht geladen werden. Erneuter Versuch folgt." : "Verkaufsverlauf wird geladen…"}
+  if (!history) return <div>
+    <div className="mb-1 min-h-5" aria-hidden="true" />
+    <div className="flex h-[240px] items-center justify-center text-xs" role="status" style={{ color: "var(--text-subtle)" }}>
+      {error ? "Verkaufsverlauf konnte nicht geladen werden. Erneuter Versuch folgt." : "Verkaufsverlauf wird geladen…"}
+    </div>
+    <p className="mt-1 text-[10px]" aria-hidden="true">&nbsp;</p>
   </div>;
 
   const { left, top, plotWidth, plotHeight, x, y, series } = chart!;

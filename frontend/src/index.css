@@ -8,6 +8,7 @@
 :root {
   color-scheme: dark;
   --app-header-height: 57px;
+  --account-expand-motion: 500ms cubic-bezier(0.4, 0, 0.6, 1);
 
   --bg: #101011;
   --bg-elev: #19191b;
@@ -163,7 +164,7 @@ body {
     height: 0;
     overflow: hidden;
     pointer-events: none;
-    transition: height 500ms cubic-bezier(0.4, 0, 0.6, 1);
+    transition: height var(--account-expand-motion);
   }
   .account-card[data-expanded="true"] .account-details { height: var(--account-details-height, 0px); }
   .account-details-clip { overflow: hidden; }
@@ -583,18 +584,22 @@ body {
     gap: 0.75rem;
   }
   .console-output.account-console-output {
-    flex: 1 0 160px;
+    flex: 0 0 auto;
+    height: var(--console-closed-height, 160px);
     min-height: 160px;
     font-size: 0.9375rem;
     line-height: 1.8;
   }
+  .account-console-page[data-console-ready="true"] .account-console-output {
+    transition: height var(--account-expand-motion);
+  }
   .account-console-page[data-earnings-expanded="true"] .account-console-output {
-    min-height: var(--console-expanded-min-height, 160px);
+    height: var(--console-open-height, 160px);
   }
   .earnings-details {
     height: 0;
     overflow: hidden;
-    transition: height 500ms cubic-bezier(0.4, 0, 0.6, 1);
+    transition: height var(--account-expand-motion);
   }
   .earnings-details[data-expanded="true"] {
     height: var(--earnings-details-height, 0px);
@@ -772,7 +777,7 @@ body {
   animation: panel-in 0.22s ease both;
 }
 @media (prefers-reduced-motion: reduce) {
-  .earnings-details { transition: none; }
+  .account-details, .account-console-output, .earnings-details { transition: none; }
   .tab-panel {
     animation: none;
   }

@@ -37,6 +37,18 @@ export const ConsoleView = memo(function ConsoleView({ logs, className = "h-[440
   const stickToBottomRef = useRef(true);
   const previousViewRef = useRef<{ firstId?: string; height: number; top: number }>({ height: 0, top: 0 });
 
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
+      previousViewRef.current.height = el.scrollHeight;
+      previousViewRef.current.top = el.scrollTop;
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   // Preserve the reading position when an older page is inserted above it.
   useLayoutEffect(() => {
     const el = containerRef.current;

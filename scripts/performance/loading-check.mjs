@@ -107,6 +107,7 @@ try {
   await page.locator('[aria-label="Sell earnings"] h3').hover();
   await page.waitForTimeout(220);
   const graphMidHeight = await page.locator('.earnings-details').evaluate(el => el.getBoundingClientRect().height);
+  const consoleMidHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
   await page.getByRole('img', { name: /Verkaufsgraph der letzten Stunde/ }).waitFor();
   await page.waitForTimeout(400);
   const graphOpenHeight = await page.locator('.earnings-details').evaluate(el => el.getBoundingClientRect().height);
@@ -115,9 +116,15 @@ try {
     mainLeft: document.querySelector('main').getBoundingClientRect().left,
   }));
   const expandedConsoleHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
+  const graphProgress = graphMidHeight / graphOpenHeight;
+  const consoleProgress = (consoleHeight - consoleMidHeight) / (consoleHeight - expandedConsoleHeight);
   if (verify) {
     ensure(graphMidHeight > 0 && graphMidHeight < graphOpenHeight - 10,
       `Graph did not open gradually: mid=${graphMidHeight}, open=${graphOpenHeight}`);
+    ensure(consoleProgress > 0 && consoleProgress < 0.95 && Math.abs(graphProgress - consoleProgress) < 0.1,
+      `Graph and console did not animate together: graph=${graphProgress}, console=${consoleProgress}`);
+    ensure(await page.locator('.console-output').evaluate(el => getComputedStyle(el).transitionDuration === '0.5s'),
+      'Console animation does not last 500ms');
     ensure(closedGeometry.scrollbarGutter === 'stable' && closedGeometry.contentWidth === openGeometry.contentWidth
       && Math.abs(closedGeometry.mainLeft - openGeometry.mainLeft) < 0.5,
       `Opening graph shifted the page horizontally: ${JSON.stringify({ closedGeometry, openGeometry })}`);
@@ -218,5 +225,6 @@ try {
   ensure(errors.length === 0, errors.join('; '));
   console.log(JSON.stringify({ browser: await browser.version(), fixture: { accounts: 100, apiDelayMs: 100, startupLogoutDelayMs: 800 },
     loginFormMs, dashboardMs, initialAccountRequests, graphRequests, interactions,
+    animation: { graphProgress, consoleProgress, consoleHeight, expandedConsoleHeight },
     backgroundRequests, slowDashboardRequests, pageChecks, errors }, null, 2));
 } finally { await browser.close(); }
