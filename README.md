@@ -259,8 +259,8 @@ additional users access afterwards in the account's **Settings** panel):
   forwarded to the bot handler. Player physics, other entities, authentication,
   keepalives, compression and encryption remain handled by Azalea. The startup
   console line `AFK-Netzwerk aktiv` confirms that this reader is enabled.
-  Empty framed/decompressed payloads have no packet ID and are skipped with one
-  diagnostic per connection. Valid one-byte bundle delimiters remain intact.
+  Empty framed/decompressed payloads have no packet ID and are silently skipped.
+  Valid one-byte bundle delimiters remain intact.
   Other parse warnings include the payload length and protocol state, are limited
   to one per 30 seconds, and do not prevent processing subsequent packets.
 - Sell earnings under the console keep the rolling 5m/1h/24h totals. Hovering

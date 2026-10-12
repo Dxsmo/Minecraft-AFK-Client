@@ -212,12 +212,9 @@ fn process_packet(
     let state = connection.state;
     // A zero-byte framed/decompressed payload has no packet ID. It is not a
     // bundle delimiter (that is the valid one-byte packet [0]). Dropping this
-    // frame leaves the next frame aligned and avoids a warning every few seconds.
+    // frame silently leaves the next frame aligned; no user action is needed.
     if raw.is_empty() {
         filter.empty_payloads = filter.empty_payloads.saturating_add(1);
-        if filter.empty_payloads == 1 {
-            emit(&OutEvent::BehaviorLog { message: "AFK: leeres Netzwerkpaket ohne Paket-ID übersprungen; nachfolgende Pakete werden weiter verarbeitet".into() });
-        }
         return Ok(false);
     }
     let stream = &mut Cursor::new(raw);
