@@ -312,6 +312,9 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
         }
         Event::Chat(packet) => {
             let (sender, message) = packet.split_sender_and_content();
+            if afk_network::is_failed_server_message(sender.as_deref(), &message) {
+                afk_network::report_network_diagnostics(&bot);
+            }
             // Process inventory lifecycle messages before forwarding the chat.
             shared().lock().behavior.on_chat(&bot, &message);
             emit(&OutEvent::Chat { sender, message });
@@ -342,6 +345,7 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
             report_health(&bot);
         }
         Event::Disconnect(reason) => {
+            afk_network::report_network_diagnostics(&bot);
             emit(&OutEvent::Disconnect {
                 reason: reason.map(|r| r.to_string()),
             });

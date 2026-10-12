@@ -4,7 +4,7 @@ use std::{
     mem,
     sync::{
         Arc,
-        atomic::{self, AtomicBool},
+        atomic::{self, AtomicBool, AtomicU64},
     },
 };
 
@@ -197,10 +197,14 @@ impl RawConnection {
         let task_pool = IoTaskPool::get();
 
         let (network_packet_writer_tx, network_packet_writer_rx) =
-            mpsc::unbounded_channel::<Box<[u8]>>();
+            mpsc::unbounded_channel::<PendingNetworkPacket>();
+        let write_statistics = Arc::new(WriteStatistics::default());
 
-        let writer_task =
-            task_pool.spawn(write_task(network_packet_writer_rx, writer.write_stream));
+        let writer_task = task_pool.spawn(write_task(
+            network_packet_writer_rx,
+            writer.write_stream,
+            write_statistics.clone(),
+        ));
 
         let mut conn = Self::new_networkless(state);
         conn.network = Some(NetworkConnection {
@@ -208,6 +212,7 @@ impl RawConnection {
             enc_cipher: writer.enc_cipher,
             network_packet_writer_tx,
             writer_task,
+            write_statistics,
         });
 
         conn
@@ -253,6 +258,12 @@ impl RawConnection {
 
     pub fn net_conn(&mut self) -> Option<&mut NetworkConnection> {
         self.network.as_mut()
+    }
+
+    /// A nonblocking snapshot. Completed writes mean TCP accepted the bytes,
+    /// not that the remote Minecraft server acknowledged the packet.
+    pub fn network_diagnostics(&self) -> Option<NetworkDiagnostics> {
+        self.network.as_ref().map(NetworkConnection::diagnostics)
     }
 }
 
@@ -300,6 +311,28 @@ pub fn handle_raw_packet(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NetworkDiagnostics {
+    pub buffered_bytes: usize,
+    pub packets_enqueued: u64,
+    pub packets_written: u64,
+    pub keepalives_enqueued: u64,
+    pub keepalives_written: u64,
+}
+
+#[derive(Default)]
+struct WriteStatistics {
+    packets_enqueued: AtomicU64,
+    packets_written: AtomicU64,
+    keepalives_enqueued: AtomicU64,
+    keepalives_written: AtomicU64,
+}
+
+struct PendingNetworkPacket {
+    bytes: Box<[u8]>,
+    keepalive: bool,
+}
+
 pub struct NetworkConnection {
     reader: RawReadConnection,
     // compression threshold is in the RawReadConnection
@@ -310,7 +343,8 @@ pub struct NetworkConnection {
     ///
     /// These will not be modified further, they should already be serialized
     /// and compressed and encrypted before being added here.
-    network_packet_writer_tx: mpsc::UnboundedSender<Box<[u8]>>,
+    network_packet_writer_tx: mpsc::UnboundedSender<PendingNetworkPacket>,
+    write_statistics: Arc<WriteStatistics>,
 }
 impl NetworkConnection {
     /// Read at most one already available packet without blocking.
@@ -326,20 +360,41 @@ impl NetworkConnection {
     ) -> Result<(), WritePacketError> {
         let packet = packet.into_variant();
         let raw_packet = serialize_packet(&packet)?;
-        self.write_raw(&raw_packet)?;
+        self.enqueue_raw(&raw_packet, packet.name() == "keep_alive")?;
 
         Ok(())
     }
 
     pub fn write_raw(&mut self, raw_packet: &[u8]) -> Result<(), WritePacketError> {
+        self.enqueue_raw(raw_packet, false)
+    }
+
+    fn enqueue_raw(&mut self, raw_packet: &[u8], keepalive: bool) -> Result<(), WritePacketError> {
         let network_packet = azalea_protocol::write::encode_to_network_packet(
             raw_packet,
             self.reader.compression_threshold,
             &mut self.enc_cipher,
         );
         self.network_packet_writer_tx
-            .send(network_packet.into_boxed_slice())?;
+            .send(PendingNetworkPacket { bytes: network_packet.into_boxed_slice(), keepalive })
+            .map_err(|error| mpsc::error::SendError(error.0.bytes))?;
+        self.write_statistics.packets_enqueued.fetch_add(1, atomic::Ordering::Relaxed);
+        if keepalive {
+            self.write_statistics.keepalives_enqueued.fetch_add(1, atomic::Ordering::Relaxed);
+        }
         Ok(())
+    }
+
+    fn diagnostics(&self) -> NetworkDiagnostics {
+        let stats = &self.write_statistics;
+        NetworkDiagnostics {
+            buffered_bytes: self.reader.buffer.get_ref().len()
+                .saturating_sub(self.reader.buffer.position() as usize),
+            packets_enqueued: stats.packets_enqueued.load(atomic::Ordering::Relaxed),
+            packets_written: stats.packets_written.load(atomic::Ordering::Relaxed),
+            keepalives_enqueued: stats.keepalives_enqueued.load(atomic::Ordering::Relaxed),
+            keepalives_written: stats.keepalives_written.load(atomic::Ordering::Relaxed),
+        }
     }
 
     /// Makes sure packets get sent and returns Some(()) if the connection has
@@ -365,14 +420,19 @@ impl NetworkConnection {
 }
 
 async fn write_task(
-    mut network_packet_writer_rx: mpsc::UnboundedReceiver<Box<[u8]>>,
+    mut network_packet_writer_rx: mpsc::UnboundedReceiver<PendingNetworkPacket>,
     mut write_half: OwnedWriteHalf,
+    statistics: Arc<WriteStatistics>,
 ) {
     while let Some(network_packet) = network_packet_writer_rx.recv().await {
-        if let Err(e) = write_half.write_all(&network_packet).await {
+        if let Err(e) = write_half.write_all(&network_packet.bytes).await {
             debug!("Error writing packet to server: {e}");
             break;
         };
+        statistics.packets_written.fetch_add(1, atomic::Ordering::Relaxed);
+        if network_packet.keepalive {
+            statistics.keepalives_written.fetch_add(1, atomic::Ordering::Relaxed);
+        }
     }
 
     trace!("write task is done");

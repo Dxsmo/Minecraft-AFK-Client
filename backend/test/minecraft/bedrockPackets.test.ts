@@ -195,7 +195,8 @@ describe("Bedrock automation with the installed wire codec", () => {
     const { sender, packets } = setup();
     const behavior = new BehaviorState({ host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "", autosell_enabled: true, autosell_interval_seconds: 5 }, sender);
     behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
-    for (let i = 0; i < 120; i++) {
+    // Deliver the second menu 950ms after its request, before the 1s deadline.
+    for (let i = 0; i < 119; i++) {
       behavior.inventory.onSlot({ window_id: "inventory", slot: i % 36, item: stack(1000 + i) });
       vi.advanceTimersByTime(50); behavior.onTick();
     }

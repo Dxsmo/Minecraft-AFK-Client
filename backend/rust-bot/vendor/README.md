@@ -11,6 +11,13 @@ bound incoming work without replacing compression, encryption or protocol
 handlers. Upstream's private reader otherwise cannot be used by a custom
 connection plugin. Cargo's patch applies to the client used by `azalea`.
 
+`RawConnection::network_diagnostics` also exposes a nonblocking snapshot of
+unread bytes and outgoing packet/keepalive counts. The writer records a completed
+packet only after `write_all` succeeds; the counters distinguish queueing from
+handoff to TCP, and do not claim receipt or acknowledgement by the server.
+Keepalive packets are identified by the pinned protocol's resource name rather
+than hardcoded game/config packet IDs. Diagnostics carry no packet payloads.
+
 Keep the patch aligned with Azalea when changing its revision. Remove the local
 copy if upstream exposes an equivalent nonblocking reader API.
 

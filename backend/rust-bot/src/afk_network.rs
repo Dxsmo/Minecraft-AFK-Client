@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use azalea::app::{App, Plugin, PreUpdate};
 use azalea::buf::AzBufVar;
-use azalea::connection::RawConnection;
+use azalea::connection::{NetworkDiagnostics, RawConnection};
 use azalea::core::entity_id::MinecraftEntityId;
 use azalea::disconnect::DisconnectEvent;
 use azalea::ecs as bevy_ecs;
@@ -115,6 +115,14 @@ struct ItemFilter {
     ignored: HashSet<MinecraftEntityId>,
     last_warning_at: Option<Instant>,
     empty_payloads: u64,
+    last_received_at: Option<Instant>,
+    keepalives_received: u64,
+    last_keepalive_at: Option<Instant>,
+    read_errors: u64,
+    last_read_error: Option<String>,
+    last_protocol: Option<ConnectionProtocol>,
+    last_transport: Option<NetworkDiagnostics>,
+    diagnostics_reported: bool,
 }
 
 impl ItemFilter {
@@ -174,6 +182,7 @@ impl ItemFilter {
     }
 
     fn warn(&mut self, message: String) {
+        self.record_error(&message);
         let now = Instant::now();
         if self
             .last_warning_at
@@ -183,6 +192,71 @@ impl ItemFilter {
             emit(&OutEvent::Warning { message });
         }
     }
+
+    fn record_error(&mut self, message: &str) {
+        self.read_errors = self.read_errors.saturating_add(1);
+        self.last_read_error = Some(message.chars().take(240).collect());
+    }
+}
+
+pub(crate) fn is_failed_server_message(sender: Option<&str>, message: &str) -> bool {
+    static FORMATTING: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new("(?i)§[0-9a-u]").unwrap()
+    });
+    static MESSAGE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?i)^\s*Verbindung\s+zum\s+vorherigen\s+Server\s+verloren\s*[–—-]\s*du\s+wurdest\s+auf\s+einen\s+anderen\s+Server\s+verschoben[.!]?\s*$").unwrap()
+    });
+    if sender.is_some_and(|sender| {
+        !FORMATTING.replace_all(sender, "").replace('§', "").eq_ignore_ascii_case("HugoSMP")
+    }) {
+        return false;
+    }
+    MESSAGE.is_match(&FORMATTING.replace_all(message, "").replace('§', ""))
+}
+
+fn diagnostics_message(ecs: &World, entity: Entity, filter: &ItemFilter) -> String {
+    let age = |at: Option<Instant>| {
+        at.map_or_else(
+            || "unbekannt".to_owned(),
+            |at| format!("{}s", at.elapsed().as_secs()),
+        )
+    };
+    let transport = ecs
+        .get::<RawConnection>(entity)
+        .and_then(RawConnection::network_diagnostics)
+        .or(filter.last_transport);
+    let writes = transport.map_or_else(
+        || "TCP-Schreibdaten unbekannt".to_owned(),
+        |stats| format!(
+            "Keepalive eingereiht {}, an TCP übergeben {}; Schreibqueue {} Pakete; Lesepuffer {} Bytes",
+            stats.keepalives_enqueued,
+            stats.keepalives_written,
+            stats.packets_enqueued.saturating_sub(stats.packets_written),
+            stats.buffered_bytes,
+        ),
+    );
+    format!(
+        "AFK-Verbindungsdiagnose: Status {:?}; Keepalive erhalten {}, letzter vor {}; letzte Daten vor {}; {writes}; leere Pakete {}; Lesefehler {}{}",
+        filter.last_protocol, filter.keepalives_received, age(filter.last_keepalive_at),
+        age(filter.last_received_at), filter.empty_payloads, filter.read_errors,
+        filter.last_read_error.as_ref().map_or_else(String::new, |error| format!("; letzter Fehler: {error}")),
+    )
+}
+
+/// Emit once at a reported failure, preserving the last transport snapshot even
+/// after the socket has been removed. TCP writes are not server acknowledgements.
+pub(crate) fn report_network_diagnostics(bot: &azalea::Client) {
+    let mut ecs = bot.ecs.write();
+    let Some(filter) = ecs.get::<ItemFilter>(bot.entity) else {
+        return;
+    };
+    if filter.diagnostics_reported {
+        return;
+    }
+    let message = diagnostics_message(&ecs, bot.entity, filter);
+    ecs.get_mut::<ItemFilter>(bot.entity).unwrap().diagnostics_reported = true;
+    drop(ecs);
+    emit(&OutEvent::BehaviorLog { message });
 }
 
 /// The bot handler needs only these raw packet callbacks. Chat, health,
@@ -210,6 +284,8 @@ fn process_packet(
         return Ok(false);
     };
     let state = connection.state;
+    filter.last_protocol = Some(state);
+    filter.last_received_at = Some(Instant::now());
     // A zero-byte framed/decompressed payload has no packet ID. It is not a
     // bundle delimiter (that is the valid one-byte packet [0]). Dropping this
     // frame silently leaves the next frame aligned; no user action is needed.
@@ -226,6 +302,20 @@ fn process_packet(
             let mut packet = deserialize_packet::<ClientboundGamePacket>(stream)?;
             if !filter.keep(&mut packet) {
                 return Ok(false);
+            }
+            if matches!(&packet, ClientboundGamePacket::KeepAlive(_)) {
+                filter.keepalives_received = filter.keepalives_received.saturating_add(1);
+                filter.last_keepalive_at = Some(Instant::now());
+            }
+            if let ClientboundGamePacket::SystemChat(chat) = &packet {
+                if !filter.diagnostics_reported && is_failed_server_message(None, &chat.content.to_string()) {
+                    // Capture the old server's state before later packets in
+                    // this batch can configure or spawn the fallback world.
+                    emit(&OutEvent::BehaviorLog {
+                        message: diagnostics_message(ecs, entity, filter),
+                    });
+                    filter.diagnostics_reported = true;
+                }
             }
             let callback = needs_callback(&packet);
             game::process_packet(ecs, entity, &packet);
@@ -246,6 +336,10 @@ fn process_packet(
         ConnectionProtocol::Configuration => {
             filter.ignored.clear();
             let packet = Arc::new(deserialize_packet::<ClientboundConfigPacket>(stream)?);
+            if matches!(&*packet, ClientboundConfigPacket::KeepAlive(_)) {
+                filter.keepalives_received = filter.keepalives_received.saturating_add(1);
+                filter.last_keepalive_at = Some(Instant::now());
+            }
             config::process_packet(ecs, entity, &packet);
             ecs.write_message(config::ReceiveConfigPacketEvent { entity, packet });
         }
@@ -256,7 +350,13 @@ fn process_packet(
     Ok(true)
 }
 
-fn disconnect(ecs: &mut World, entity: Entity) {
+fn disconnect(ecs: &mut World, entity: Entity, filter: &mut ItemFilter) {
+    if let Some(stats) = ecs
+        .get::<RawConnection>(entity)
+        .and_then(RawConnection::network_diagnostics)
+    {
+        filter.last_transport = Some(stats);
+    }
     // Removing the connection drops its writer/stream, and the standard
     // DisconnectPlugin cleans up player/world components and emits Event::Disconnect.
     ecs.entity_mut(entity).remove::<RawConnection>();
@@ -329,7 +429,8 @@ fn read_packets(ecs: &mut World) {
                         ));
                     }
                     if closed {
-                        disconnect(ecs, entity);
+                        filter.record_error(&error.to_string());
+                        disconnect(ecs, entity, &mut filter);
                     }
                     break;
                 }
@@ -342,9 +443,11 @@ fn read_packets(ecs: &mut World) {
             let writer_closed = connection
                 .net_conn()
                 .is_some_and(|network| network.poll_writer().is_some());
+            filter.last_transport = connection.network_diagnostics();
             drop(connection);
             if writer_closed {
-                disconnect(ecs, entity);
+                filter.record_error("TCP-Schreiber beendet");
+                disconnect(ecs, entity, &mut filter);
             }
         }
         ecs.entity_mut(entity).insert(filter);
@@ -581,8 +684,27 @@ mod tests {
                     let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
                     assert_eq!(filter.empty_payloads, packets.len() as u64);
                     assert!(filter.last_warning_at.is_none());
+                    assert_eq!(filter.keepalives_received, 2);
+                    assert!(filter.last_keepalive_at.is_some());
+                    let stats = sim.app.world().get::<RawConnection>(sim.entity).unwrap()
+                        .network_diagnostics().unwrap();
+                    assert_eq!(stats.keepalives_enqueued, 2);
+                    assert_eq!(stats.keepalives_written, 2);
                     assert_eq!(sim.app.world().get::<Inventory>(sim.entity).unwrap()
                         .inventory_menu.slot(9).unwrap().count(), 64);
+                    server.writer.raw.write_stream.shutdown().await.unwrap();
+                    for _ in 0..50 {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        sim.tick();
+                        if sim.app.world().get::<RawConnection>(sim.entity).is_none() { break; }
+                    }
+                    assert!(sim.app.world().get::<RawConnection>(sim.entity).is_none());
+                    let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
+                    assert_eq!(filter.last_transport.unwrap().keepalives_written, 2);
+                    let diagnostic = diagnostics_message(sim.app.world(), sim.entity, filter);
+                    assert!(diagnostic.contains("Keepalive erhalten 2"));
+                    assert!(diagnostic.contains("an TCP übergeben 2"));
+                    assert_eq!(filter.read_errors, 1);
                 });
             }
         }
@@ -1001,6 +1123,31 @@ mod tests {
             .unwrap()
             .ignored
             .is_empty());
+    }
+
+    #[test]
+    fn fallback_diagnostics_capture_the_previous_world_and_ignore_player_quotes() {
+        let message = "Verbindung zum vorherigen Server verloren – du wurdest auf einen anderen Server verschoben.";
+        assert!(!is_failed_server_message(Some("Steve"), message));
+        assert!(is_failed_server_message(Some("§6HugoSMP"), &format!("§c{message}§r")));
+        let mut sim = simulation();
+        sim.receive_packet(ClientboundSystemChat {
+            content: format!("Steve: {message}").into(), overlay: false,
+        });
+        sim.tick();
+        assert!(!sim.app.world().get::<ItemFilter>(sim.entity).unwrap().diagnostics_reported);
+        sim.receive_packet(ClientboundKeepAlive { id: 123 });
+        sim.receive_packet(ClientboundSystemChat {
+            content: format!("§c{message}§r").into(), overlay: false,
+        });
+        sim.receive_packet(ClientboundStartConfiguration);
+        sim.receive_packet(azalea::protocol::packets::config::ClientboundKeepAlive { id: 456 });
+        sim.tick();
+        let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
+        assert!(filter.diagnostics_reported);
+        assert_eq!(filter.keepalives_received, 2);
+        assert_eq!(filter.last_protocol, Some(ConnectionProtocol::Configuration));
+        assert_eq!(filter.read_errors, 0);
     }
 
     #[test]

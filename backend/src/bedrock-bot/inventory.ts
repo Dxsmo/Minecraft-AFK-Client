@@ -5,7 +5,7 @@ export type BedrockItem = { network_id: number; count?: number; stack_id?: numbe
 type WindowId = number | string;
 type Container = { id: WindowId; type: string; items: BedrockItem[] | null; owned: boolean; position: string | null; manual: boolean };
 type Pending = { id: number; source: number; destination: number; item: BedrockItem; sentAt: number };
-const SELL_MENU_TIMEOUT_MS = 2_000;
+const SELL_MENU_TIMEOUT_MS = 1_000;
 const empty = (): BedrockItem => ({ network_id: 0 });
 const present = (item: BedrockItem | undefined): item is BedrockItem => !!item?.network_id && (item.count ?? 0) > 0;
 const positionKey = (position: unknown): string | null => {

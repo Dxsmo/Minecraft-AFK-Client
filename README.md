@@ -214,7 +214,7 @@ additional users access afterwards in the account's **Settings** panel):
   disk (`data/bot-cache/<account>/`) so subsequent starts are silent. No
   password is ever entered or stored.
 - Continuous crouching and auto-reconnect
-- Auto-sell: send the sell command, wait up to five seconds for the menu and
+- Auto-sell: send the sell command, wait up to one second for the Java menu and
   its inventory data, shift occupied player slots, and close on the following
   tick. Ready menus proceed immediately, even if a tick was delayed. Full
   content packets distinguish genuinely empty menus from unloaded shells and
@@ -263,6 +263,13 @@ additional users access afterwards in the account's **Settings** panel):
   Valid one-byte bundle delimiters remain intact.
   Other parse warnings include the payload length and protocol state, are limited
   to one per 30 seconds, and do not prevent processing subsequent packets.
+  A Java server-loss announcement or disconnect emits one
+  `AFK-Verbindungsdiagnose` line with received keepalives, queued replies,
+  replies actually written to TCP, pending outgoing packets, unread buffer
+  bytes, empty frames and read errors. This provides client-side evidence even
+  when server/proxy logs are unavailable. A completed TCP write does not prove
+  the remote server received or acknowledged it, and these counters do not
+  expose a kick reason the proxy withheld. Empty frames remain silent.
 - Sell earnings under the console keep the rolling 5m/1h/24h totals. Hovering
   over the earnings or using the arrow opens a live graph for the last 1h, 6h or 24h, with time
   labels below and amounts on the right. All views use completed, clock-aligned

@@ -24,7 +24,7 @@ use crate::protocol::{BehaviorConfig, Config, OutEvent};
 
 /// Allow slow servers/proxies to finish opening and synchronizing the menu.
 /// Healthy cycles still proceed immediately; this only bounds missing replies.
-const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_secs(2);
+const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_secs(1);
 /// Give manually requested menus time to open without automation taking over.
 const MANUAL_MENU_GUARD_TIMEOUT: Duration = Duration::from_secs(5);
 /// Never overlap sell commands, and cap even very short configured intervals
@@ -2384,20 +2384,20 @@ mod tests {
             let since = Instant::now();
             tick_sell(&client, &mut state, since);
             assert_eq!(take_commands(&client), vec!["/sell"]);
-            tick_sell(&client, &mut state, since + Duration::from_secs(1));
+            tick_sell(&client, &mut state, since + Duration::from_millis(500));
             assert!(matches!(
                 state.autosell_phase,
                 AutoSellPhase::WaitingForMenu { .. }
             ));
             open_empty_sell_menu(&client, &mut state);
-            tick_sell(&client, &mut state, since + Duration::from_millis(1500));
+            tick_sell(&client, &mut state, since + Duration::from_millis(750));
             assert!(clicks.lock().is_empty());
             assert_eq!(client.get_inventory().unwrap().id(), 7);
             let mut slots = vec![ItemStack::Empty; 63];
             slots[27] = ItemStack::new(ItemKind::Cobblestone, 64);
             slots[62] = ItemStack::new(ItemKind::Beef, 32);
             receive_content(&client, &mut state, 7, slots);
-            tick_sell(&client, &mut state, since + Duration::from_secs(2));
+            tick_sell(&client, &mut state, since + Duration::from_secs(1));
             assert!(matches!(
                 state.autosell_phase,
                 AutoSellPhase::Closing { .. }
@@ -2408,7 +2408,7 @@ mod tests {
             assert_eq!(menu.slot(1).unwrap().count(), 32);
             assert!(menu.slot(27).unwrap().is_empty());
             assert!(menu.slot(62).unwrap().is_empty());
-            tick_sell(&client, &mut state, since + Duration::from_millis(2050));
+            tick_sell(&client, &mut state, since + Duration::from_millis(1050));
             assert_eq!(client.get_inventory().unwrap().id(), 0);
             assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
             tick_sell(&client, &mut state, since + Duration::from_millis(2200));
@@ -2528,7 +2528,7 @@ mod tests {
         state.on_container_content(&client, &foreign);
         assert_eq!(client.component::<Inventory>().unwrap().state_id, 0);
         receive_content(&client, &mut state, 7, vec![ItemStack::Empty; 27]);
-        tick_sell(&client, &mut state, since + Duration::from_secs(1));
+        tick_sell(&client, &mut state, since + Duration::from_millis(999));
         assert!(matches!(
             state.autosell_phase,
             AutoSellPhase::WaitingForMenu { .. }
@@ -2556,12 +2556,12 @@ mod tests {
                 started_empty,
                 content_received: None,
             };
-            tick_sell(&client, &mut state, since + Duration::from_millis(1999));
+            tick_sell(&client, &mut state, since + Duration::from_millis(999));
             assert!(matches!(
                 state.autosell_phase,
                 AutoSellPhase::WaitingForMenu { .. }
             ));
-            tick_sell(&client, &mut state, since + Duration::from_secs(2));
+            tick_sell(&client, &mut state, since + Duration::from_secs(1));
             assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
             assert_eq!(client.get_inventory().unwrap().id(), 0);
             tick_sell(
