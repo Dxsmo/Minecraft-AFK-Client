@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../lib/api";
 import { usePolling } from "../lib/polling";
 import type { EarningsHistory as History } from "../lib/types";
@@ -17,10 +17,24 @@ export function EarningsBox({ accountId, onExpandedChange }: { accountId: string
   const [hasOpened, setHasOpened] = useState(false);
   const [range, setRange] = useState<Range>("1h");
   const panelId = useId();
+  const detailsRef = useRef<HTMLDivElement>(null);
+  const detailsContentRef = useRef<HTMLDivElement>(null);
   usePolling(async signal => {
     const data = await api.get<Earnings>(`/minecraft/accounts/${accountId}/earnings`, { signal });
     if (!signal.aborted) setEarnings(data);
   }, 15_000);
+
+  // Match the account-list hover animation: transition an exact measured
+  // height, including when the graph data replaces its loading placeholder.
+  useLayoutEffect(() => {
+    const content = detailsContentRef.current;
+    if (!content) return;
+    const measure = () => detailsRef.current?.style.setProperty("--earnings-details-height", `${content.getBoundingClientRect().height}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, []);
 
   function changeExpanded(next: boolean) {
     if (next === expanded) return;
@@ -52,8 +66,8 @@ export function EarningsBox({ accountId, onExpandedChange }: { accountId: string
           className={`transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}><path d="m9 6 6 6-6 6" /></svg>
         Verlauf
       </button>
-      <div id={panelId} className="earnings-details" data-expanded={expanded} aria-hidden={!expanded} inert={!expanded}>
-        <div className="earnings-details-clip">
+      <div ref={detailsRef} id={panelId} className="earnings-details" data-expanded={expanded} aria-hidden={!expanded} inert={!expanded}>
+        <div ref={detailsContentRef} className="earnings-details-clip">
           {hasOpened && <div className="mt-2 border-t pt-3" style={{ borderColor: "var(--border)" }}>
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs" style={{ color: "var(--text-muted)" }}>Verkaufsverlauf</p>

@@ -99,11 +99,28 @@ try {
   await page.locator('a[href="/accounts/bench-0?tab=console"]').click();
   const consoleHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
   const consoleTabWidth = await page.locator('.tab-bar').evaluate(el => el.getBoundingClientRect().width);
+  const closedGeometry = await page.evaluate(() => ({
+    contentWidth: document.documentElement.clientWidth,
+    mainLeft: document.querySelector('main').getBoundingClientRect().left,
+    scrollbarGutter: getComputedStyle(document.documentElement).scrollbarGutter,
+  }));
   await page.locator('[aria-label="Sell earnings"] h3').hover();
+  await page.waitForTimeout(220);
+  const graphMidHeight = await page.locator('.earnings-details').evaluate(el => el.getBoundingClientRect().height);
   await page.getByRole('img', { name: /Verkaufsgraph der letzten Stunde/ }).waitFor();
-  await page.waitForTimeout(550);
+  await page.waitForTimeout(400);
+  const graphOpenHeight = await page.locator('.earnings-details').evaluate(el => el.getBoundingClientRect().height);
+  const openGeometry = await page.evaluate(() => ({
+    contentWidth: document.documentElement.clientWidth,
+    mainLeft: document.querySelector('main').getBoundingClientRect().left,
+  }));
   const expandedConsoleHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
   if (verify) {
+    ensure(graphMidHeight > 0 && graphMidHeight < graphOpenHeight - 10,
+      `Graph did not open gradually: mid=${graphMidHeight}, open=${graphOpenHeight}`);
+    ensure(closedGeometry.scrollbarGutter === 'stable' && closedGeometry.contentWidth === openGeometry.contentWidth
+      && Math.abs(closedGeometry.mainLeft - openGeometry.mainLeft) < 0.5,
+      `Opening graph shifted the page horizontally: ${JSON.stringify({ closedGeometry, openGeometry })}`);
     ensure(expandedConsoleHeight >= 158, 'Expanded graph hid the console');
     ensure(Math.abs(consoleHeight - expandedConsoleHeight - 135) < 3,
       `Graph changed ${consoleHeight - expandedConsoleHeight}px of console instead of five lines (closed=${consoleHeight}, open=${expandedConsoleHeight})`);
