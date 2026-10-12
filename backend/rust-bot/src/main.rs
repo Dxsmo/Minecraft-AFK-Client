@@ -18,6 +18,8 @@ mod msauth;
 mod mspassword;
 mod network_mode;
 mod protocol;
+#[cfg(test)]
+mod protocol_compatibility;
 mod server_message_details;
 
 use std::io::{BufRead, Write};

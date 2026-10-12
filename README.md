@@ -69,8 +69,9 @@ config/         typed environment configuration
 - Node.js 20+ and npm
 - Docker + Docker Compose (recommended deployment path — it compiles the
   Rust bot for you, so you don't need a local Rust toolchain)
-- A Minecraft server to connect the bots to (any recent version; set
-  `minecraftVersion` per account or leave it on auto-detect)
+- A Minecraft server accepting the native Java bot's pinned protocol
+  (currently Minecraft 26.2 / protocol 776), or Bedrock accounts with their
+  supported `minecraftVersion` selection
 - **Only if building the bot outside Docker:** a Rust **nightly** toolchain
   (`rustup toolchain install nightly`) — Azalea uses nightly-only features.
   See section 6 for the one-line build command.
@@ -203,8 +204,9 @@ additional users access afterwards in the account's **Settings** panel):
   For **Microsoft** accounts you don't set it — the account is auto-named
   after the real in-game username once the bot signs in.
 - `serverHost` / `serverPort`
-- `minecraftVersion` – selectable from a dropdown of supported releases, or
-  left on auto-detect; changing it applies immediately
+- `minecraftVersion` – selects the Bedrock version or auto-detection. Java
+  accounts use the Rust bot's pinned protocol (currently 26.2 / 776); this
+  setting does not change the Java wire version.
 - `authType` – `OFFLINE` (cracked/offline server) or `MICROSOFT`. For
   `MICROSOFT` you provide **only the account email**, which is set once at
   creation and can't be changed afterwards (to use a different account,
@@ -427,6 +429,10 @@ on `main` well ahead of crates.io releases):
 ```
 azalea = { git = "https://github.com/azalea-rs/azalea", rev = "<commit-sha>" }
 ```
+
+The current pin uses Minecraft 26.2 / protocol 776 in both Java network modes.
+The comparison with the official Minecraft client and shared movement fixes
+are documented in [the Java protocol audit](docs/JAVA_PROTOCOL_AUDIT.md).
 
 **To update** (e.g. for a newly released Minecraft version): pick a commit
 from [azalea-rs/azalea](https://github.com/azalea-rs/azalea) that supports

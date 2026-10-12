@@ -40,7 +40,7 @@ use crate::{
     interact::BlockStatePredictionHandler,
     inventory::{ClientsideCloseContainerEvent, MenuOpenedEvent},
     local_player::{Experience, Hunger, PreviousGameMode, TabList, TabListResource, WorldHolder},
-    movement::{KnockbackData, KnockbackEvent},
+    movement::{KnockbackData, KnockbackEvent, LastSentMovementFlags},
     packet::{
         as_system, declare_packet_handlers,
         relative_updates::{EntityUpdateQuery, RelativeEntityUpdate, should_apply_entity_update},
@@ -316,6 +316,7 @@ impl GamePacketHandler<'_> {
                     p.common.game_type,
                     PreviousGameMode(p.common.previous_game_type.into()),
                     entity_bundle,
+                    LastSentMovementFlags::default(),
                     TicksConnected(0),
                 ));
 
@@ -1410,6 +1411,7 @@ impl GamePacketHandler<'_> {
                     p.common.game_type,
                     PreviousGameMode(p.common.previous_game_type.into()),
                     entity_bundle,
+                    LastSentMovementFlags::default(),
                 ));
 
                 commands
@@ -1576,7 +1578,41 @@ impl GamePacketHandler<'_> {
     pub fn projectile_power(&mut self, _p: &ClientboundProjectilePower) {}
     pub fn custom_report_details(&mut self, _p: &ClientboundCustomReportDetails) {}
     pub fn server_links(&mut self, _p: &ClientboundServerLinks) {}
-    pub fn player_rotation(&mut self, _p: &ClientboundPlayerRotation) {}
+    pub fn player_rotation(&mut self, p: &ClientboundPlayerRotation) {
+        as_system::<(Query<&mut LookDirection>, Commands)>(
+            self.ecs,
+            |(mut query, mut commands)| {
+                let Ok(mut direction) = query.get_mut(self.player) else {
+                    return;
+                };
+                let yaw = p.y_rot + if p.relative_y { direction.y_rot() } else { 0.0 };
+                let pitch = p.x_rot + if p.relative_x { direction.x_rot() } else { 0.0 };
+                // Entity.setYRot rejects non-finite values; setXRot additionally
+                // takes the remainder modulo 360 before clamping to +/-90.
+                let yaw = if yaw.is_finite() {
+                    yaw
+                } else {
+                    direction.y_rot()
+                };
+                let pitch = if pitch.is_finite() {
+                    pitch % 360.0
+                } else {
+                    direction.x_rot()
+                };
+                // A server correction is exact, not a mouse/sensitivity update.
+                *direction = LookDirection::new(yaw, pitch);
+                // Match ClientPacketListener.handleRotatePlayer: immediate Rot
+                // acknowledgement with both flags false, even while grounded.
+                commands.trigger(SendGamePacketEvent::new(
+                    self.player,
+                    ServerboundMovePlayerRot {
+                        look_direction: *direction,
+                        flags: MoveFlags::default(),
+                    },
+                ));
+            },
+        );
+    }
     pub fn recipe_book_add(&mut self, _p: &ClientboundRecipeBookAdd) {}
     pub fn recipe_book_remove(&mut self, _p: &ClientboundRecipeBookRemove) {}
     pub fn recipe_book_settings(&mut self, _p: &ClientboundRecipeBookSettings) {}

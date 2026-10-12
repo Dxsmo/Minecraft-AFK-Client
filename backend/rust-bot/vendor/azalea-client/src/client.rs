@@ -31,7 +31,7 @@ use crate::{
     interact::BlockStatePredictionHandler,
     local_player::{Experience, Hunger, PermissionLevel, TabList, TabListResource, WorldHolder},
     mining,
-    movement::LastSentLookDirection,
+    movement::{LastSentLookDirection, LastSentMovementFlags},
     player::retroactively_add_game_profile_component,
 };
 /// A bundle of components that's inserted right when we switch to the `login`
@@ -62,6 +62,7 @@ pub struct JoinedClientBundle {
     pub block_state_prediction_handler: BlockStatePredictionHandler,
     pub queued_server_block_updates: QueuedServerBlockUpdates,
     pub last_sent_direction: LastSentLookDirection,
+    pub last_sent_movement_flags: LastSentMovementFlags,
     pub abilities: PlayerAbilities,
     pub permission_level: PermissionLevel,
     pub chunk_batch_info: ChunkBatchInfo,

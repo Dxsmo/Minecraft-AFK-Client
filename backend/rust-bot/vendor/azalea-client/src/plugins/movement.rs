@@ -93,6 +93,11 @@ pub struct LastSentLookDirection {
     pub y_rot: f32,
 }
 
+/// Movement flags last reported by the periodic movement sender, independent
+/// of intermediate collision calculations in [`Physics`].
+#[derive(Clone, Component, Debug, Default)]
+pub struct LastSentMovementFlags(pub MoveFlags);
+
 #[allow(clippy::type_complexity)]
 pub fn send_position(
     mut query: Query<
@@ -104,6 +109,7 @@ pub fn send_position(
             &mut LastSentPosition,
             &mut Physics,
             &mut LastSentLookDirection,
+            &mut LastSentMovementFlags,
         ),
         With<HasClientLoaded>,
     >,
@@ -117,6 +123,7 @@ pub fn send_position(
         mut last_sent_position,
         mut physics,
         mut last_direction,
+        mut last_flags,
     ) in query.iter_mut()
     {
         let packet = {
@@ -170,7 +177,7 @@ pub fn send_position(
                     }
                     .into_variant(),
                 )
-            } else if physics.last_on_ground() != physics.on_ground() {
+            } else if last_flags.0 != flags {
                 Some(ServerboundMovePlayerStatusOnly { flags }.into_variant())
             } else {
                 None
@@ -187,6 +194,7 @@ pub fn send_position(
 
             let on_ground = physics.on_ground();
             physics.set_last_on_ground(on_ground);
+            last_flags.0 = flags;
             // minecraft checks for autojump here, but also autojump is bad so
 
             packet

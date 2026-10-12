@@ -54,3 +54,11 @@ from treating the previous world's chunk as a loaded destination. The existing
 loading plugin sends one acknowledgement once the new chunk is usable.
 Regression tests cover login → respawn → login, without acknowledging unloaded
 chunks or sending the acknowledgement twice.
+
+Shared movement handlers now acknowledge server-forced rotations immediately
+and track the last periodically reported on-ground and horizontal-collision
+flags separately from intermediate physics state. This matches the official
+26.2 client's behavior, including status-only collision transitions while
+stationary. Flag history resets on login/respawn. The independent wire fixtures
+and reference provenance are documented in
+[`docs/JAVA_PROTOCOL_AUDIT.md`](../../../docs/JAVA_PROTOCOL_AUDIT.md).
