@@ -24,7 +24,7 @@ use crate::protocol::{BehaviorConfig, Config, OutEvent};
 
 /// Allow slow servers/proxies to finish opening and synchronizing the menu.
 /// Healthy cycles still proceed immediately; this only bounds missing replies.
-const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_secs(1);
+const AUTOSELL_MENU_TIMEOUT: Duration = Duration::from_millis(500);
 /// Give manually requested menus time to open without automation taking over.
 const MANUAL_MENU_GUARD_TIMEOUT: Duration = Duration::from_secs(5);
 /// Never overlap sell commands, and cap even very short configured intervals
@@ -1079,14 +1079,12 @@ impl BehaviorState {
                 started_empty,
                 content_received,
             } => {
-                let mut failure = "Inventar momentan nicht verfügbar".to_string();
                 // Copy the id and menu together, then release the ECS read
                 // guard before shift_click needs its write lock.
                 if let Ok((id, menu)) = bot
                     .component::<Inventory>()
                     .map(|inventory| (inventory.id, inventory.container_menu.clone()))
                 {
-                    failure = "Server hat kein Verkaufsmenü geöffnet".into();
                     if id != 0 && self.owns_sell_menu(bot) {
                         let inv = ContainerHandleRef::new(id, bot.clone());
                         if let Some(menu) = menu {
@@ -1113,14 +1111,6 @@ impl BehaviorState {
                                 };
                                 return;
                             }
-                            failure = format!(
-                                "Menü {} offen, aber Inventardaten fehlen ({} Slots, {} Spieler-Stacks, Inhaltspaket: {})",
-                                inv.id(), slots.len(), player_slots.len(),
-                                if complete_content { "ja" } else { "nein" },
-                            );
-                        } else {
-                            failure =
-                                format!("Menü {} offen, Menüstruktur nicht verfügbar", inv.id());
                         }
                     }
                 }
@@ -1134,12 +1124,6 @@ impl BehaviorState {
                         self.next_autosell_at = retry_at;
                     } else {
                         self.next_autosell_at = self.next_autosell_at.max(retry_at);
-                    }
-                    if !started_empty || player_item_count(bot) > 0 {
-                        self.log_autosell_failure(
-                            now,
-                            &format!("{failure} ({}s Timeout)", AUTOSELL_MENU_TIMEOUT.as_secs()),
-                        );
                     }
                 }
             }
@@ -2384,20 +2368,20 @@ mod tests {
             let since = Instant::now();
             tick_sell(&client, &mut state, since);
             assert_eq!(take_commands(&client), vec!["/sell"]);
-            tick_sell(&client, &mut state, since + Duration::from_millis(500));
+            tick_sell(&client, &mut state, since + Duration::from_millis(250));
             assert!(matches!(
                 state.autosell_phase,
                 AutoSellPhase::WaitingForMenu { .. }
             ));
             open_empty_sell_menu(&client, &mut state);
-            tick_sell(&client, &mut state, since + Duration::from_millis(750));
+            tick_sell(&client, &mut state, since + Duration::from_millis(375));
             assert!(clicks.lock().is_empty());
             assert_eq!(client.get_inventory().unwrap().id(), 7);
             let mut slots = vec![ItemStack::Empty; 63];
             slots[27] = ItemStack::new(ItemKind::Cobblestone, 64);
             slots[62] = ItemStack::new(ItemKind::Beef, 32);
             receive_content(&client, &mut state, 7, slots);
-            tick_sell(&client, &mut state, since + Duration::from_secs(1));
+            tick_sell(&client, &mut state, since + Duration::from_millis(500));
             assert!(matches!(
                 state.autosell_phase,
                 AutoSellPhase::Closing { .. }
@@ -2408,7 +2392,7 @@ mod tests {
             assert_eq!(menu.slot(1).unwrap().count(), 32);
             assert!(menu.slot(27).unwrap().is_empty());
             assert!(menu.slot(62).unwrap().is_empty());
-            tick_sell(&client, &mut state, since + Duration::from_millis(1050));
+            tick_sell(&client, &mut state, since + Duration::from_millis(550));
             assert_eq!(client.get_inventory().unwrap().id(), 0);
             assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
             tick_sell(&client, &mut state, since + Duration::from_millis(2200));
@@ -2528,7 +2512,7 @@ mod tests {
         state.on_container_content(&client, &foreign);
         assert_eq!(client.component::<Inventory>().unwrap().state_id, 0);
         receive_content(&client, &mut state, 7, vec![ItemStack::Empty; 27]);
-        tick_sell(&client, &mut state, since + Duration::from_millis(999));
+        tick_sell(&client, &mut state, since + Duration::from_millis(499));
         assert!(matches!(
             state.autosell_phase,
             AutoSellPhase::WaitingForMenu { .. }
@@ -2556,13 +2540,14 @@ mod tests {
                 started_empty,
                 content_received: None,
             };
-            tick_sell(&client, &mut state, since + Duration::from_millis(999));
+            tick_sell(&client, &mut state, since + Duration::from_millis(499));
             assert!(matches!(
                 state.autosell_phase,
                 AutoSellPhase::WaitingForMenu { .. }
             ));
-            tick_sell(&client, &mut state, since + Duration::from_secs(1));
+            tick_sell(&client, &mut state, since + Duration::from_millis(500));
             assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
+            assert!(state.last_autosell_failure_log.is_none());
             assert_eq!(client.get_inventory().unwrap().id(), 0);
             tick_sell(
                 &client,

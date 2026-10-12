@@ -214,14 +214,15 @@ additional users access afterwards in the account's **Settings** panel):
   disk (`data/bot-cache/<account>/`) so subsequent starts are silent. No
   password is ever entered or stored.
 - Continuous crouching and auto-reconnect
-- Auto-sell: send the sell command, wait up to one second for the Java menu and
+- Auto-sell: send the sell command, wait up to 500ms for the Java menu and
   its inventory data, shift occupied player slots, and close on the following
   tick. Ready menus proceed immediately, even if a tick was delayed. Full
   content packets distinguish genuinely empty menus from unloaded shells and
   keep the inventory revision used by clicks synchronized. Initially empty
   inventories get the same loading window, so a slow response is not discarded.
-  Missing/partial menus time out and retry; diagnostics distinguish a missing
-  menu from missing inventory data. Teleports/world changes cancel stale cycles.
+  Missing/partial menus time out and retry silently. Bedrock also waits up to
+  500ms for a sell menu to open and retries without a menu-timeout console line.
+  Teleports/world changes cancel stale cycles.
   Empty or stale local inventory snapshots do not delay the configured interval.
   World-restart countdowns pause automatic selling from 10 seconds before the
   announced restart until 3 minutes afterwards, including bot reconnects.

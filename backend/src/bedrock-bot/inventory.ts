@@ -5,7 +5,7 @@ export type BedrockItem = { network_id: number; count?: number; stack_id?: numbe
 type WindowId = number | string;
 type Container = { id: WindowId; type: string; items: BedrockItem[] | null; owned: boolean; position: string | null; manual: boolean };
 type Pending = { id: number; source: number; destination: number; item: BedrockItem; sentAt: number };
-const SELL_MENU_TIMEOUT_MS = 1_000;
+const SELL_MENU_TIMEOUT_MS = 500;
 const empty = (): BedrockItem => ({ network_id: 0 });
 const present = (item: BedrockItem | undefined): item is BedrockItem => !!item?.network_id && (item.count ?? 0) > 0;
 const positionKey = (position: unknown): string | null => {
@@ -143,7 +143,7 @@ export class BedrockInventory {
     if (!this.busy) return;
     const menu = this.container;
     if (!menu?.owned) {
-      if (this.requestedAt != null && now - this.requestedAt >= SELL_MENU_TIMEOUT_MS) this.fail(`kein Verkaufsmenü erhalten (${SELL_MENU_TIMEOUT_MS / 1000}s Timeout)`);
+      if (this.requestedAt != null && now - this.requestedAt >= SELL_MENU_TIMEOUT_MS) this.interrupt();
       return;
     }
     if (now - this.openedAt >= 10_000) { this.fail("Verkaufsmenü/Inventar nicht vollständig bestätigt (10s Timeout)"); return; }
