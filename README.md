@@ -273,9 +273,11 @@ additional users access afterwards in the account's **Settings** panel):
   and amount.
   Only users with access to the account can read its history. Earnings are kept
   for 25 hours so the oldest complete 24h graph bucket survives cleanup; the
-  summary totals remain rolling 5m/1h/24h totals. The website uses document
-  scrolling, with the sidebar and header remaining visible and no nested page
-  or graph scrollbar. The console keeps its own scrollable log history.
+  summary totals remain rolling 5m/1h/24h totals. The account console view fits
+  the screen with the graph either closed or open. Opening the graph reallocates
+  most of the available height to earnings over a 500ms animation, while the
+  console shrinks at the same speed. Text and chart axes adapt to the screen size.
+  The console keeps its own scrollable log history.
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once

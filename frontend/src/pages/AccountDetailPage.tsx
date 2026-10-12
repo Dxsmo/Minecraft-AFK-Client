@@ -46,8 +46,8 @@ export function AccountDetailPage() {
     const main = page?.closest("main");
     if (!page || !panel || !output || !earnings || !graph || !main) return;
 
-    // Size the console from the closed summary, independently of the animated
-    // graph. Both panels can then animate their full height over the same 500ms.
+    // Split the available screen space between the console and earnings.
+    // The graph gains exactly the height the console gives up, over the same 500ms.
     const measure = () => {
       const siblings = Array.from(panel.children).filter(element => element !== output);
       const otherHeight = siblings.reduce((total, element) => total + element.getBoundingClientRect().height, 0)
@@ -58,10 +58,12 @@ export function AccountDetailPage() {
       const transform = getComputedStyle(panel).transform;
       const entranceOffset = transform === "none" ? 0 : new DOMMatrixReadOnly(transform).m42;
       const top = output.getBoundingClientRect().top + window.scrollY - entranceOffset;
-      const height = Math.max(160, window.innerHeight - top - bottomPadding - otherHeight - gaps);
-      const lineHeight = parseFloat(getComputedStyle(output).lineHeight);
+      const height = Math.max(48, window.innerHeight - top - bottomPadding - otherHeight - gaps);
+      const summaryHeight = earnings.getBoundingClientRect().height - graph.getBoundingClientRect().height;
+      const openHeight = Math.min(height, Math.max(48, (height + summaryHeight) * 0.2));
       page.style.setProperty("--console-closed-height", `${height}px`);
-      page.style.setProperty("--console-open-height", `${Math.max(160, height - 5 * lineHeight)}px`);
+      page.style.setProperty("--console-open-height", `${openHeight}px`);
+      page.style.setProperty("--earnings-open-height", `${height - openHeight}px`);
     };
     page.dataset.consoleReady = "false";
     measure();
@@ -163,7 +165,7 @@ export function AccountDetailPage() {
   const msaSignIn = status?.msaSignIn;
 
   return (
-    <div ref={consolePageRef} className={tab === "console" ? "account-console-page" : "space-y-5"}
+    <div ref={consolePageRef} className={tab === "console" ? "account-detail-page account-console-page" : "account-detail-page space-y-5"}
       data-earnings-expanded={earningsExpanded}>
       {account.edition === "BEDROCK" && (
         <div
@@ -181,7 +183,7 @@ export function AccountDetailPage() {
           </p>
         </div>
       )}
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="account-heading-row flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link
             to="/dashboard"
@@ -242,7 +244,7 @@ export function AccountDetailPage() {
       {error && <p className="alert-error">{error}</p>}
 
       {/* Live telemetry strip — always visible across tabs. */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="account-telemetry flex flex-wrap items-center gap-2">
         {status?.health !== undefined && <StatPill label="Health" value={`${status.health}/20`} />}
         {status?.food !== undefined && <StatPill label="Food" value={`${status.food}/20`} />}
         {status?.position && (
@@ -310,7 +312,7 @@ export function AccountDetailPage() {
         <div key="console" className="tab-panel account-console-tab">
           <ConsoleView key={id} logs={logs} className="account-console-output" />
           {historyError && <p className="alert-error">{historyError}</p>}
-          <form onSubmit={handleSendCommand} className="flex gap-2">
+          <form onSubmit={handleSendCommand} className="account-command flex gap-2">
             <input
               ref={inputRef}
               value={command}

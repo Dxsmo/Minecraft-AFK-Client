@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../lib/api";
 import { usePolling } from "../lib/polling";
 import type { EarningsHistory as History } from "../lib/types";
@@ -17,24 +17,10 @@ export function EarningsBox({ accountId, onExpandedChange }: { accountId: string
   const [hasOpened, setHasOpened] = useState(false);
   const [range, setRange] = useState<Range>("1h");
   const panelId = useId();
-  const detailsRef = useRef<HTMLDivElement>(null);
-  const detailsContentRef = useRef<HTMLDivElement>(null);
   usePolling(async signal => {
     const data = await api.get<Earnings>(`/minecraft/accounts/${accountId}/earnings`, { signal });
     if (!signal.aborted) setEarnings(data);
   }, 15_000);
-
-  // Match the account-list hover animation: transition an exact measured
-  // height, including when the graph data replaces its loading placeholder.
-  useLayoutEffect(() => {
-    const content = detailsContentRef.current;
-    if (!content) return;
-    const measure = () => detailsRef.current?.style.setProperty("--earnings-details-height", `${content.getBoundingClientRect().height}px`);
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [hasOpened]);
 
   function changeExpanded(next: boolean) {
     if (next === expanded) return;
@@ -44,38 +30,40 @@ export function EarningsBox({ accountId, onExpandedChange }: { accountId: string
   }
 
   return (
-    <section className="card p-3.5 text-sm" aria-label="Sell earnings"
+    <section className="card earnings-box" aria-label="Sell earnings"
       onPointerEnter={(event) => {
         if (event.pointerType === "mouse" && !(event.target as Element).closest("button")) changeExpanded(true);
       }}
       onPointerLeave={(event) => { if (event.pointerType === "mouse") changeExpanded(false); }}>
-      <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>Sell earnings</h3>
-      <div className="grid grid-cols-3 gap-2 text-center">
-        {([['5 min', earnings?.last5m], ['1 h', earnings?.last1h], ['24 h', earnings?.last24h]] as const).map(([label, amount]) => (
-          <div key={label}>
-            <p className="text-[11px]" style={{ color: "var(--text-subtle)" }}>{label}</p>
-            <p className="mt-0.5 font-semibold tabular-nums" style={{ color: "var(--accent)" }}>{amount == null ? "—" : money(amount)}</p>
-          </div>
-        ))}
+      <div className="earnings-summary">
+        <h3 className="font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>Sell earnings</h3>
+        <div className="earnings-totals grid grid-cols-3 gap-2 text-center">
+          {([['5 min', earnings?.last5m], ['1 h', earnings?.last1h], ['24 h', earnings?.last24h]] as const).map(([label, amount]) => (
+            <div key={label}>
+              <p className="earnings-total-label" style={{ color: "var(--text-subtle)" }}>{label}</p>
+              <p className="earnings-total-value font-semibold tabular-nums" style={{ color: "var(--accent)" }}>{amount == null ? "—" : money(amount)}</p>
+            </div>
+          ))}
+        </div>
+        <button type="button" onClick={() => changeExpanded(!expanded)} aria-expanded={expanded} aria-controls={panelId}
+          aria-label={expanded ? "Verkaufsgraph einklappen" : "Verkaufsgraph ausklappen"}
+          className="earnings-toggle flex items-center gap-1 rounded-md px-1 py-1 transition-colors hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2"
+          style={{ color: "var(--text-muted)" }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"
+            className={`transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}><path d="m9 6 6 6-6 6" /></svg>
+          Verlauf
+        </button>
       </div>
-      <button type="button" onClick={() => changeExpanded(!expanded)} aria-expanded={expanded} aria-controls={panelId}
-        aria-label={expanded ? "Verkaufsgraph einklappen" : "Verkaufsgraph ausklappen"}
-        className="mt-3 flex items-center gap-1.5 rounded-md px-1 py-1 text-[11px] transition-colors hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2"
-        style={{ color: "var(--text-muted)" }}>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"
-          className={`transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}><path d="m9 6 6 6-6 6" /></svg>
-        Verlauf
-      </button>
-      <div ref={detailsRef} id={panelId} className="earnings-details" data-expanded={expanded} aria-hidden={!expanded} inert={!expanded}>
-        <div ref={detailsContentRef} className="earnings-details-clip">
-          {hasOpened && <div className="mt-2 border-t pt-3" style={{ borderColor: "var(--border)" }}>
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs" style={{ color: "var(--text-muted)" }}>Verkaufsverlauf</p>
-              <div className="flex gap-1 rounded-lg p-1" role="group" aria-label="Zeitraum" style={{ background: "var(--surface)" }}>
+      <div id={panelId} className="earnings-details" data-expanded={expanded} aria-hidden={!expanded} inert={!expanded}>
+        <div className="earnings-details-clip">
+          {hasOpened && <div className="earnings-details-content" style={{ borderColor: "var(--border)" }}>
+            <div className="earnings-toolbar">
+              <p style={{ color: "var(--text-muted)" }}>Verkaufsverlauf</p>
+              <div className="flex gap-1 rounded-lg p-0.5" role="group" aria-label="Zeitraum" style={{ background: "var(--surface)" }}>
                 {([['1h', '1 Stunde'], ['6h', '6 Stunden'], ['24h', '24 Stunden']] as const).map(([value, label]) => (
-                  <button type="button" key={value} aria-pressed={range === value} onClick={() => setRange(value)}
-                    className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${range === value ? "bg-white/10" : "hover:bg-white/5"}`}
-                    style={{ color: range === value ? "var(--text)" : "var(--text-subtle)" }}>{label}</button>
+                  <button type="button" key={value} aria-label={label} aria-pressed={range === value} onClick={() => setRange(value)}
+                    className={`rounded-md px-2 py-0.5 transition-colors ${range === value ? "bg-white/10" : "hover:bg-white/5"}`}
+                    style={{ color: range === value ? "var(--text)" : "var(--text-subtle)" }}>{value.replace("h", " h")}</button>
                 ))}
               </div>
             </div>
@@ -94,12 +82,17 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
   const gradientId = useId();
   const hintId = useId();
   const svgRef = useRef<SVGSVGElement>(null);
-  const [width, setWidth] = useState(700);
+  const [size, setSize] = useState({ width: 700, height: 240 });
+  const { width, height } = size;
   const hasHistory = history !== null;
   useEffect(() => {
     const node = svgRef.current;
     if (!node) return;
-    const observer = new ResizeObserver(entries => setWidth(Math.max(280, Math.round(entries[0].contentRect.width))));
+    const observer = new ResizeObserver(entries => {
+      const bounds = entries[0].contentRect;
+      const next = { width: Math.max(180, Math.round(bounds.width)), height: Math.max(40, Math.round(bounds.height)) };
+      setSize(previous => previous.width === next.width && previous.height === next.height ? previous : next);
+    });
     observer.observe(node);
     return () => observer.disconnect();
   }, [hasHistory]);
@@ -114,14 +107,14 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
   }, 5 * 60_000, true, true);
 
   // The axes and hundreds of labels are static while the pointer moves.
-  const chart = useMemo(() => history ? buildChart(history, width, gradientId) : null, [history, width, gradientId]);
+  const chart = useMemo(() => history ? buildChart(history, width, height, gradientId) : null, [history, width, height, gradientId]);
 
-  if (!history) return <div>
-    <div className="mb-1 min-h-5" aria-hidden="true" />
-    <div className="flex h-[240px] items-center justify-center text-xs" role="status" style={{ color: "var(--text-subtle)" }}>
+  if (!history) return <div className="earnings-chart">
+    <div className="earnings-chart-meta" aria-hidden="true" />
+    <div className="earnings-chart-loading" role="status" style={{ color: "var(--text-subtle)" }}>
       {error ? "Verkaufsverlauf konnte nicht geladen werden. Erneuter Versuch folgt." : "Verkaufsverlauf wird geladen…"}
     </div>
-    <p className="mt-1 text-[10px]" aria-hidden="true">&nbsp;</p>
+    <p className="earnings-chart-footer" aria-hidden="true">&nbsp;</p>
   </div>;
 
   const { left, top, plotWidth, plotHeight, x, y, series } = chart!;
@@ -133,12 +126,12 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
     setSelected(Math.max(0, Math.min(history!.points.length - 1, Math.floor((pointerX - left) / plotWidth * history!.points.length))));
   }
 
-  return <div>
-    <div className="mb-1 flex min-h-5 flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums" style={{ color: "var(--text-muted)" }}>
+  return <div className="earnings-chart">
+    <div className="earnings-chart-meta tabular-nums" style={{ color: "var(--text-muted)" }}>
       <span aria-live="polite">{active ? `${time(active.at)}–${time(new Date(active.at).getTime() + history.bucketMs)} · ${money(active.amount)}` : `Verkäufe pro ${interval} Minuten`}</span>
       <span>Gesamt <strong style={{ color: "var(--text)" }}>{money(history.total)}</strong></span>
     </div>
-    <svg ref={svgRef} style={{ height: 240, outlineColor: "var(--accent)" }} className="w-full rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2" viewBox={`0 0 ${width} 240`}
+    <svg ref={svgRef} style={{ outlineColor: "var(--accent)" }} className="earnings-chart-svg rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2" viewBox={`0 0 ${width} ${height}`}
       role="img" tabIndex={0} aria-label={`Verkaufsgraph der letzten ${range === "1h" ? "Stunde" : range === "6h" ? "6 Stunden" : "24 Stunden"}. Gesamt ${money(history.total)}.`}
       aria-describedby={hintId} onPointerLeave={event => { if (event.pointerType !== "touch") setSelected(null); }} onBlur={() => setSelected(null)}
       onPointerMove={selectFromPointer} onPointerDown={selectFromPointer}
@@ -155,30 +148,29 @@ function EarningsGraph({ accountId, range }: { accountId: string; range: Range }
       </g>}
       {history.total === 0 && <text x={left + plotWidth / 2} y={top + plotHeight / 2} textAnchor="middle" fill="var(--text-subtle)" fontSize="12">Keine Verkäufe in diesem Zeitraum</text>}
     </svg>
-    <p className="mt-1 text-[10px]" style={{ color: "var(--text-subtle)" }}>Abgeschlossene Intervalle · Aktualisierung alle 5 Minuten</p>
+    <p className="earnings-chart-footer" style={{ color: "var(--text-subtle)" }}>Abgeschlossene Intervalle · Aktualisierung alle 5 Minuten</p>
     <p id={hintId} className="sr-only">Einzelne Zeiträume mit dem Zeiger oder den Pfeiltasten auswählen.</p>
     {error && <p className="mt-1 text-[11px]" role="status" style={{ color: "var(--text-subtle)" }}>Aktualisierung fehlgeschlagen. Der letzte Stand wird angezeigt.</p>}
   </div>;
 }
 
 /** Build once per data/size change, including formatted labels and tick titles. */
-function buildChart(history: History, width: number, gradientId: string) {
-  const height = 240, left = 8, right = 80, top = 16;
+function buildChart(history: History, width: number, height: number, gradientId: string) {
+  const fontSize = width < 480 || height < 180 ? 9 : 11;
+  const left = 6, right = width < 480 ? 56 : 72, top = 12;
   const plotWidth = width - left - right;
   // Every five-minute point stays selectable. Thin only the printed labels
   // when hundreds of timestamps would overlap; keep both ends of the axis.
-  const labelStride = Math.max(1, Math.ceil(history.points.length / (Math.floor(plotWidth / 14) * 2)));
+  const labelStride = Math.max(1, Math.ceil(history.points.length / Math.max(2, Math.floor(plotWidth / 52))));
   const labelIndices = history.points.flatMap((_, index) => index % labelStride === 0 ? [index] : []);
   const lastIndex = history.points.length - 1;
   if (labelIndices.at(-1) !== lastIndex) {
     if (lastIndex - labelIndices.at(-1)! < labelStride) labelIndices.pop();
     labelIndices.push(lastIndex);
   }
-  const rotateTimes = plotWidth / labelIndices.length < 46;
-  const staggerTimes = plotWidth / labelIndices.length < 12;
-  const labelPositions = new Map(labelIndices.map((index, position) => [index, position]));
-  const bottom = rotateTimes ? (staggerTimes ? 92 : 54) : 32;
-  const plotHeight = height - top - bottom;
+  const labelPositions = new Set(labelIndices);
+  const bottom = fontSize + 14;
+  const plotHeight = Math.max(12, height - top - bottom);
   const peak = Math.max(...history.points.map(point => point.amount), 0);
   const magnitude = 10 ** Math.floor(Math.log10(peak > 0 ? peak / 4 : 1));
   const step = ([1, 2, 5, 10].find(value => value * magnitude * 4 >= peak) ?? 10) * magnitude;
@@ -189,22 +181,21 @@ function buildChart(history: History, width: number, gradientId: string) {
   const axisMoney = (amount: number) => `$${axisFormatter.format(amount)}`;
   const series = <g>
       <defs><linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1"><stop stopColor="var(--accent)" stopOpacity=".2" /><stop offset="1" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs>
-      {[0, 1, 2, 3, 4].map(index => <g key={index}>
+      {(plotHeight < 70 ? [0, 2, 4] : [0, 1, 2, 3, 4]).map(index => <g key={index}>
         <line x1={left} x2={left + plotWidth} y1={top + plotHeight * index / 4} y2={top + plotHeight * index / 4} stroke="var(--border)" strokeDasharray={index === 4 ? undefined : "3 5"} />
-        <text x={left + plotWidth + 12} y={top + plotHeight * index / 4 + 4} fill="var(--text-subtle)" fontSize="11">{axisMoney(max * (1 - index / 4))}</text>
+        <text x={left + plotWidth + 10} y={top + plotHeight * index / 4 + 4} fill="var(--text-subtle)" fontSize={fontSize}>{axisMoney(max * (1 - index / 4))}</text>
       </g>)}
       <polygon points={`${left},${top + plotHeight} ${line} ${left + plotWidth},${top + plotHeight}`} fill={`url(#${gradientId})`} />
       <polyline points={line} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
       {history.points.map((point, index) => {
-        const labelPosition = labelPositions.get(index);
-        const labelY = top + plotHeight + (rotateTimes ? 10 : 22) + (staggerTimes && labelPosition != null && labelPosition % 2 ? 38 : 0);
+        const labelY = top + plotHeight + fontSize + 9;
         return <g key={point.at}>
           <line className="earnings-time-tick" x1={x(index)} x2={x(index)} y1={top + plotHeight} y2={top + plotHeight + 4} stroke="var(--border)">
             <title>{time(point.at)} · {money(point.amount)}</title>
           </line>
-          {labelPosition != null && <text className="earnings-time-label" x={x(index)} y={labelY} textAnchor={rotateTimes ? "end" : "middle"}
-            transform={rotateTimes ? `rotate(-90 ${x(index)} ${labelY})` : undefined}
-            fill="var(--text-subtle)" fontSize="11">{time(point.at)}</text>}
+          {labelPositions.has(index) && <text className="earnings-time-label" x={x(index)} y={labelY}
+            textAnchor={index === 0 ? "start" : index === history.points.length - 1 ? "end" : "middle"}
+            fill="var(--text-subtle)" fontSize={fontSize}>{time(point.at)}</text>}
         </g>;
       })}
   </g>;

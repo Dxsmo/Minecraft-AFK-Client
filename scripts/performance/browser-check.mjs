@@ -33,6 +33,13 @@ try {
         id: `older-${i}`, minecraftAccountId: 'bench', type: 'CHAT', message: `Older line ${i}`, createdAt: new Date(1700000000000 + i * 1000).toISOString(),
       }));
       else if (url.pathname.endsWith('/earnings')) data = { last5m: 1071, last1h: 1071, last24h: 1071 };
+      else if (url.pathname.endsWith('/earnings/history')) {
+        const range = url.searchParams.get('range') ?? '1h';
+        const points = { '1h': 12, '6h': 72, '24h': 288 }[range];
+        const end = Math.floor(Date.now() / 300_000) * 300_000;
+        data = { range, bucketMs: 300_000, start: new Date(end - points * 300_000).toISOString(), end: new Date(end).toISOString(),
+          total: points * 42, points: Array.from({ length: points }, (_, i) => ({ at: new Date(end - (points - i) * 300_000).toISOString(), amount: 42 })) };
+      }
       else if (url.pathname.endsWith('/accounts/bench')) data = account;
       else if (url.pathname.endsWith('/accounts')) data = [account];
       else if (url.pathname.endsWith('/users')) data = [user];
@@ -76,7 +83,7 @@ try {
     await page.waitForFunction(n => document.querySelectorAll('.console-output > div').length === n, count);
     const historyMs = await page.evaluate(() => performance.now() - window.__historyStart);
     const layouts = [];
-    for (const viewport of [{ width: 1365, height: 720 }, { width: 1365, height: 768 }, { width: 1365, height: 900 }, { width: 1920, height: 1080 }, { width: 390, height: 844 }]) {
+    for (const viewport of [{ width: 1365, height: 600 }, { width: 1365, height: 768 }, { width: 1365, height: 900 }, { width: 1920, height: 1080 }, { width: 390, height: 667 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport);
       // Wait for the tab entrance and console resize before measuring its edge.
       await page.waitForTimeout(550);
@@ -86,6 +93,7 @@ try {
         const earnings = document.querySelector('[aria-label="Sell earnings"]');
         return {
           consoleHeight: el.clientHeight,
+          earningsHeight: earnings.getBoundingClientRect().height,
           visibleLines: +((el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)) / parseFloat(style.lineHeight)).toFixed(1),
           pageOverflow: document.documentElement.scrollHeight - innerHeight,
           bottomGap: innerHeight - earnings.getBoundingClientRect().bottom,
@@ -96,6 +104,23 @@ try {
       if (process.env.PERF_VERIFY === '1' && (layout.pageOverflow > 1 || Math.abs(layout.bottomGap - layout.expectedBottomGap) > 1)) {
         throw new Error(`Account page does not fit the viewport: ${JSON.stringify(layout)}`);
       }
+      if (process.env.PERF_VERIFY === '1' && layout.consoleHeight < layout.earningsHeight * 2) throw new Error('Closed graph does not leave most space to the console');
+      await page.locator('[aria-label="Sell earnings"] h3').hover();
+      await page.waitForTimeout(550);
+      const open = await page.evaluate(() => ({
+        consoleHeight: document.querySelector('.console-output').clientHeight,
+        earningsHeight: document.querySelector('[aria-label="Sell earnings"]').getBoundingClientRect().height,
+        graphHeight: document.querySelector('.earnings-chart-svg').getBoundingClientRect().height,
+        pageOverflow: document.documentElement.scrollHeight - innerHeight,
+        horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
+      }));
+      layouts[layouts.length - 1].open = open;
+      if (process.env.PERF_VERIFY === '1' && (open.pageOverflow > 1 || open.horizontalOverflow > 1
+        || open.graphHeight < 40 || open.earningsHeight < open.consoleHeight * 2)) {
+        throw new Error(`Open graph does not fit and dominate the viewport: ${JSON.stringify({ viewport, ...open })}`);
+      }
+      await page.mouse.move(0, 0);
+      await page.waitForTimeout(550);
     }
     await page.setViewportSize({ width: 1365, height: 900 });
     if (process.env.PERF_SCREENSHOT) await page.screenshot({ path: process.env.PERF_SCREENSHOT });

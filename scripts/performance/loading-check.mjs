@@ -110,6 +110,7 @@ try {
   }
   await page.locator('a[href="/accounts/bench-0?tab=console"]').click();
   const consoleHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
+  if (process.env.PERF_SCREENSHOT_PREFIX) await page.screenshot({ path: `${process.env.PERF_SCREENSHOT_PREFIX}-closed.png` });
   const consoleTabWidth = await page.locator('.tab-bar').evaluate(el => el.getBoundingClientRect().width);
   const closedGeometry = await page.evaluate(() => ({
     contentWidth: document.documentElement.clientWidth,
@@ -120,6 +121,7 @@ try {
   await page.waitForTimeout(220);
   const graphMidHeight = await page.locator('.earnings-details').evaluate(el => el.getBoundingClientRect().height);
   const consoleMidHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
+  const midOverflow = await page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
   await page.getByRole('img', { name: /Verkaufsgraph der letzten Stunde/ }).waitFor();
   await page.waitForTimeout(400);
   const graphOpenHeight = await page.locator('.earnings-details').evaluate(el => el.getBoundingClientRect().height);
@@ -128,6 +130,12 @@ try {
     mainLeft: document.querySelector('main').getBoundingClientRect().left,
   }));
   const expandedConsoleHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
+  if (process.env.PERF_SCREENSHOT_PREFIX) await page.screenshot({ path: `${process.env.PERF_SCREENSHOT_PREFIX}-open.png` });
+  const openLayout = await page.evaluate(() => ({
+    overflow: document.documentElement.scrollHeight - innerHeight,
+    earningsHeight: document.querySelector('[aria-label="Sell earnings"]').getBoundingClientRect().height,
+    consoleHeight: document.querySelector('.console-output').getBoundingClientRect().height,
+  }));
   const graphProgress = graphMidHeight / graphOpenHeight;
   const consoleProgress = (consoleHeight - consoleMidHeight) / (consoleHeight - expandedConsoleHeight);
   if (verify) {
@@ -140,9 +148,11 @@ try {
     ensure(closedGeometry.scrollbarGutter === 'stable' && closedGeometry.contentWidth === openGeometry.contentWidth
       && Math.abs(closedGeometry.mainLeft - openGeometry.mainLeft) < 0.5,
       `Opening graph shifted the page horizontally: ${JSON.stringify({ closedGeometry, openGeometry })}`);
-    ensure(expandedConsoleHeight >= 158, 'Expanded graph hid the console');
-    ensure(Math.abs(consoleHeight - expandedConsoleHeight - 135) < 3,
-      `Graph changed ${consoleHeight - expandedConsoleHeight}px of console instead of five lines (closed=${consoleHeight}, open=${expandedConsoleHeight})`);
+    ensure(expandedConsoleHeight >= 46, 'Expanded graph hid the console');
+    ensure(Math.abs(consoleHeight - expandedConsoleHeight - graphOpenHeight) < 3,
+      'Graph expansion did not exchange exactly the same height with the console');
+    ensure(midOverflow <= 1 && openLayout.overflow <= 1 && openLayout.earningsHeight > openLayout.consoleHeight * 2,
+      `Expanded earnings do not fit and dominate the screen: ${JSON.stringify({ midOverflow, ...openLayout })}`);
   }
   await page.getByRole('button', { name: '24 Stunden', exact: true }).click();
   const chart = page.getByRole('img', { name: /Verkaufsgraph der letzten 24 Stunden/ });
