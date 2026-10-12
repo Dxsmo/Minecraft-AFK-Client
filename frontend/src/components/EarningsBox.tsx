@@ -11,9 +11,10 @@ const timeFormatter = new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute
 const money = (amount: number) => `$${moneyFormatter.format(amount)}`;
 const time = (at: string | number) => timeFormatter.format(new Date(at));
 
-export function EarningsBox({ accountId }: { accountId: string }) {
+export function EarningsBox({ accountId, onExpandedChange }: { accountId: string; onExpandedChange?: (expanded: boolean) => void }) {
   const [earnings, setEarnings] = useState<Earnings | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [hasOpened, setHasOpened] = useState(false);
   const [range, setRange] = useState<Range>("1h");
   const panelId = useId();
   usePolling(async signal => {
@@ -21,8 +22,19 @@ export function EarningsBox({ accountId }: { accountId: string }) {
     if (!signal.aborted) setEarnings(data);
   }, 15_000);
 
+  function changeExpanded(next: boolean) {
+    if (next === expanded) return;
+    if (next) setHasOpened(true);
+    onExpandedChange?.(next);
+    setExpanded(next);
+  }
+
   return (
-    <section className="card p-3.5 text-sm" aria-label="Sell earnings">
+    <section className="card p-3.5 text-sm" aria-label="Sell earnings"
+      onPointerEnter={(event) => {
+        if (event.pointerType === "mouse" && !(event.target as Element).closest("button")) changeExpanded(true);
+      }}
+      onPointerLeave={(event) => { if (event.pointerType === "mouse") changeExpanded(false); }}>
       <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-subtle)" }}>Sell earnings</h3>
       <div className="grid grid-cols-3 gap-2 text-center">
         {([['5 min', earnings?.last5m], ['1 h', earnings?.last1h], ['24 h', earnings?.last24h]] as const).map(([label, amount]) => (
@@ -32,7 +44,7 @@ export function EarningsBox({ accountId }: { accountId: string }) {
           </div>
         ))}
       </div>
-      <button type="button" onClick={() => setExpanded(value => !value)} aria-expanded={expanded} aria-controls={panelId}
+      <button type="button" onClick={() => changeExpanded(!expanded)} aria-expanded={expanded} aria-controls={panelId}
         aria-label={expanded ? "Verkaufsgraph einklappen" : "Verkaufsgraph ausklappen"}
         className="mt-3 flex items-center gap-1.5 rounded-md px-1 py-1 text-[11px] transition-colors hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-offset-2"
         style={{ color: "var(--text-muted)" }}>
@@ -40,20 +52,22 @@ export function EarningsBox({ accountId }: { accountId: string }) {
           className={`transition-transform duration-200 ${expanded ? "rotate-90" : ""}`}><path d="m9 6 6 6-6 6" /></svg>
         Verlauf
       </button>
-      <div id={panelId} hidden={!expanded}>
-        {expanded && <div className="mt-2 border-t pt-3" style={{ borderColor: "var(--border)" }}>
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs" style={{ color: "var(--text-muted)" }}>Verkaufsverlauf</p>
-            <div className="flex gap-1 rounded-lg p-1" role="group" aria-label="Zeitraum" style={{ background: "var(--surface)" }}>
-              {([['1h', '1 Stunde'], ['6h', '6 Stunden'], ['24h', '24 Stunden']] as const).map(([value, label]) => (
-                <button type="button" key={value} aria-pressed={range === value} onClick={() => setRange(value)}
-                  className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${range === value ? "bg-white/10" : "hover:bg-white/5"}`}
-                  style={{ color: range === value ? "var(--text)" : "var(--text-subtle)" }}>{label}</button>
-              ))}
+      <div id={panelId} className="earnings-details" data-expanded={expanded} aria-hidden={!expanded} inert={!expanded}>
+        <div className="earnings-details-clip">
+          {hasOpened && <div className="mt-2 border-t pt-3" style={{ borderColor: "var(--border)" }}>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs" style={{ color: "var(--text-muted)" }}>Verkaufsverlauf</p>
+              <div className="flex gap-1 rounded-lg p-1" role="group" aria-label="Zeitraum" style={{ background: "var(--surface)" }}>
+                {([['1h', '1 Stunde'], ['6h', '6 Stunden'], ['24h', '24 Stunden']] as const).map(([value, label]) => (
+                  <button type="button" key={value} aria-pressed={range === value} onClick={() => setRange(value)}
+                    className={`rounded-md px-2.5 py-1 text-[11px] transition-colors ${range === value ? "bg-white/10" : "hover:bg-white/5"}`}
+                    style={{ color: range === value ? "var(--text)" : "var(--text-subtle)" }}>{label}</button>
+                ))}
+              </div>
             </div>
-          </div>
-          <EarningsGraph key={`${accountId}:${range}`} accountId={accountId} range={range} />
-        </div>}
+            <EarningsGraph key={`${accountId}:${range}`} accountId={accountId} range={range} />
+          </div>}
+        </div>
       </div>
     </section>
   );

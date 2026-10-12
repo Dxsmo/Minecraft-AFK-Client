@@ -571,15 +571,36 @@ body {
   .account-console-tab > * {
     flex-shrink: 0;
   }
+  .account-console-page > .tab-bar {
+    align-self: flex-start;
+  }
   .account-console-tab {
     display: flex;
     flex-direction: column;
     flex-grow: 1;
     gap: 0.75rem;
   }
-  .account-console-output {
+  .console-output.account-console-output {
     flex: 1 0 160px;
     min-height: 160px;
+    font-size: 0.9375rem;
+    line-height: 1.8;
+  }
+  .account-console-page[data-earnings-expanded="true"] .account-console-output {
+    min-height: var(--console-expanded-min-height, 160px);
+  }
+  .earnings-details {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 500ms cubic-bezier(0.4, 0, 0.6, 1);
+  }
+  .earnings-details[data-expanded="true"] {
+    grid-template-rows: 1fr;
+  }
+  .earnings-details-clip {
+    min-height: 0;
+    overflow: hidden;
+    contain: paint;
   }
 
   /* Terminal-style console, intentionally distinct from the rest of the app. */
@@ -749,6 +770,7 @@ body {
   animation: panel-in 0.22s ease both;
 }
 @media (prefers-reduced-motion: reduce) {
+  .earnings-details { transition: none; }
   .tab-panel {
     animation: none;
   }
@@ -965,20 +987,6 @@ body {
 .spawner-action-sell {
   color: #fff;
   background-color: #059669;
-}
-
-/* Shared pill used for scheduled "HH:MM" entries. */
-.time-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.1rem 0.5rem;
-  font-size: 0.72rem;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  color: var(--accent);
-  background-color: var(--accent-soft);
-  border-radius: 9999px;
 }
 
 @media (prefers-reduced-motion: reduce) {

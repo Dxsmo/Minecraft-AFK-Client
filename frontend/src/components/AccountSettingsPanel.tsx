@@ -31,9 +31,6 @@ export function AccountSettingsPanel({
   const [spawnerActions, setSpawnerActions] = useState<Record<string, SpawnerAction>>(
     account.spawnerActions ?? {},
   );
-  const [spawnerClearEnabled, setSpawnerClearEnabled] = useState(account.spawnerClearEnabled ?? false);
-  const [spawnerClearTimes, setSpawnerClearTimes] = useState<string[]>(account.spawnerClearTimes ?? []);
-  const [spawnerTimeDraft, setSpawnerTimeDraft] = useState("04:00");
   const [assigned, setAssigned] = useState<Set<string>>(new Set(account.assignments.map((a) => a.userId)));
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -62,8 +59,6 @@ export function AccountSettingsPanel({
         autoSellCommand,
         spawnerType,
         spawnerActions,
-        spawnerClearEnabled,
-        spawnerClearTimes,
       });
       if (canManageAccess) {
         await api.put(`/minecraft/accounts/${account.id}/assignments`, { userIds: Array.from(assigned) });
@@ -90,16 +85,6 @@ export function AccountSettingsPanel({
       setError(err instanceof ApiError ? err.message : "Failed to change version");
     } finally {
       setVersionSaving(false);
-    }
-  }
-
-  function addSpawnerTime() {
-    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(spawnerTimeDraft)) {
-      setError("Invalid time (use HH:MM)");
-      return;
-    }
-    if (!spawnerClearTimes.includes(spawnerTimeDraft)) {
-      setSpawnerClearTimes([...spawnerClearTimes, spawnerTimeDraft].sort());
     }
   }
 
@@ -375,46 +360,6 @@ export function AccountSettingsPanel({
                   </div>
                 )}
 
-                <div className="border-t pt-3" style={{ borderColor: "var(--border)" }}>
-                  <Toggle
-                    label="Nach Zeit leeren"
-                    description="Startet den Leer-Vorgang automatisch zu festen Uhrzeiten (Server-Ortszeit)."
-                    checked={spawnerClearEnabled}
-                    onChange={setSpawnerClearEnabled}
-                  />
-                  {spawnerClearEnabled && (
-                    <div className="mt-2">
-                      {spawnerClearTimes.length > 0 && (
-                        <div className="mb-2 flex flex-wrap gap-1.5">
-                          {spawnerClearTimes.map((time) => (
-                            <span key={time} className="time-pill">
-                              {time}
-                              <button
-                                type="button"
-                                onClick={() => setSpawnerClearTimes(spawnerClearTimes.filter((t) => t !== time))}
-                                className="leading-none opacity-70 hover:opacity-100"
-                                aria-label={`Remove ${time}`}
-                              >
-                                ×
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <div className="flex gap-2">
-                        <input
-                          type="time"
-                          value={spawnerTimeDraft}
-                          onChange={(e) => setSpawnerTimeDraft(e.target.value)}
-                          className="input w-32"
-                        />
-                        <button type="button" onClick={addSpawnerTime} className="btn btn-secondary btn-sm shrink-0">
-                          + Uhrzeit
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
               </>
             )}
 

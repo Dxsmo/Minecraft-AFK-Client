@@ -6,8 +6,6 @@ const spawnerActions = z
   .record(z.string().max(64), z.enum(["keep", "drop", "sell"]))
   .refine((v) => Object.keys(v).length <= 16, { message: "Too many spawner items" });
 
-const dailyTimes = z.array(z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Time must be HH:MM")).max(48);
-
 /**
  * Fields accepted when CREATING an account. `credentialsSecret` (the Microsoft
  * account email) is only ever settable here — see `updateAccountSchema` below,
@@ -46,10 +44,6 @@ export const createAccountSchema = z
     autoSellCommand: z.string().max(64).default("/sell"),
     spawnerType: z.enum(["", ...SPAWNER_TYPE_IDS] as [string, ...string[]]).default(""),
     spawnerActions: spawnerActions.default({}).transform((v) => JSON.stringify(v)),
-    spawnerClearEnabled: z.boolean().default(false),
-    spawnerClearTimes: dailyTimes
-      .default([])
-      .transform((times) => JSON.stringify(Array.from(new Set(times)).sort())),
   });
 
 /**
@@ -73,10 +67,6 @@ export const updateAccountSchema = z.object({
   autoSellCommand: z.string().max(64).optional(),
   spawnerType: z.enum(["", ...SPAWNER_TYPE_IDS] as [string, ...string[]]).optional(),
   spawnerActions: spawnerActions.optional().transform((v) => (v ? JSON.stringify(v) : undefined)),
-  spawnerClearEnabled: z.boolean().optional(),
-  spawnerClearTimes: dailyTimes
-    .optional()
-    .transform((times) => (times ? JSON.stringify(Array.from(new Set(times)).sort()) : undefined)),
 });
 
 export const assignUsersSchema = z.object({

@@ -57,10 +57,6 @@ export interface ClientRuntimeConfig {
   spawnerDropItems: string[];
   /** Item ids to sell via the spawner's own sell button when it is cleared. */
   spawnerSellItems: string[];
-  /** Run the spawner-clear routine automatically at fixed times of day. */
-  spawnerClearEnabled: boolean;
-  /** Times of day ("HH:MM", server local time) to clear the spawner. */
-  spawnerClearTimes: string[];
 }
 
 /** Microsoft device-code sign-in details, shown live in the account console/UI. */

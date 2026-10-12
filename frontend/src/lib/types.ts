@@ -86,8 +86,6 @@ export interface MinecraftAccount {
   lastSellAt: string | null;
   spawnerType: string;
   spawnerActions: Record<string, SpawnerAction>;
-  spawnerClearEnabled: boolean;
-  spawnerClearTimes: string[];
   dashboardOrder: number;
   status: ClientStatus;
   createdAt: string;

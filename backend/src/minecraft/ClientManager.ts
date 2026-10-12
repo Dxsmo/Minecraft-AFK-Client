@@ -3,7 +3,7 @@ import type { ClientRuntimeConfig, ClientStatusSnapshot, ConsoleEvent } from "./
 import { prisma } from "../database/prisma.js";
 import { persistConsoleLog } from "../logging/consoleLogService.js";
 import { logger } from "../logging/logger.js";
-import { parseDailyTimes, invalidateEarningsHistory } from "../accounts/service.js";
+import { invalidateEarningsHistory } from "../accounts/service.js";
 import { createStatusPersistence } from "./statusPersistence.js";
 import { parseSpawnerActions, resolveSpawnerActions } from "./spawners.js";
 import type { MinecraftAccount } from "@prisma/client";
@@ -34,8 +34,6 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     spawnerType: account.spawnerType,
     spawnerDropItems: spawner.dropItems,
     spawnerSellItems: spawner.sellItems,
-    spawnerClearEnabled: account.spawnerClearEnabled,
-    spawnerClearTimes: parseDailyTimes(account.spawnerClearTimes),
   };
 }
 

@@ -23,6 +23,7 @@ import { terminateSubprocess } from "../utils/terminateSubprocess.js";
 
 // Fixed, locked retry interval for every account and every attempt.
 const RECONNECT_DELAY_MS = 15_000;
+const MANUAL_RESTART_DELAY_MS = 5_000;
 
 // Safety net: if a spawned bot never reaches ONLINE or reports a failure within
 // this window, we treat the attempt as hung and recycle it.
@@ -33,10 +34,6 @@ const SUBPROCESS_ONLINE_SILENCE_MS = 45_000;
 /// How often the online-hang watchdog checks for subprocess silence.
 const ONLINE_WATCHDOG_INTERVAL_MS = 15_000;
 
-/// How often the spawner scheduler wakes up. A 30s cadence is
-/// fine for minute-granular daily times (deduped per day) and keeps overhead
-/// negligible.
-const SCHEDULER_TICK_MS = 30_000;
 
 /**
  * Strip Minecraft formatting/color codes from a string. Servers send the
@@ -67,6 +64,7 @@ export class MinecraftClient extends EventEmitter {
   private status: ClientStatus = "OFFLINE";
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private restartTimer: NodeJS.Timeout | null = null;
   private hangTimer: NodeJS.Timeout | null = null;
   private onlineWatchdog: NodeJS.Timeout | null = null;
   /** Epoch ms of the last confirmed behavior tick heartbeat. */
@@ -89,25 +87,16 @@ export class MinecraftClient extends EventEmitter {
 
   private health = 20;
   private food = 20;
-  /** Drives the spawner scheduler (see runScheduledTasks). */
-  private schedulerTimer: NodeJS.Timeout | null = null;
-  /** Maps a daily "HH:MM" to the YYYY-MM-DD it last fired, to run it once per day. */
-  private firedDaily = new Map<string, string>();
 
   constructor(private config: ClientRuntimeConfig) {
     super();
     this.log = accountLogger(config.id, config.name);
-    this.schedulerTimer = setInterval(() => this.runScheduledTasks(), SCHEDULER_TICK_MS);
   }
 
   /** Stops all timers and disconnects; call when the account is removed. */
   dispose(): void {
     if (this.restartCrouchTimer) clearInterval(this.restartCrouchTimer);
     this.restartCrouchTimer = null;
-    if (this.schedulerTimer) {
-      clearInterval(this.schedulerTimer);
-      this.schedulerTimer = null;
-    }
     this.disconnect();
   }
 
@@ -147,6 +136,7 @@ export class MinecraftClient extends EventEmitter {
 
   connect(): void {
     if (this.status !== "OFFLINE" && this.status !== "ERROR") return;
+    if (this.restartTimer) return;
     this.manuallyStopped = false;
     this.clearReconnectTimer();
     this.reconnectAttempt = 0;
@@ -155,6 +145,7 @@ export class MinecraftClient extends EventEmitter {
 
   disconnect(): void {
     this.manuallyStopped = true;
+    this.clearRestartTimer();
     this.clearReconnectTimer();
     this.clearHangTimer();
     this.teardownSubprocess("Manual disconnect requested");
@@ -163,11 +154,17 @@ export class MinecraftClient extends EventEmitter {
 
   restart(): void {
     this.manuallyStopped = false;
+    this.clearRestartTimer();
     this.clearReconnectTimer();
     this.clearHangTimer();
     this.teardownSubprocess("Restart requested");
     this.reconnectAttempt = 0;
-    this.attemptConnect();
+    this.setStatus("OFFLINE");
+    this.emitConsole("SYSTEM", "Restart: waiting 5 seconds before reconnecting...");
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (!this.manuallyStopped) this.attemptConnect();
+    }, MANUAL_RESTART_DELAY_MS);
   }
 
   sendCommand(command: string): boolean {
@@ -209,30 +206,6 @@ export class MinecraftClient extends EventEmitter {
     this.sendToBot({ type: "clean_spawner" });
     this.emitConsole("SYSTEM", "Clean spawner task dispatched");
     return true;
-  }
-
-  /**
-   * Runs the time-of-day spawner-clear scheduler.
-   * Tasks dispatch through the bot's foreground task queue,
-   * so they automatically pause any in-progress auto-sell cycle
-   * and resume it afterwards — no scheduling logic lives in the bot itself.
-   */
-  private runScheduledTasks(): void {
-    if (this.status !== "ONLINE" || !this.subprocess) return;
-
-    // Spawner clear: run the configured clear routine once at each configured
-    // time of day, deduped per day.
-    if (this.config.spawnerClearEnabled && this.config.spawnerClearTimes.length > 0) {
-      const now = new Date();
-      const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-      const today = now.toISOString().slice(0, 10);
-      const key = `spawner:${hhmm}`;
-      if (this.config.spawnerClearTimes.includes(hhmm) && this.firedDaily.get(key) !== today) {
-        this.firedDaily.set(key, today);
-        this.sendToBot({ type: "clean_spawner" });
-        this.emitConsole("SYSTEM", `Scheduled spawner clear for ${hhmm} dispatched`);
-      }
-    }
   }
 
   private attemptConnect(): void {
@@ -584,6 +557,13 @@ export class MinecraftClient extends EventEmitter {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  private clearRestartTimer(): void {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
     }
   }
 

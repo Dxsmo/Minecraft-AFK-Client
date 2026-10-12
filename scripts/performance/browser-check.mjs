@@ -8,7 +8,7 @@ const account = {
   edition: 'JAVA', authType: 'MICROSOFT', status: 'ONLINE', health: 20, food: 20,
   crouchEnabled: true, autoReconnect: true, autoSellEnabled: true, autoSellIntervalSeconds: 1,
   autoSellCommand: '/sell', minecraftVersion: '', notes: '', spawnerType: '', spawnerActions: {},
-  spawnerClearEnabled: false, spawnerClearTimes: [], createdBy: { id: 'admin' }, assignments: [],
+  createdBy: { id: 'admin' }, assignments: [],
 };
 const user = { id: 'admin', username: 'Performance', role: 'ADMIN', status: 'ACTIVE' };
 const report = { browser: await browser.version(), scenarios: [] };

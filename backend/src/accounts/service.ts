@@ -3,21 +3,11 @@ import type { CreateAccountInput, UpdateAccountInput } from "./schemas.js";
 import type { SessionContext } from "../auth/session.js";
 import { parseSpawnerActions } from "../minecraft/spawners.js";
 
-/** Parses the JSON-encoded daily spawner-clear times into a string array. */
-export function parseDailyTimes(raw: string): string[] {
-  try {
-    const value = JSON.parse(raw);
-    return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
 /** Decode the remaining JSON settings for API clients. */
-function present<T extends { id: string; image: { revision: string } | null; spawnerActions: string; spawnerClearTimes: string }>(account: T) {
-  const { image, spawnerActions, spawnerClearTimes, ...rest } = account;
+function present<T extends { id: string; image: { revision: string } | null; spawnerActions: string }>(account: T) {
+  const { image, spawnerActions, ...rest } = account;
   return { ...rest, imageUrl: image ? `/api/minecraft/accounts/${account.id}/image?v=${image.revision}` : null,
-    spawnerActions: parseSpawnerActions(spawnerActions), spawnerClearTimes: parseDailyTimes(spawnerClearTimes) };
+    spawnerActions: parseSpawnerActions(spawnerActions) };
 }
 
 /**
@@ -43,8 +33,6 @@ const publicAccountSelect = {
   lastSellAt: true,
   spawnerType: true,
   spawnerActions: true,
-  spawnerClearEnabled: true,
-  spawnerClearTimes: true,
   status: true,
   dashboardOrder: true,
   createdAt: true,

@@ -263,8 +263,8 @@ additional users access afterwards in the account's **Settings** panel):
   diagnostic per connection. Valid one-byte bundle delimiters remain intact.
   Other parse warnings include the payload length and protocol state, are limited
   to one per 30 seconds, and do not prevent processing subsequent packets.
-- Sell earnings under the console keep the rolling 5m/1h/24h totals. The small
-  bottom-left arrow expands a live graph for the last 1h, 6h or 24h, with time
+- Sell earnings under the console keep the rolling 5m/1h/24h totals. Hovering
+  over the earnings or using the arrow opens a live graph for the last 1h, 6h or 24h, with time
   labels below and amounts on the right. All views use completed, clock-aligned
   five-minute intervals (12/72/288 points for 1h/6h/24h) and refresh at every
   five-minute boundary. Points become denser as the time range grows. Every
@@ -279,8 +279,7 @@ additional users access afterwards in the account's **Settings** panel):
 - Spawner: pick the spawner type the account is parked at, then choose per
   produced item whether it is **dropped** out of the spawner or **sold** via the
   spawner's own sell button. Dropping always runs first, and both stop once
-  fewer than two stacks of that item remain. Can also run automatically at
-  configured times of day ("Nach Zeit leeren").
+  fewer than two stacks of that item remain. The clear action is started manually.
 - Clean Spawner only ever acts on the block the bot is **currently looking at**;
   it never searches the surroundings.
 - Item worth (admin-only, own page under Name Sniper at `/item-worth`): on
@@ -443,8 +442,9 @@ Minecraft server through the bot. **The service never bypasses server
 permissions** — if the bot account isn't OP'd or lacks a permission-plugin
 grant, the vanilla server will reject the command exactly as it would for
 a real player. The last 20,000 console lines per account are persisted to
-SQLite and pruned automatically. The console initially loads 2,000 lines;
-older history can be loaded in pages while keeping the reading position.
+SQLite and pruned automatically. The console loads recent history and keeps
+new lines visible without losing the user's position when reading older output.
+Restart leaves the account offline for five seconds before reconnecting.
 
 ---
 

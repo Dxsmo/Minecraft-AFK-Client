@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -19,10 +19,18 @@ export function AccountDetailPage() {
   const [command, setCommand] = useState("");
   const [sendingCommand, setSendingCommand] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
+  const [earningsExpanded, setEarningsExpanded] = useState(false);
+  const [expandedConsoleMin, setExpandedConsoleMin] = useState(160);
+  const consolePageRef = useRef<HTMLDivElement>(null);
+  const closedConsoleHeightRef = useRef(0);
   const accountIdRef = useRef(id);
   accountIdRef.current = id;
   const tab = searchParams.get("tab") === "settings" ? "settings" : "console";
   function setTab(next: "console" | "settings") {
+    if (next !== tab) {
+      setEarningsExpanded(false);
+      closedConsoleHeightRef.current = 0;
+    }
     setSearchParams((params) => { params.set("tab", next); return params; });
   }
   const { logs, status, historyError } = useAccountConsole(id);
@@ -30,6 +38,18 @@ export function AccountDetailPage() {
   const isAdmin = user?.role === "ADMIN";
   const isCreator = !!account && !!user && account.createdBy?.id === user.id;
   const canManageAccess = isAdmin || isCreator;
+
+  const onEarningsExpandedChange = useCallback((next: boolean) => {
+    if (next) {
+      const output = consolePageRef.current?.querySelector<HTMLElement>(".account-console-output");
+      if (output) {
+        const lineHeight = parseFloat(getComputedStyle(output).lineHeight);
+        closedConsoleHeightRef.current = Math.max(closedConsoleHeightRef.current, output.getBoundingClientRect().height);
+        setExpandedConsoleMin(Math.max(160, closedConsoleHeightRef.current - 5 * lineHeight));
+      }
+    }
+    setEarningsExpanded(next);
+  }, []);
 
   async function load() {
     if (!id) return;
@@ -42,11 +62,19 @@ export function AccountDetailPage() {
   }
 
   useEffect(() => {
+    const resetConsoleHeight = () => { closedConsoleHeightRef.current = 0; };
+    window.addEventListener("resize", resetConsoleHeight);
+    return () => window.removeEventListener("resize", resetConsoleHeight);
+  }, []);
+
+  useEffect(() => {
     setAccount(null);
     setError(null);
     setSendingCommand(false);
     setCommandError(null);
     setCommand("");
+    setEarningsExpanded(false);
+    closedConsoleHeightRef.current = 0;
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
@@ -111,7 +139,9 @@ export function AccountDetailPage() {
   const msaSignIn = status?.msaSignIn;
 
   return (
-    <div className={tab === "console" ? "account-console-page" : "space-y-5"}>
+    <div ref={consolePageRef} className={tab === "console" ? "account-console-page" : "space-y-5"}
+      data-earnings-expanded={earningsExpanded}
+      style={{ "--console-expanded-min-height": `${expandedConsoleMin}px` } as React.CSSProperties}>
       {account.edition === "BEDROCK" && (
         <div
           className="rounded-xl px-5 py-4"
@@ -271,7 +301,7 @@ export function AccountDetailPage() {
             </button>
           </form>
           {commandError && <p role="alert" className="alert-error">{commandError}</p>}
-          {id && <EarningsBox key={id} accountId={id} />}
+          {id && <EarningsBox key={id} accountId={id} onExpandedChange={onEarningsExpandedChange} />}
         </div>
       )}
 

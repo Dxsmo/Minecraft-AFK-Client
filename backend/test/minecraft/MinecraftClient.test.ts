@@ -87,8 +87,6 @@ function baseConfig(overrides: Partial<ClientRuntimeConfig> = {}): ClientRuntime
     spawnerType: "",
     spawnerDropItems: [],
     spawnerSellItems: [],
-    spawnerClearEnabled: false,
-    spawnerClearTimes: [],
     ...overrides,
   };
 }
@@ -149,7 +147,7 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(config).not.toHaveProperty("tpauto_enabled");
   });
 
-  it.each(["JAVA", "BEDROCK"] as const)("force-kills an old stuck %s process without signaling the replacement", edition => {
+  it.each(["JAVA", "BEDROCK"] as const)("keeps %s offline for five seconds on restart and force-kills a stuck old process", edition => {
     vi.useFakeTimers();
     try {
       const client = makeClient({ edition });
@@ -165,14 +163,43 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
         return true;
       });
       client.restart();
+      expect(client.getStatus().status).toBe("OFFLINE");
+      expect(children).toHaveLength(1);
+      client.connect();
+      vi.advanceTimersByTime(1999);
+      expect(children).toHaveLength(1);
+      vi.advanceTimersByTime(3000);
+      expect(children).toHaveLength(1);
+      vi.advanceTimersByTime(1);
       const replacement = lastChild();
       expect(replacement).not.toBe(old);
-      vi.advanceTimersByTime(2000);
       expect(old.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
       expect(replacement.kill).not.toHaveBeenCalled();
       expect(client.getStatus().status).toBe("CONNECTING");
       client.dispose();
       vi.advanceTimersByTime(2000);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("resets the restart wait on another restart and cancels it on stop or disposal", () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeClient();
+      client.connect();
+      client.restart();
+      vi.advanceTimersByTime(2500);
+      client.restart();
+      vi.advanceTimersByTime(2500);
+      expect(children).toHaveLength(1);
+      client.disconnect();
+      vi.advanceTimersByTime(5000);
+      expect(children).toHaveLength(1);
+      client.connect();
+      expect(children).toHaveLength(2);
+      client.restart();
+      client.dispose();
+      vi.advanceTimersByTime(5000);
+      expect(children).toHaveLength(2);
     } finally { vi.useRealTimers(); }
   });
 
@@ -194,12 +221,11 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it("never automatically queries /homes on joins, scheduling or /sethome", async () => {
+  it("never automatically queries /homes on joins or /sethome", async () => {
     const client = makeClient();
     client.connect();
     lastChild().send({ type: "spawn" });
     await tick();
-    (client as any).runScheduledTasks();
     client.sendCommand("/sethome farm");
     lastChild().send({ type: "spawn" });
     await tick();
@@ -244,6 +270,8 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
       });
       vi.advanceTimersByTime(170_000);
       client.restart();
+      expect(client.getStatus().status).toBe("OFFLINE");
+      vi.advanceTimersByTime(5000);
       const expiredConfig = JSON.parse(String(lastChild().stdin.write.mock.calls[0][0]));
       expect(expiredConfig.autosell_resume_after_ms).toBe(0);
       client.dispose();
@@ -513,7 +541,7 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     const oldChild = lastChild();
     client.restart();
     expect(() => oldChild.stdin.emit("error", new Error("write EPIPE"))).not.toThrow();
-    expect(client.getStatus().status).toBe("CONNECTING");
+    expect(client.getStatus().status).toBe("OFFLINE");
     expect(client.getStatus().lastError).toBeUndefined();
   });
 
@@ -629,7 +657,6 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     lastChild().send({ type: "spawn" });
     lastChild().send({ type: "balance", balance: 9000 });
     await tick();
-    (client as any).runScheduledTasks();
     const commands = lastChild().stdin.write.mock.calls.map(([line]) => JSON.parse(line));
     expect(commands.some((cmd) => cmd.type === "query_balance")).toBe(false);
     expect(client.getStatus()).not.toHaveProperty("balance");

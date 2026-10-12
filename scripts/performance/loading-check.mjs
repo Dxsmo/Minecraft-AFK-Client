@@ -21,7 +21,7 @@ const accounts = Array.from({ length: 100 }, (_, i) => ({
   edition: 'JAVA', authType: 'MICROSOFT', status: 'ONLINE', health: 20, food: 20,
   crouchEnabled: true, autoReconnect: true, autoSellEnabled: true, autoSellIntervalSeconds: 1,
   autoSellCommand: '/sell', minecraftVersion: '', notes: '', spawnerType: '', spawnerActions: {},
-  spawnerClearEnabled: false, spawnerClearTimes: [], lastSellAt: null, imageUrl: null,
+  lastSellAt: null, imageUrl: null,
   createdBy: { id: 'admin', username: 'Performance', minecraftUsername: null }, assignments: [],
 }));
 let releaseSlowDashboard;
@@ -98,9 +98,16 @@ try {
   const initialAccountRequests = [...requests.entries()].filter(([key]) => key.split('?', 1)[0] === '/api/minecraft/accounts').reduce((sum, [, count]) => sum + count, 0);
   await page.locator('a[href="/accounts/bench-0?tab=console"]').click();
   const consoleHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
-  await page.getByRole('button', { name: 'Verkaufsgraph ausklappen' }).click();
+  const consoleTabWidth = await page.locator('.tab-bar').evaluate(el => el.getBoundingClientRect().width);
+  await page.locator('[aria-label="Sell earnings"] h3').hover();
   await page.getByRole('img', { name: /Verkaufsgraph der letzten Stunde/ }).waitFor();
-  if (verify) ensure(await page.locator('.console-output').evaluate(el => el.getBoundingClientRect().height >= 160), 'Expanded graph hid the console');
+  await page.waitForTimeout(550);
+  const expandedConsoleHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
+  if (verify) {
+    ensure(expandedConsoleHeight >= 158, 'Expanded graph hid the console');
+    ensure(Math.abs(consoleHeight - expandedConsoleHeight - 135) < 3,
+      `Graph changed ${consoleHeight - expandedConsoleHeight}px of console instead of five lines (closed=${consoleHeight}, open=${expandedConsoleHeight})`);
+  }
   await page.getByRole('button', { name: '24 Stunden', exact: true }).click();
   const chart = page.getByRole('img', { name: /Verkaufsgraph der letzten 24 Stunden/ });
   await chart.waitFor();
@@ -122,9 +129,18 @@ try {
   await page.getByRole('button', { name: '1 Stunde', exact: true }).click();
   await page.getByRole('img', { name: /Verkaufsgraph der letzten Stunde/ }).waitFor();
   await page.getByRole('button', { name: 'Verkaufsgraph einklappen' }).click();
+  await page.waitForTimeout(550);
   if (verify) {
     ensure(await page.locator('.console-output').evaluate((el, height) => el.clientHeight === height, consoleHeight), 'Collapsing the graph did not restore console height');
-    ensure(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight + 1), 'Collapsed graph left the account page scrolling');
+    const collapsedLayout = await page.evaluate(() => ({ page: document.documentElement.scrollHeight, viewport: innerHeight,
+      graph: document.querySelector('.earnings-details').getBoundingClientRect().height,
+      output: document.querySelector('.console-output').getBoundingClientRect().height,
+      graphBox: document.querySelector('.earnings-details').getBoundingClientRect().toJSON(),
+      clipBox: document.querySelector('.earnings-details-clip').getBoundingClientRect().toJSON(),
+      earningsBox: document.querySelector('[aria-label="Sell earnings"]').getBoundingClientRect().toJSON(),
+      mainBox: document.querySelector('main').getBoundingClientRect().toJSON(),
+      expanded: document.querySelector('.earnings-details').dataset.expanded }));
+    ensure(collapsedLayout.page <= collapsedLayout.viewport + 1, `Collapsed graph left the account page scrolling: ${JSON.stringify(collapsedLayout)}`);
   }
   await page.getByRole('button', { name: 'Verkaufsgraph ausklappen' }).click();
   await page.getByRole('img', { name: /Verkaufsgraph der letzten Stunde/ }).waitFor();
@@ -136,6 +152,8 @@ try {
     ensure(initialAccountRequests === 1, 'Dashboard made duplicate account-list requests');
     ensure(graphRequests === 1, 'Reopening/changing back to a graph repeated its request');
     await page.getByRole('button', { name: 'Einstellungen', exact: true }).click();
+    ensure(Math.abs((await page.locator('.tab-bar').evaluate(el => el.getBoundingClientRect().width)) - consoleTabWidth) < 1,
+      'Account tabs stretched only on the console page');
     await page.getByRole('button', { name: 'Save settings', exact: true }).waitFor();
     pageChecks.push('account-settings');
     await page.getByRole('button', { name: 'Console', exact: true }).click();
