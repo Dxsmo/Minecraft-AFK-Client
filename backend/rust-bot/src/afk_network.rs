@@ -491,6 +491,104 @@ mod tests {
     }
 
     #[test]
+    fn empty_frames_preserve_keepalive_replies_over_fragmented_compressed_encrypted_tcp() {
+        use azalea::protocol::connect::{Connection, RawReadConnection, RawWriteConnection};
+        use azalea::protocol::write::{encode_to_network_packet, serialize_packet};
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::{TcpListener, TcpStream};
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for threshold in [None, Some(1), Some(64)] {
+            for encrypted in [false, true] {
+                let mut sim = simulation();
+                runtime.block_on(async {
+                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let (socket, accepted) = tokio::join!(
+                        TcpStream::connect(listener.local_addr().unwrap()), listener.accept(),
+                    );
+                    let socket = socket.unwrap();
+                    let (server, _) = accepted.unwrap();
+                    socket.set_nodelay(true).unwrap();
+                    server.set_nodelay(true).unwrap();
+                    let mut server = Connection::new_from_stream(server).await.unwrap().login();
+                    if let Some(threshold) = threshold {
+                        server.set_compression_threshold(threshold as i32);
+                    }
+                    let (read_stream, write_stream) = socket.into_split();
+                    let mut connection = RawConnection::new(
+                        RawReadConnection {
+                            read_stream, buffer: Cursor::new(Vec::new()),
+                            compression_threshold: threshold, dec_cipher: None,
+                        },
+                        RawWriteConnection {
+                            write_stream, compression_threshold: threshold, enc_cipher: None,
+                        },
+                        ConnectionProtocol::Game,
+                    );
+                    if encrypted {
+                        let key = *b"1234567890123456";
+                        server.set_encryption_key(key);
+                        connection.net_conn().unwrap().set_encryption_key(key);
+                    }
+                    sim.app.world_mut().entity_mut(sim.entity).insert(connection);
+                    let packets: [ClientboundGamePacket; 5] = [
+                        ClientboundKeepAlive { id: 42 }.into_variant(),
+                        ClientboundBundleDelimiter.into_variant(),
+                        ClientboundContainerSetSlot {
+                            container_id: 0, state_id: 7, slot: 9,
+                            item_stack: ItemStack::new(ItemKind::Beef, 64),
+                        }.into_variant(),
+                        ClientboundBundleDelimiter.into_variant(),
+                        ClientboundKeepAlive { id: 43 }.into_variant(),
+                    ];
+                    let mut bytes = Vec::new();
+                    for packet in &packets {
+                        bytes.extend(encode_to_network_packet(
+                            &[], threshold, &mut server.writer.raw.enc_cipher,
+                        ));
+                        bytes.extend(encode_to_network_packet(
+                            &serialize_packet(packet).unwrap(), threshold,
+                            &mut server.writer.raw.enc_cipher,
+                        ));
+                    }
+                    // Force the client to retain incomplete lengths, encrypted
+                    // frames and zlib streams across separate socket reads.
+                    for byte in bytes {
+                        server.writer.raw.write_stream.write_all(&[byte]).await.unwrap();
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        sim.tick();
+                    }
+                    for _ in 0..10 {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        sim.tick();
+                    }
+                    let replies = tokio::time::timeout(Duration::from_secs(3), async {
+                        let mut replies = Vec::new();
+                        while replies.len() < 2 {
+                            let raw = server.reader.raw.read().await.unwrap();
+                            if let ServerboundGamePacket::KeepAlive(packet) =
+                                deserialize_packet(&mut Cursor::new(raw.as_ref())).unwrap()
+                            {
+                                replies.push(packet.id);
+                            }
+                        }
+                        replies
+                    }).await.expect("empty frames must not prevent keepalive replies");
+                    assert_eq!(replies, [42, 43], "threshold={threshold:?}, encrypted={encrypted}");
+                    let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
+                    assert_eq!(filter.empty_payloads, packets.len() as u64);
+                    assert!(filter.last_warning_at.is_none());
+                    assert_eq!(sim.app.world().get::<Inventory>(sim.entity).unwrap()
+                        .inventory_menu.slot(9).unwrap().count(), 64);
+                });
+            }
+        }
+    }
+
+    #[test]
     fn truncated_packet_id_is_diagnosed_without_losing_the_next_frame() {
         let mut sim = simulation();
         sim.app
