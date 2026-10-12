@@ -5,7 +5,8 @@ const base = process.env.PERF_URL ?? 'http://127.0.0.1:4175';
 const verify = process.env.PERF_VERIFY === '1';
 const ensure = (condition, message) => { if (!condition) throw new Error(message); };
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
-const context = await browser.newContext({ viewport: { width: 1365, height: 900 } });
+const reducedMotion = process.env.PERF_REDUCED_MOTION === 'reduce' ? 'reduce' : 'no-preference';
+const context = await browser.newContext({ viewport: { width: 1365, height: 900 }, reducedMotion });
 const page = await context.newPage();
 const requests = new Map();
 const errors = [];
@@ -96,6 +97,17 @@ try {
   const dashboardMs = Date.now() - loginStart;
   await page.waitForTimeout(250);
   const initialAccountRequests = [...requests.entries()].filter(([key]) => key.split('?', 1)[0] === '/api/minecraft/accounts').reduce((sum, [, count]) => sum + count, 0);
+  await page.locator('.account-card').first().hover();
+  await page.waitForTimeout(220);
+  const accountMidHeight = await page.locator('.account-details').first().evaluate(el => el.getBoundingClientRect().height);
+  await page.waitForTimeout(400);
+  const accountOpenHeight = await page.locator('.account-details').first().evaluate(el => el.getBoundingClientRect().height);
+  if (verify) {
+    ensure(accountMidHeight > 0 && accountMidHeight < accountOpenHeight - 5,
+      `Account list stopped animating (${reducedMotion}): mid=${accountMidHeight}, open=${accountOpenHeight}`);
+    ensure(await page.locator('.account-details').first().evaluate(el => getComputedStyle(el).transitionDuration === '0.5s'),
+      'Account-list animation does not last 500ms');
+  }
   await page.locator('a[href="/accounts/bench-0?tab=console"]').click();
   const consoleHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
   const consoleTabWidth = await page.locator('.tab-bar').evaluate(el => el.getBoundingClientRect().width);
@@ -225,6 +237,6 @@ try {
   ensure(errors.length === 0, errors.join('; '));
   console.log(JSON.stringify({ browser: await browser.version(), fixture: { accounts: 100, apiDelayMs: 100, startupLogoutDelayMs: 800 },
     loginFormMs, dashboardMs, initialAccountRequests, graphRequests, interactions,
-    animation: { graphProgress, consoleProgress, consoleHeight, expandedConsoleHeight },
+    animation: { reducedMotion, accountMidHeight, accountOpenHeight, graphProgress, consoleProgress, consoleHeight, expandedConsoleHeight },
     backgroundRequests, slowDashboardRequests, pageChecks, errors }, null, 2));
 } finally { await browser.close(); }

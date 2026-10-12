@@ -164,7 +164,7 @@ body {
     height: 0;
     overflow: hidden;
     pointer-events: none;
-    transition: height var(--account-expand-motion);
+    transition: height 500ms cubic-bezier(0.4, 0, 0.6, 1);
   }
   .account-card[data-expanded="true"] .account-details { height: var(--account-details-height, 0px); }
   .account-details-clip { overflow: hidden; }
@@ -777,7 +777,6 @@ body {
   animation: panel-in 0.22s ease both;
 }
 @media (prefers-reduced-motion: reduce) {
-  .account-details, .account-console-output, .earnings-details { transition: none; }
   .tab-panel {
     animation: none;
   }
