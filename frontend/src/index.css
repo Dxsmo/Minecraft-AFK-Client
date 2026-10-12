@@ -557,11 +557,17 @@ body {
     font-variant-numeric: tabular-nums;
   }
 
-  /* Exchange screen space between the console and earnings without page scrolling. */
-  .account-console-page {
+  /* Keep shared controls in place when switching account tabs. */
+  .account-detail-page {
+    --account-console-font-size: clamp(0.6875rem, 1.05vw, 0.8125rem);
+    --account-console-line-height: calc(var(--account-console-font-size) * 1.5);
+    --earnings-summary-extra: calc(var(--account-console-line-height) * 3);
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+  }
+  /* Exchange screen space between the console and earnings without page scrolling. */
+  .account-console-page {
     min-height: calc(100dvh - var(--app-header-height) - 1.5rem);
   }
   @media (min-width: 640px) {
@@ -569,14 +575,12 @@ body {
       min-height: calc(100dvh - var(--app-header-height) - 3rem);
     }
   }
-  .account-console-page > *,
+  .account-detail-page > *,
   .account-console-tab > * {
     flex-shrink: 0;
   }
-  .account-console-page > .tab-bar {
-    align-self: flex-start;
-  }
   .account-detail-page > .tab-bar {
+    align-self: flex-start;
     padding: 3px;
   }
   .account-detail-page .tab-btn {
@@ -584,25 +588,25 @@ body {
     font-size: 0.78rem;
     line-height: 1.35;
   }
-  .account-console-page .account-heading-row h1 {
+  .account-detail-page .account-heading-row h1 {
     font-size: clamp(1rem, 1.5vw, 1.125rem);
     line-height: 1.3;
   }
-  .account-console-page .account-heading-row p {
+  .account-detail-page .account-heading-row p {
     font-size: 0.75rem;
     line-height: 1.35;
   }
-  .account-console-page .account-heading-row .btn {
+  .account-detail-page .account-heading-row .btn {
     min-height: 28px;
     padding: 0.325rem 0.6rem;
     font-size: 0.6875rem;
   }
-  .account-console-page .stat-pill {
+  .account-detail-page .stat-pill {
     padding: 0.25rem 0.55rem;
     font-size: 0.7rem;
     line-height: 1.3;
   }
-  .account-console-page .stat-pill > span:first-child {
+  .account-detail-page .stat-pill > span:first-child {
     font-size: 0.6rem;
   }
   .account-command .input,
@@ -623,7 +627,7 @@ body {
     height: var(--console-closed-height, 48px);
     min-height: 48px;
     padding: 0.5rem 0.75rem;
-    font-size: clamp(0.6875rem, 1.05vw, 0.8125rem);
+    font-size: var(--account-console-font-size);
     line-height: 1.5;
   }
   .account-console-page[data-console-ready="true"] .account-console-output {
@@ -639,19 +643,21 @@ body {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
+    align-content: center;
+    min-height: calc(34px + var(--earnings-summary-extra, 58.5px));
     gap: 12px;
   }
   .earnings-summary h3 {
-    font-size: 0.625rem;
+    font-size: 0.6875rem;
     line-height: 1.3;
   }
   .earnings-total-label, .earnings-toggle {
-    font-size: 0.625rem;
+    font-size: 0.6875rem;
     line-height: 1.4;
   }
   .earnings-total-value {
-    font-size: clamp(0.75rem, 1.2vw, 0.9375rem);
-    line-height: 1.35;
+    font-size: clamp(0.875rem, 1.3vw, 1.125rem);
+    line-height: 1.5;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -676,7 +682,7 @@ body {
     height: 100%;
     gap: 6px;
     border-top: 1px solid var(--border);
-    padding-top: 8px;
+    padding-top: 14px;
   }
   .earnings-toolbar {
     display: flex;
@@ -731,13 +737,18 @@ body {
     white-space: nowrap;
   }
   @media (max-width: 639px) {
-    .earnings-summary { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; }
+    .earnings-summary {
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 4px 8px;
+      min-height: calc(47px + var(--earnings-summary-extra, 49.5px));
+    }
     .earnings-summary h3 { grid-column: 1 / -1; }
   }
   @media (max-height: 700px) {
-    .account-console-page { gap: 0.5rem; }
-    .account-console-page .account-heading-row { gap: 6px; }
-    .account-console-page .account-telemetry { gap: 4px; }
+    .account-detail-page { gap: 0.5rem; --earnings-summary-extra: var(--account-console-line-height); }
+    .account-detail-page .account-heading-row { gap: 6px; }
+    .account-detail-page .account-telemetry { gap: 4px; }
+    .earnings-details-content { padding-top: 8px; }
   }
 
   /* Terminal-style console, intentionally distinct from the rest of the app. */

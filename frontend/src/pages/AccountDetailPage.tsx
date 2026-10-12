@@ -60,7 +60,7 @@ export function AccountDetailPage() {
       const top = output.getBoundingClientRect().top + window.scrollY - entranceOffset;
       const height = Math.max(48, window.innerHeight - top - bottomPadding - otherHeight - gaps);
       const summaryHeight = earnings.getBoundingClientRect().height - graph.getBoundingClientRect().height;
-      const openHeight = Math.min(height, Math.max(48, (height + summaryHeight) * 0.2));
+      const openHeight = Math.min(height, Math.max(48, Math.min((height + summaryHeight) * 0.32, height - 120)));
       page.style.setProperty("--console-closed-height", `${height}px`);
       page.style.setProperty("--console-open-height", `${openHeight}px`);
       page.style.setProperty("--earnings-open-height", `${height - openHeight}px`);
@@ -165,7 +165,7 @@ export function AccountDetailPage() {
   const msaSignIn = status?.msaSignIn;
 
   return (
-    <div ref={consolePageRef} className={tab === "console" ? "account-detail-page account-console-page" : "account-detail-page space-y-5"}
+    <div ref={consolePageRef} className={`account-detail-page${tab === "console" ? " account-console-page" : ""}`}
       data-earnings-expanded={earningsExpanded}>
       {account.edition === "BEDROCK" && (
         <div

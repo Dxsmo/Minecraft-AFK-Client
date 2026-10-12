@@ -10,6 +10,13 @@ const context = await browser.newContext({ viewport: { width: 1365, height: 900 
 const page = await context.newPage();
 const requests = new Map();
 const errors = [];
+const sharedAccountGeometry = () => page.evaluate(() => Array.from(document.querySelectorAll(
+  '.account-heading-row h1, .account-heading-row a, .account-heading-row button, .account-telemetry, .tab-bar',
+)).map(element => {
+  const bounds = element.getBoundingClientRect();
+  return { left: bounds.left, top: bounds.top + scrollY, width: bounds.width, height: bounds.height,
+    fontSize: getComputedStyle(element).fontSize };
+}));
 const user = { id: 'admin', username: 'Performance', role: 'ADMIN', status: 'ACTIVE' };
 const note = { id: 'note', title: 'Performance note', owner: user, ownerId: user.id,
   content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Lazy editor check' }] }] },
@@ -109,6 +116,8 @@ try {
       'Account-list animation does not last 500ms');
   }
   await page.locator('a[href="/accounts/bench-0?tab=console"]').click();
+  await page.waitForTimeout(250);
+  const consoleHeaderGeometry = await sharedAccountGeometry();
   const consoleHeight = await page.locator('.console-output').evaluate(el => el.clientHeight);
   if (process.env.PERF_SCREENSHOT_PREFIX) await page.screenshot({ path: `${process.env.PERF_SCREENSHOT_PREFIX}-closed.png` });
   const consoleTabWidth = await page.locator('.tab-bar').evaluate(el => el.getBoundingClientRect().width);
@@ -135,6 +144,8 @@ try {
     overflow: document.documentElement.scrollHeight - innerHeight,
     earningsHeight: document.querySelector('[aria-label="Sell earnings"]').getBoundingClientRect().height,
     consoleHeight: document.querySelector('.console-output').getBoundingClientRect().height,
+    summaryBottomGap: document.querySelector('.earnings-summary').getBoundingClientRect().bottom
+      - document.querySelector('.earnings-totals').getBoundingClientRect().bottom,
   }));
   const graphProgress = graphMidHeight / graphOpenHeight;
   const consoleProgress = (consoleHeight - consoleMidHeight) / (consoleHeight - expandedConsoleHeight);
@@ -153,6 +164,7 @@ try {
       'Graph expansion did not exchange exactly the same height with the console');
     ensure(midOverflow <= 1 && openLayout.overflow <= 1 && openLayout.earningsHeight > openLayout.consoleHeight * 2,
       `Expanded earnings do not fit and dominate the screen: ${JSON.stringify({ midOverflow, ...openLayout })}`);
+    ensure(openLayout.summaryBottomGap >= 16, 'Income totals still have too little space below them');
   }
   await page.getByRole('button', { name: '24 Stunden', exact: true }).click();
   const chart = page.getByRole('img', { name: /Verkaufsgraph der letzten 24 Stunden/ });
@@ -201,6 +213,11 @@ try {
     ensure(Math.abs((await page.locator('.tab-bar').evaluate(el => el.getBoundingClientRect().width)) - consoleTabWidth) < 1,
       'Account tabs stretched only on the console page');
     await page.getByRole('button', { name: 'Save settings', exact: true }).waitFor();
+    const settingsHeaderGeometry = await sharedAccountGeometry();
+    ensure(settingsHeaderGeometry.length === consoleHeaderGeometry.length && settingsHeaderGeometry.every((box, index) => {
+      const before = consoleHeaderGeometry[index];
+      return box.fontSize === before.fontSize && ['left', 'top', 'width', 'height'].every(key => Math.abs(box[key] - before[key]) < 1);
+    }), `Switching tabs moved or resized shared controls: ${JSON.stringify({ consoleHeaderGeometry, settingsHeaderGeometry })}`);
     pageChecks.push('account-settings');
     await page.getByRole('button', { name: 'Console', exact: true }).click();
     await page.getByRole('button', { name: 'Verkaufsgraph ausklappen' }).waitFor();

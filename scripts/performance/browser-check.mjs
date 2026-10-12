@@ -113,10 +113,13 @@ try {
         graphHeight: document.querySelector('.earnings-chart-svg').getBoundingClientRect().height,
         pageOverflow: document.documentElement.scrollHeight - innerHeight,
         horizontalOverflow: document.documentElement.scrollWidth - innerWidth,
+        summaryBottomGap: document.querySelector('.earnings-summary').getBoundingClientRect().bottom
+          - document.querySelector('.earnings-totals').getBoundingClientRect().bottom,
       }));
       layouts[layouts.length - 1].open = open;
       if (process.env.PERF_VERIFY === '1' && (open.pageOverflow > 1 || open.horizontalOverflow > 1
-        || open.graphHeight < 40 || open.earningsHeight < open.consoleHeight * 2)) {
+        || open.graphHeight < 40 || open.earningsHeight < open.consoleHeight * 2
+        || open.summaryBottomGap < (viewport.height > 700 ? 12 : 3))) {
         throw new Error(`Open graph does not fit and dominate the viewport: ${JSON.stringify({ viewport, ...open })}`);
       }
       await page.mouse.move(0, 0);
