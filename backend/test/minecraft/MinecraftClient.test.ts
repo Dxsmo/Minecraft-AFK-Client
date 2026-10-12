@@ -633,6 +633,81 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(events).toContain("SERVER_MESSAGE:Server restarting");
   });
 
+  it.each([null, "§6HugoSMP"])("reconnects after a server fallback from %s despite continuing heartbeats", sender => {
+    vi.useFakeTimers();
+    try {
+      const client = makeClient();
+      const consoleEvents: string[] = [];
+      client.on("console", (event) => consoleEvents.push(event.message));
+      client.connect();
+      const old = lastChild();
+      old.send({ type: "spawn" });
+      old.send({ type: "heartbeat" });
+      const message = "Verbindung zum vorherigen Server verloren – du wurdest auf einen anderen Server verschoben.";
+      old.send({ type: "chat", sender, message: `§c${message}§r` });
+      expect(client.getStatus().status).toBe("RECONNECTING");
+      // The proxy can keep sending events even though the AFK server was lost.
+      old.send({ type: "heartbeat" });
+      old.send({ type: "spawn" });
+      old.send({ type: "chat", sender: null, message });
+      old.send({ type: "disconnect", reason: "late disconnect" });
+
+      expect(client.getStatus().status).toBe("RECONNECTING");
+      expect(client.getStatus().lastError).toBe(message);
+      expect(client.getStatus().connectedSince).toBeUndefined();
+      expect(consoleEvents).toContain("Reconnecting in 15s (attempt 1)...");
+      expect(consoleEvents.filter(line => line.startsWith("Reconnecting in"))).toHaveLength(1);
+      expect(client.sendCommand("/sell")).toBe(false);
+      expect(old.stdin.write.mock.calls.map(([line]) => JSON.parse(line)))
+        .toContainEqual({ type: "disconnect" });
+
+      vi.advanceTimersByTime(14_999);
+      expect(children).toHaveLength(1);
+      expect(old.kill).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1);
+      expect(children).toHaveLength(2);
+      lastChild().send({ type: "spawn" });
+      expect(client.getStatus().status).toBe("ONLINE");
+      expect(client.getStatus().lastError).toBeUndefined();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(["disabled", "manual stop"])("respects %s when a server fallback occurs", mode => {
+    vi.useFakeTimers();
+    try {
+      const client = makeClient({ autoReconnect: mode !== "disabled" });
+      client.connect();
+      const old = lastChild();
+      old.send({ type: "spawn" });
+      old.send({
+        type: "chat", sender: null,
+        message: "Verbindung zum vorherigen Server verloren - du wurdest auf einen anderen Server verschoben.",
+      });
+      if (mode === "manual stop") client.disconnect();
+      expect(client.getStatus().status).toBe(mode === "disabled" ? "ERROR" : "OFFLINE");
+      vi.advanceTimersByTime(60_000);
+      expect(children).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("keeps empty-packet diagnostics, normal transfers and player quotes from triggering reconnects", () => {
+    const client = makeClient();
+    client.connect();
+    const child = lastChild();
+    child.send({ type: "spawn" });
+    child.send({
+      type: "behavior_log",
+      message: "AFK: leeres Netzwerkpaket ohne Paket-ID übersprungen; nachfolgende Pakete werden weiter verarbeitet",
+    });
+    child.send({ type: "chat", sender: null, message: "Du wurdest auf einen anderen Server verschoben." });
+    const message = "Verbindung zum vorherigen Server verloren – du wurdest auf einen anderen Server verschoben.";
+    child.send({ type: "chat", sender: "Steve", message });
+    child.send({ type: "chat", sender: null, message: `Steve: ${message}` });
+    expect(client.getStatus().status).toBe("ONLINE");
+    expect(client.getStatus().lastError).toBeUndefined();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it("counts each confirmed sale once regardless of auto-sell timing or edition", async () => {
     const client = makeClient({ autoSellEnabled: false });
     const earnings = vi.fn();

@@ -46,6 +46,12 @@ const ONLINE_WATCHDOG_INTERVAL_MS = 15_000;
 function stripMinecraftFormatting(text: string): string {
   return text.replace(/§[0-9a-u]/gi, "").replace(/§/g, "");
 }
+
+/** Match the reported failed-server fallback, including proxy punctuation variants. */
+function isServerFallbackMessage(message: string): boolean {
+  return /^Verbindung zum vorherigen Server verloren\s*[–—-]\s*du wurdest auf einen anderen Server verschoben[.!]?$/iu
+    .test(message.trim().replace(/\s+/g, " "));
+}
 /**
  * Wraps the Azalea Rust bot subprocess (one per Minecraft account) and exposes
  * a small state machine plus console/status/profile event streams.
@@ -415,7 +421,8 @@ export class MinecraftClient extends EventEmitter {
         const { sender, message } = event as { sender: string | null; message: string };
         const clean = stripMinecraftFormatting(message);
         // HugoSMP sends its own announcements through the named chat channel.
-        if (!sender || stripMinecraftFormatting(sender).toLowerCase() === "hugosmp") {
+        const fromServer = !sender || stripMinecraftFormatting(sender).toLowerCase() === "hugosmp";
+        if (fromServer) {
           const seconds = parseWorldRestartSeconds(clean);
           if (seconds !== null) {
             this.worldRestartAt = Date.now() + seconds * 1000;
@@ -431,6 +438,12 @@ export class MinecraftClient extends EventEmitter {
         this.emit("chat", { minecraftAccountId: this.config.id, message: clean });
         if (sender) this.emitConsole("CHAT", `<${stripMinecraftFormatting(sender)}> ${clean}`);
         else this.emitConsole("SERVER_MESSAGE", clean);
+        if (fromServer && isServerFallbackMessage(clean)) {
+          // The proxy connection and tick heartbeats can remain healthy on the
+          // fallback server. Neither a disconnect nor the hang watchdog fires.
+          this.emitConsole("WARNING", "Spielserver-Verbindung verloren; Wiederverbindung gemäß Auto-Reconnect-Einstellung");
+          this.handleConnectionFailure(clean);
+        }
         break;
       }
 

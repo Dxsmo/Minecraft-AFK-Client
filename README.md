@@ -315,7 +315,14 @@ additional users access afterwards in the account's **Settings** panel):
   destroys an older one and any past price stand stays retrievable.
 - `autoReconnect` – fixed 15s retry delay (no jitter) after a dropped
   connection, retried indefinitely as long as the client isn't manually
-  stopped; can be disabled per account at any time
+  stopped; can be disabled per account at any time. The server announcement
+  `Verbindung zum vorherigen Server verloren – du wurdest auf einen anderen
+  Server verschoben.` also triggers this recovery: a proxy can keep the bot's
+  connection and tick heartbeat alive on a fallback server after the AFK server
+  is lost. Normal transfers and player chat do not trigger recovery. With
+  auto-reconnect disabled, the failed connection is stopped and reported as an
+  error. Rejoining uses the configured server address; the destination within
+  that network is chosen by the server.
 - Any admin or user assigned to the account can edit its settings,
   start/stop/restart it, and delete it entirely. Admins and creators who still
   have access can grant other users access by entering their exact username in
