@@ -28,6 +28,12 @@ OS error code. `poll_writer` remembers completion so callers can safely poll it
 again while incoming disconnect frames are drained. The stock writer poller is
 exposed for the simulation to disable the complete connection plugin, matching
 production; leaving it enabled would bypass the AFK reader's drain policy.
+The standard comparison reader now uses the same public `try_read` wrapper so
+it also reclaims consumed buffer prefixes. Its raw packet handler silently skips
+empty payloads, preserving valid one-byte bundle delimiters. It otherwise retains
+Azalea's unbounded read-until-empty scheduling and normal packet callbacks.
+`Simulation::new_with_plugins` accepts the production plugin group, allowing
+both network modes to exercise their actual registration and wire behavior.
 
 Keep the patch aligned with Azalea when changing its revision. Remove the local
 copy if upstream exposes an equivalent nonblocking reader API.

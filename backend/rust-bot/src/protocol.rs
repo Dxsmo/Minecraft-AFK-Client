@@ -2,6 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JavaNetworkMode {
+    #[default]
+    Optimized,
+    Standard,
+}
+
 /// The first line sent on stdin when the process starts.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -21,6 +29,9 @@ pub struct Config {
     /// Directory used to persist the Microsoft auth token cache for this
     /// specific account, so re-authentication is only needed once.
     pub cache_dir: String,
+    /// Optional per-account comparison with Azalea's standard network reader.
+    #[serde(default)]
+    pub java_network_mode: JavaNetworkMode,
 
     /// When true, continuously sneak/crouch.
     #[serde(default)]

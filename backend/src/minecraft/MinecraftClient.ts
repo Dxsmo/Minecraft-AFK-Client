@@ -52,6 +52,13 @@ function isServerFallbackMessage(message: string): boolean {
   return /^Verbindung zum vorherigen Server verloren\s*[–—-]\s*du wurdest auf einen anderen Server verschoben[.!]?$/iu
     .test(message.trim().replace(/\s+/g, " "));
 }
+
+function javaNetworkMode(account: ClientRuntimeConfig): "optimized" | "standard" {
+  const selected = (process.env.JAVA_STANDARD_NETWORK_ACCOUNTS ?? "")
+    .split(",").map(value => value.trim()).filter(Boolean)
+    .some(value => value === "*" || value === account.id || value.toLowerCase() === account.name.toLowerCase());
+  return selected ? "standard" : "optimized";
+}
 /**
  * Wraps the Azalea Rust bot subprocess (one per Minecraft account) and exposes
  * a small state machine plus console/status/profile event streams.
@@ -312,6 +319,9 @@ export class MinecraftClient extends EventEmitter {
       port: this.config.serverPort,
       auth_type: this.config.authType === "MICROSOFT" ? "microsoft" : "offline",
       username: this.config.name,
+      ...(this.config.edition === "JAVA" ? {
+        java_network_mode: javaNetworkMode(this.config),
+      } : {}),
       // Consumed by the Bedrock bot (empty = auto-detect); ignored by Azalea.
       version: this.config.minecraftVersion,
       email: this.config.credentialsSecret,

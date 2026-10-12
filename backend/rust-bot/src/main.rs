@@ -16,6 +16,7 @@ mod afk_network;
 mod behaviors;
 mod msauth;
 mod mspassword;
+mod network_mode;
 mod protocol;
 mod server_message_details;
 
@@ -24,7 +25,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use azalea::app::PluginGroup;
 use azalea::entity::metadata::Health;
 use azalea::prelude::*;
 use azalea::protocol::packets::game::ClientboundGamePacket;
@@ -32,7 +32,7 @@ use azalea::ClientInformation;
 use parking_lot::Mutex;
 
 use behaviors::BehaviorState;
-use protocol::{Command, Config, OutEvent};
+use protocol::{Command, Config, JavaNetworkMode, OutEvent};
 
 /// How long to wait for the bot to spawn into the world before giving up on a
 /// connection attempt. Azalea doesn't reliably surface an event for every kind
@@ -97,7 +97,9 @@ fn shared() -> &'static Arc<Mutex<Shared>> {
 }
 
 #[derive(Clone, Component, Default)]
-struct State;
+struct State {
+    network_mode: JavaNetworkMode,
+}
 
 /// Entry point. We drive Azalea on a **single-threaded** Tokio runtime plus a
 /// [`LocalSet`](tokio::task::LocalSet): one Minecraft account is very light, and
@@ -159,15 +161,10 @@ async fn async_main() -> AppExit {
     //    auto-reconnect — Node owns that policy and respawns us on exit.
     let address = format!("{}:{}", config.host, config.port);
     ClientBuilder::new_without_plugins()
-        .add_plugins(
-            azalea::DefaultPlugins
-                .build()
-                .disable::<azalea::connection::ConnectionPlugin>(),
-        )
+        .add_plugins(network_mode::client_plugins(config.java_network_mode))
         .add_plugins(azalea::bot::DefaultBotPlugins)
-        .add_plugins(afk_network::AfkNetworkPlugin)
         .set_handler(handle)
-        .set_state(State)
+        .set_state(State { network_mode: config.java_network_mode })
         .reconnect_after(None::<std::time::Duration>)
         .start(account, address.as_str())
         .await
@@ -282,7 +279,7 @@ fn process_pending_commands(bot: &Client) {
 
 /// The per-bot Azalea event handler. Translates Azalea events into NDJSON
 /// [`OutEvent`]s, applies queued [`Command`]s and drives behaviors on ticks.
-async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
+async fn handle(bot: Client, event: Event, state: State) -> eyre::Result<()> {
     process_pending_commands(&bot);
     let is_tick = matches!(&event, Event::Tick);
     match event {
@@ -294,9 +291,7 @@ async fn handle(bot: Client, event: Event, _state: State) -> eyre::Result<()> {
                 ..Default::default()
             });
             emit(&OutEvent::BehaviorLog {
-                message:
-                    "AFK-Netzwerk aktiv: Item-Pakete vor Dekodierung gefiltert, separate Limits für Item-Fluten und Spielaktionen"
-                        .into(),
+                message: network_mode::startup_message(state.network_mode).into(),
             });
         }
         Event::Login => {
@@ -413,7 +408,7 @@ mod tests {
             entity,
             ecs: Arc::new(RwLock::new(world)),
         };
-        futures::executor::block_on(handle(bot.clone(), Event::KeepAlive(1), State)).unwrap();
+        futures::executor::block_on(handle(bot.clone(), Event::KeepAlive(1), State::default())).unwrap();
         assert_eq!(*sent.lock(), vec!["/home farm"]);
         assert!(shared().lock().pending.is_empty());
     }

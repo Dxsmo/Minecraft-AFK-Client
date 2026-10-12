@@ -518,8 +518,6 @@ fn read_packets(ecs: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use azalea::app::Plugin;
-    use azalea::ecs::schedule::ScheduleCleanupPolicy;
     use azalea::entity::{inventory::Inventory, EntityKindComponent};
     use azalea::protocol::packets::{game::*, Packet};
     use azalea::registry::builtin::ItemKind;
@@ -531,36 +529,14 @@ mod tests {
     use azalea_inventory::ItemStack;
 
     fn simulation() -> Simulation {
-        let mut simulation = Simulation::new(ConnectionProtocol::Game);
-        // Production disables the complete ConnectionPlugin. Remove both its
-        // reader and writer poller so tests do not run a second disconnect path.
-        // Retain Azalea's protocol, inventory, movement and physics systems.
-        simulation
-            .app
-            .world_mut()
-            .schedule_scope(PreUpdate, |world, schedule| {
-                assert_eq!(
-                    schedule
-                        .remove_systems_in_set(
-                            azalea::connection::read_packets,
-                            world,
-                            ScheduleCleanupPolicy::RemoveSystemsOnly,
-                        )
-                        .unwrap(),
-                    1
-                );
-                assert_eq!(
-                    schedule
-                        .remove_systems_in_set(
-                            azalea::connection::poll_all_writer_tasks,
-                            world,
-                            ScheduleCleanupPolicy::RemoveSystemsOnly,
-                        )
-                        .unwrap(),
-                    1
-                );
-            });
-        AfkNetworkPlugin.build(&mut simulation.app);
+        simulation_with_mode(crate::protocol::JavaNetworkMode::Optimized)
+    }
+
+    fn simulation_with_mode(mode: crate::protocol::JavaNetworkMode) -> Simulation {
+        let mut simulation = Simulation::new_with_plugins(
+            ConnectionProtocol::Game,
+            crate::network_mode::client_plugins(mode),
+        );
         simulation.receive_packet(default_login_packet());
         simulation.tick();
         simulation
@@ -676,128 +652,182 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        for threshold in [None, Some(1), Some(64)] {
-            for encrypted in [false, true] {
-                let mut sim = simulation();
-                runtime.block_on(async {
-                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                    let (socket, accepted) = tokio::join!(
-                        TcpStream::connect(listener.local_addr().unwrap()), listener.accept(),
-                    );
-                    let socket = socket.unwrap();
-                    let (server, _) = accepted.unwrap();
-                    socket.set_nodelay(true).unwrap();
-                    server.set_nodelay(true).unwrap();
-                    let mut server = Connection::new_from_stream(server).await.unwrap().login();
-                    if let Some(threshold) = threshold {
-                        server.set_compression_threshold(threshold as i32);
-                    }
-                    let (read_stream, write_stream) = socket.into_split();
-                    let mut connection = RawConnection::new(
-                        RawReadConnection {
-                            read_stream, buffer: Cursor::new(Vec::new()),
-                            compression_threshold: threshold, dec_cipher: None,
-                        },
-                        RawWriteConnection {
-                            write_stream, compression_threshold: threshold, enc_cipher: None,
-                        },
-                        ConnectionProtocol::Game,
-                    );
-                    if encrypted {
-                        let key = *b"1234567890123456";
-                        server.set_encryption_key(key);
-                        connection.net_conn().unwrap().set_encryption_key(key);
-                    }
-                    sim.app.world_mut().entity_mut(sim.entity).insert(connection);
-                    let packets: [ClientboundGamePacket; 9] = [
-                        ClientboundKeepAlive { id: 42 }.into_variant(),
-                        ClientboundPing { id: 44 }.into_variant(),
-                        ClientboundPlayerPosition {
-                            id: 45,
-                            change: azalea::protocol::common::movements::PositionMoveRotation {
-                                pos: azalea::Vec3::ZERO,
-                                delta: azalea::Vec3::ZERO,
-                                look_direction: azalea::entity::LookDirection::new(0.0, 0.0),
+        for mode in [
+            crate::protocol::JavaNetworkMode::Optimized,
+            crate::protocol::JavaNetworkMode::Standard,
+        ] {
+            for threshold in [None, Some(1), Some(64)] {
+                for encrypted in [false, true] {
+                    let mut sim = simulation_with_mode(mode);
+                    runtime.block_on(async {
+                        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                        let (socket, accepted) = tokio::join!(
+                            TcpStream::connect(listener.local_addr().unwrap()),
+                            listener.accept(),
+                        );
+                        let socket = socket.unwrap();
+                        let (server, _) = accepted.unwrap();
+                        socket.set_nodelay(true).unwrap();
+                        server.set_nodelay(true).unwrap();
+                        let mut server = Connection::new_from_stream(server).await.unwrap().login();
+                        if let Some(threshold) = threshold {
+                            server.set_compression_threshold(threshold as i32);
+                        }
+                        let (read_stream, write_stream) = socket.into_split();
+                        let mut connection = RawConnection::new(
+                            RawReadConnection {
+                                read_stream,
+                                buffer: Cursor::new(Vec::new()),
+                                compression_threshold: threshold,
+                                dec_cipher: None,
                             },
-                            relative: Default::default(),
-                        }.into_variant(),
-                        ClientboundChunkBatchStart.into_variant(),
-                        ClientboundChunkBatchFinished { batch_size: 1 }.into_variant(),
-                        ClientboundBundleDelimiter.into_variant(),
-                        ClientboundContainerSetSlot {
-                            container_id: 0, state_id: 7, slot: 9,
-                            item_stack: ItemStack::new(ItemKind::Beef, 64),
-                        }.into_variant(),
-                        ClientboundBundleDelimiter.into_variant(),
-                        ClientboundKeepAlive { id: 43 }.into_variant(),
-                    ];
-                    let mut bytes = Vec::new();
-                    for packet in &packets {
-                        bytes.extend(encode_to_network_packet(
-                            &[], threshold, &mut server.writer.raw.enc_cipher,
-                        ));
-                        bytes.extend(encode_to_network_packet(
-                            &serialize_packet(packet).unwrap(), threshold,
-                            &mut server.writer.raw.enc_cipher,
-                        ));
-                    }
-                    // Force the client to retain incomplete lengths, encrypted
-                    // frames and zlib streams across separate socket reads.
-                    for byte in bytes {
-                        server.writer.raw.write_stream.write_all(&[byte]).await.unwrap();
-                        tokio::time::sleep(Duration::from_millis(1)).await;
-                        sim.tick();
-                    }
-                    for _ in 0..10 {
-                        tokio::time::sleep(Duration::from_millis(1)).await;
-                        sim.tick();
-                    }
-                    let replies = tokio::time::timeout(Duration::from_secs(3), async {
-                        let mut keepalives = Vec::new();
-                        let mut pongs = Vec::new();
-                        let mut teleports = Vec::new();
-                        let mut batches = 0;
-                        while keepalives.len() + pongs.len() + teleports.len() + batches < 5 {
-                            let raw = server.reader.raw.read().await.unwrap();
-                            let packet: ServerboundGamePacket =
-                                deserialize_packet(&mut Cursor::new(raw.as_ref())).unwrap();
-                            match packet {
-                                ServerboundGamePacket::KeepAlive(p) => keepalives.push(p.id),
-                                ServerboundGamePacket::Pong(p) => pongs.push(p.id),
-                                ServerboundGamePacket::AcceptTeleportation(p) => teleports.push(p.id),
-                                ServerboundGamePacket::ChunkBatchReceived(_) => batches += 1,
-                                _ => {}
+                            RawWriteConnection {
+                                write_stream,
+                                compression_threshold: threshold,
+                                enc_cipher: None,
+                            },
+                            ConnectionProtocol::Game,
+                        );
+                        if encrypted {
+                            let key = *b"1234567890123456";
+                            server.set_encryption_key(key);
+                            connection.net_conn().unwrap().set_encryption_key(key);
+                        }
+                        sim.app
+                            .world_mut()
+                            .entity_mut(sim.entity)
+                            .insert(connection);
+                        let packets: [ClientboundGamePacket; 9] = [
+                            ClientboundKeepAlive { id: 42 }.into_variant(),
+                            ClientboundPing { id: 44 }.into_variant(),
+                            ClientboundPlayerPosition {
+                                id: 45,
+                                change: azalea::protocol::common::movements::PositionMoveRotation {
+                                    pos: azalea::Vec3::ZERO,
+                                    delta: azalea::Vec3::ZERO,
+                                    look_direction: azalea::entity::LookDirection::new(0.0, 0.0),
+                                },
+                                relative: Default::default(),
+                            }
+                            .into_variant(),
+                            ClientboundChunkBatchStart.into_variant(),
+                            ClientboundChunkBatchFinished { batch_size: 1 }.into_variant(),
+                            ClientboundBundleDelimiter.into_variant(),
+                            ClientboundContainerSetSlot {
+                                container_id: 0,
+                                state_id: 7,
+                                slot: 9,
+                                item_stack: ItemStack::new(ItemKind::Beef, 64),
+                            }
+                            .into_variant(),
+                            ClientboundBundleDelimiter.into_variant(),
+                            ClientboundKeepAlive { id: 43 }.into_variant(),
+                        ];
+                        let mut bytes = Vec::new();
+                        for packet in &packets {
+                            bytes.extend(encode_to_network_packet(
+                                &[],
+                                threshold,
+                                &mut server.writer.raw.enc_cipher,
+                            ));
+                            bytes.extend(encode_to_network_packet(
+                                &serialize_packet(packet).unwrap(),
+                                threshold,
+                                &mut server.writer.raw.enc_cipher,
+                            ));
+                        }
+                        // Force the client to retain incomplete lengths, encrypted
+                        // frames and zlib streams across separate socket reads.
+                        for byte in bytes {
+                            server
+                                .writer
+                                .raw
+                                .write_stream
+                                .write_all(&[byte])
+                                .await
+                                .unwrap();
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                            sim.tick();
+                        }
+                        for _ in 0..10 {
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                            sim.tick();
+                        }
+                        let replies = tokio::time::timeout(Duration::from_secs(3), async {
+                            let mut keepalives = Vec::new();
+                            let mut pongs = Vec::new();
+                            let mut teleports = Vec::new();
+                            let mut batches = 0;
+                            while keepalives.len() + pongs.len() + teleports.len() + batches < 5 {
+                                let raw = server.reader.raw.read().await.unwrap();
+                                let packet: ServerboundGamePacket =
+                                    deserialize_packet(&mut Cursor::new(raw.as_ref())).unwrap();
+                                match packet {
+                                    ServerboundGamePacket::KeepAlive(p) => keepalives.push(p.id),
+                                    ServerboundGamePacket::Pong(p) => pongs.push(p.id),
+                                    ServerboundGamePacket::AcceptTeleportation(p) => {
+                                        teleports.push(p.id)
+                                    }
+                                    ServerboundGamePacket::ChunkBatchReceived(_) => batches += 1,
+                                    _ => {}
+                                }
+                            }
+                            (keepalives, pongs, teleports, batches)
+                        })
+                        .await
+                        .expect("empty frames must not prevent required server replies");
+                        assert_eq!(
+                            replies,
+                            (vec![42, 43], vec![44], vec![45], 1),
+                            "threshold={threshold:?}, encrypted={encrypted}"
+                        );
+                        if mode == crate::protocol::JavaNetworkMode::Optimized {
+                            let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
+                            assert_eq!(filter.empty_payloads, packets.len() as u64);
+                            assert!(filter.last_warning_at.is_none());
+                            assert_eq!(filter.keepalives_received, 2);
+                            assert!(filter.last_keepalive_at.is_some());
+                        }
+                        let stats = sim
+                            .app
+                            .world()
+                            .get::<RawConnection>(sim.entity)
+                            .unwrap()
+                            .network_diagnostics()
+                            .unwrap();
+                        assert_eq!(stats.keepalives_enqueued, 2);
+                        assert_eq!(stats.keepalives_written, 2);
+                        assert_eq!(
+                            sim.app
+                                .world()
+                                .get::<Inventory>(sim.entity)
+                                .unwrap()
+                                .inventory_menu
+                                .slot(9)
+                                .unwrap()
+                                .count(),
+                            64
+                        );
+                        server.writer.raw.write_stream.shutdown().await.unwrap();
+                        for _ in 0..50 {
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                            sim.tick();
+                            if sim.app.world().get::<RawConnection>(sim.entity).is_none() {
+                                break;
                             }
                         }
-                        (keepalives, pongs, teleports, batches)
-                    }).await.expect("empty frames must not prevent required server replies");
-                    assert_eq!(replies, (vec![42, 43], vec![44], vec![45], 1),
-                        "threshold={threshold:?}, encrypted={encrypted}");
-                    let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
-                    assert_eq!(filter.empty_payloads, packets.len() as u64);
-                    assert!(filter.last_warning_at.is_none());
-                    assert_eq!(filter.keepalives_received, 2);
-                    assert!(filter.last_keepalive_at.is_some());
-                    let stats = sim.app.world().get::<RawConnection>(sim.entity).unwrap()
-                        .network_diagnostics().unwrap();
-                    assert_eq!(stats.keepalives_enqueued, 2);
-                    assert_eq!(stats.keepalives_written, 2);
-                    assert_eq!(sim.app.world().get::<Inventory>(sim.entity).unwrap()
-                        .inventory_menu.slot(9).unwrap().count(), 64);
-                    server.writer.raw.write_stream.shutdown().await.unwrap();
-                    for _ in 0..50 {
-                        tokio::time::sleep(Duration::from_millis(1)).await;
-                        sim.tick();
-                        if sim.app.world().get::<RawConnection>(sim.entity).is_none() { break; }
-                    }
-                    assert!(sim.app.world().get::<RawConnection>(sim.entity).is_none());
-                    let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
-                    assert_eq!(filter.last_transport.unwrap().keepalives_written, 2);
-                    let diagnostic = diagnostics_message(sim.app.world(), sim.entity, filter);
-                    assert!(diagnostic.contains("Keepalive erhalten 2"));
-                    assert!(diagnostic.contains("an TCP übergeben 2"));
-                    assert_eq!(filter.read_errors, 1);
-                });
+                        assert!(sim.app.world().get::<RawConnection>(sim.entity).is_none());
+                        if mode == crate::protocol::JavaNetworkMode::Optimized {
+                            let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
+                            assert_eq!(filter.last_transport.unwrap().keepalives_written, 2);
+                            let diagnostic =
+                                diagnostics_message(sim.app.world(), sim.entity, filter);
+                            assert!(diagnostic.contains("Keepalive erhalten 2"));
+                            assert!(diagnostic.contains("an TCP übergeben 2"));
+                            assert_eq!(filter.read_errors, 1);
+                        }
+                    });
+                }
             }
         }
     }

@@ -59,7 +59,12 @@ pub struct Simulation {
 
 impl Simulation {
     pub fn new(conn_protocol: ConnectionProtocol) -> Self {
-        let mut app = create_simulation_app();
+        Self::new_with_plugins(conn_protocol, bevy_app::PluginGroup::build(crate::DefaultPlugins))
+    }
+
+    /// Use the production plugin selection to compare alternative network readers.
+    pub fn new_with_plugins(conn_protocol: ConnectionProtocol, plugins: bevy_app::PluginGroupBuilder) -> Self {
+        let mut app = create_simulation_app(plugins);
 
         let mut entity = app.world_mut().spawn_empty();
         let (player, rt) =
@@ -299,10 +304,9 @@ fn create_local_player_bundle(
     (local_player_bundle, rt)
 }
 
-fn create_simulation_app() -> App {
+fn create_simulation_app(mut plugins: bevy_app::PluginGroupBuilder) -> App {
     let mut app = App::new();
 
-    let mut plugins = bevy_app::PluginGroup::build(crate::DefaultPlugins);
     #[cfg(feature = "log")]
     {
         plugins = plugins.disable::<bevy_log::LogPlugin>();

@@ -85,7 +85,7 @@ pub fn read_packets(ecs: &mut World) {
         loop {
             let mut conn = conn_query.get_mut(ecs, entity).unwrap();
             let net_conn = conn.net_conn().unwrap();
-            let read_res = net_conn.reader.try_read();
+            let read_res = net_conn.try_read();
             let state = conn.state;
             match read_res {
                 Ok(Some(raw_packet)) => {
@@ -276,6 +276,11 @@ pub fn handle_raw_packet(
     state: ConnectionProtocol,
     queued_packet_events: &mut QueuedPacketEvents,
 ) -> Result<(), Box<ReadPacketError>> {
+    // A framed empty payload has no packet ID. Preserve the same silent skip
+    // in the standard comparison reader; valid one-byte bundle delimiters stay.
+    if raw_packet.is_empty() {
+        return Ok(());
+    }
     let stream = &mut Cursor::new(raw_packet);
     match state {
         ConnectionProtocol::Handshake => {

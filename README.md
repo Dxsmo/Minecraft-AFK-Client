@@ -293,6 +293,22 @@ additional users access afterwards in the account's **Settings** panel):
   are not logged as failure details. Output is limited to 1,024 characters.
   This improves diagnostics, but cannot reveal a
   reason the proxy did not send or prevent an external server from disconnecting.
+  To compare the AFK network path with Azalea's standard reader, set
+  `JAVA_STANDARD_NETWORK_ACCOUNTS=MogliHD` in the Compose `.env` file and rebuild
+  the backend. Use the dashboard account name or stable account ID from its URL;
+  multiple selections are comma-separated. `*` selects all Java accounts.
+  Only selected accounts use `java_network_mode: standard`; an empty selection
+  and older configs default to the optimized reader. The startup line
+  `Java-Netzwerk: Standardmodus (Azalea), AFK-Paketfilter deaktiviert` confirms
+  the comparison mode. It keeps the same pinned protocol/client patches but
+  uses the standard packet scheduling, item processing and packet callbacks.
+  Both readers silently skip empty payloads and reclaim consumed buffer prefixes.
+  AFK-specific counters/tooltips are supplied by the optimized reader and are
+  unavailable in standard mode. Start with one account because standard mode
+  processes the full item traffic. Keep it at the same farm with AutoSell off
+  while comparing disconnects; this mode is a diagnostic comparison, not a
+  confirmed remedy for server loss. To restore the AFK reader, clear the variable
+  and recreate the backend container. Selection survives automatic reconnects.
 - Sell earnings under the console keep the rolling 5m/1h/24h totals. Hovering
   over the earnings or using the arrow opens a live graph for the last 1h, 6h or 24h, with time
   labels below and amounts on the right. All views use completed, clock-aligned

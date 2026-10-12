@@ -114,11 +114,13 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     children.length = 0;
     active.length = 0;
     vi.clearAllMocks();
+    vi.stubEnv("JAVA_STANDARD_NETWORK_ACCOUNTS", "");
   });
 
   afterEach(() => {
     // Tear down any clients so their reconnect/kill timers don't dangle.
     for (const c of active) c.dispose();
+    vi.unstubAllEnvs();
   });
 
   it("starts OFFLINE, goes CONNECTING on connect, ONLINE on spawn", async () => {
@@ -143,8 +145,48 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(config.host).toBe("play.example.com");
     expect(config.port).toBe(25566);
     expect(config.auth_type).toBe("offline");
+    expect(config.java_network_mode).toBe("optimized");
     expect(config).not.toHaveProperty("auto_command_enabled");
     expect(config).not.toHaveProperty("tpauto_enabled");
+  });
+
+  it.each([
+    [" acc-1 , other ", "standard"],
+    ["bot_01", "standard"],
+    ["*", "standard"],
+    ["acc-12", "optimized"],
+    ["another-account", "optimized"],
+    [" , ", "optimized"],
+  ])("selects the Java reader for %s without enabling automation", (selection, expected) => {
+    vi.stubEnv("JAVA_STANDARD_NETWORK_ACCOUNTS", selection);
+    const client = makeClient({ autoSellEnabled: false });
+    client.connect();
+    const config = JSON.parse(String(lastChild().stdin.write.mock.calls[0][0]));
+    expect(config.java_network_mode).toBe(expected);
+    expect(config.autosell_enabled).toBe(false);
+  });
+
+  it("keeps the selected Java reader across reconnects", () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubEnv("JAVA_STANDARD_NETWORK_ACCOUNTS", "acc-1");
+      const client = makeClient();
+      client.connect();
+      lastChild().send({ type: "spawn" });
+      lastChild().send({ type: "disconnect", reason: "server closed" });
+      vi.advanceTimersByTime(15_000);
+      expect(children).toHaveLength(2);
+      const config = JSON.parse(String(lastChild().stdin.write.mock.calls[0][0]));
+      expect(config.java_network_mode).toBe("standard");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not apply Java network selection to Bedrock", () => {
+    vi.stubEnv("JAVA_STANDARD_NETWORK_ACCOUNTS", "*");
+    const client = makeClient({ edition: "BEDROCK" });
+    client.connect();
+    const config = JSON.parse(String(lastChild().stdin.write.mock.calls[0][0]));
+    expect(config).not.toHaveProperty("java_network_mode");
   });
 
   it.each(["JAVA", "BEDROCK"] as const)("keeps %s offline for five seconds on restart and force-kills a stuck old process", edition => {
