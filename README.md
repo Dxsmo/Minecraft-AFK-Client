@@ -224,6 +224,10 @@ additional users access afterwards in the account's **Settings** panel):
   500ms for a sell menu to open and retries without a menu-timeout console line.
   Teleports/world changes cancel stale cycles.
   Empty or stale local inventory snapshots do not delay the configured interval.
+  A missing or late menu never shortens that interval either: the silent 500ms
+  menu deadline closes an unresolved attempt, but does not schedule extra sell
+  commands before the next configured cycle. Farm pickups during a timeout and
+  late empty menu replies obey the same command cadence.
   World-restart countdowns pause automatic selling from 10 seconds before the
   announced restart until 3 minutes afterwards, including bot reconnects.
   HugoSMP announcements are recognized in both system messages and named chat.

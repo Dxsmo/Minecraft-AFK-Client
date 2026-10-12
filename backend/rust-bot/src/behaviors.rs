@@ -1119,7 +1119,10 @@ impl BehaviorState {
                 if now.saturating_duration_since(since) >= AUTOSELL_MENU_TIMEOUT {
                     self.close_sell_menu(bot);
                     self.autosell_phase = AutoSellPhase::Idle;
-                    let retry_at = now + AUTOSELL_ORPHAN_RECOVERY_DELAY;
+                    // A 500ms menu timeout is not permission to send a new
+                    // command early. Farm pickups must preserve the requested
+                    // sell cadence even when the initial snapshot was empty.
+                    let retry_at = (now + AUTOSELL_ORPHAN_RECOVERY_DELAY).max(since + interval);
                     if started_empty && player_item_count(bot) > 0 {
                         self.next_autosell_at = retry_at;
                     } else {
@@ -1189,7 +1192,8 @@ impl BehaviorState {
             return true;
         }
         inv.close();
-        self.next_autosell_at = now + AUTOSELL_ORPHAN_RECOVERY_DELAY;
+        // A late empty reply must not rewind the command schedule either.
+        self.next_autosell_at = self.next_autosell_at.max(now + AUTOSELL_ORPHAN_RECOVERY_DELAY);
         self.log_autosell_failure(now, "verspätetes/offenes Verkaufsmenü zurückgesetzt");
         true
     }
@@ -2525,6 +2529,38 @@ mod tests {
             AutoSellPhase::Closing { .. }
         ));
         assert!(state.last_autosell_failure_log.is_none());
+    }
+
+    #[test]
+    fn missing_and_late_sell_replies_never_bypass_the_configured_interval() {
+        for pickup_during_timeout in [false, true] {
+            let (client, mut state) = sell_client();
+            state.config.autosell_interval_seconds = 5.0;
+            let since = Instant::now();
+            tick_sell(&client, &mut state, since);
+            assert_eq!(take_commands(&client), vec!["/sell"]);
+            if pickup_during_timeout {
+                put_player_stack(&client);
+            }
+            tick_sell(&client, &mut state, since + Duration::from_millis(500));
+            assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
+            assert!(state.last_autosell_failure_log.is_none());
+            if !pickup_during_timeout {
+                // A late, empty menu must be closed without turning its
+                // recovery delay into a second /sell before the due time.
+                open_empty_sell_menu(&client, &mut state);
+                assert!(state
+                    .recover_orphaned_autosell_menu(&client, since + Duration::from_millis(550),));
+                client.ecs.write().flush();
+            }
+            for millis in [650, 1000, 2000, 4000, 4999] {
+                tick_sell(&client, &mut state, since + Duration::from_millis(millis));
+                assert!(take_commands(&client).is_empty(),
+                    "an unconfirmed menu must not accelerate commands: pickup={pickup_during_timeout}, at={millis}ms");
+            }
+            tick_sell(&client, &mut state, since + Duration::from_secs(5));
+            assert_eq!(take_commands(&client), vec!["/sell"]);
+        }
     }
 
     #[test]
