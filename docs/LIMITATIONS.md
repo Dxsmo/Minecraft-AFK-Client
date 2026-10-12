@@ -42,6 +42,19 @@ dashboard) is edition-agnostic.
   the supplied code expiry. After authentication the normal connect deadline
   resumes. Console messages identify each connection stage and explicit
   Bedrock login refusals (including incompatible protocol versions).
+- **NBT recovery:** after spawn, an `Invalid tag: ... > 20` decode error in an
+  explicitly allowed game packet no longer terminates the client. The entire
+  failed packet is discarded; following packets in the batch still run, including
+  latency replies. World-initialization errors, item-registry errors, decoder
+  errors in unrecognized packets and other failures remain terminal.
+  Warnings report the packet name/ID, size,
+  client version and wire protocol, with no raw packet or authentication dumps.
+  Repeated warnings are limited to one per 30 seconds in each of the cosmetic
+  and inventory groups. This is recovery from unreadable server data, not a new
+  interpretation of invalid NBT tags; it does not establish which packet caused
+  a historical log that only said `undefined`.
+  The batch splitter also rejects incomplete lengths/payloads before decoding,
+  preventing the pinned library from passing an uninitialized buffer tail to NBT.
 - **Crouch:** emits `player_auth_input` at 20 Hz with held sneak flags and the
   server's own player position; acknowledges teleport input and reasserts sneak
   after transfers and HugoSMP home/TPA confirmations. Only the local player's
@@ -61,9 +74,26 @@ dashboard) is edition-agnostic.
   for five seconds; named delayed sell replies are closed without touching a
   subsequently opened home menu. Custom form-based sell menus
   are not implemented.
+- **Inventory recovery:** a failed inventory NBT packet invalidates cached
+  stacks and pending transfers, closes only an owned sell menu, and suspends
+  automatic sales. Slot deltas, partial contents and late acknowledgements cannot
+  resume sales; a successfully decoded full player-inventory snapshot is required.
+  Commands and input continue normally. If the server never resends a full
+  inventory, AutoSell remains paused rather than transferring stale stacks.
+  Valid Geyser GUI-title NBT now uses the packet's actual `position` field;
+  compatibility with `coordinates` is retained. An unreadable block-entity
+  packet clears cached titles before later menus can use them.
 - **Regression checks:** real installed Bedrock codecs for 1.21.50 and 1.21.130
   verify sneak, stack transfers, close ordering, timeout recovery, manual command
   priority, and selling during continuous join-time inventory updates.
+  Recovery tests additionally use the actual client/codec/batch reader for
+  1.21.50, 1.21.130, 1.26.40 and 1.26.51. A raw NBT fixture reproduces tag 115,
+  followed by latency/health packets in compressed plaintext and encrypted
+  batches; the next encrypted batch verifies that cipher/checksum state remains
+  synchronized. Tests cover invalid inventory data, fresh snapshot recovery,
+  manual commands, critical registry errors, warning limits and truncated frames.
+  `packetRecovery.ts` deliberately patches the pinned library's private Framer
+  API before creating a client; re-run these tests when changing that dependency.
 - **Not available on Bedrock:** `clean_spawner` (emits a warning) and Live View
   screenshots (headless, same as Java — see §2).
 

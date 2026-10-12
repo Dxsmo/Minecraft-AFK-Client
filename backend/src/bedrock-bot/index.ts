@@ -20,6 +20,7 @@ import { BehaviorState } from "./behaviors.js";
 import { BedrockConnectionProgress, bedrockLoginFailure } from "./connection.js";
 import { bedrockVersion } from "./version.js";
 import { discoverBedrockServer } from "./discovery.js";
+import { BedrockPacketRecovery, installBedrockFrameValidation, type BedrockDecodeClient } from "./packetRecovery.js";
 
 const CONNECT_TIMEOUT_MS =
   (Number.parseInt(process.env.BOT_CONNECT_TIMEOUT_SECS ?? "", 10) || 45) * 1000;
@@ -72,6 +73,7 @@ async function main(): Promise<void> {
     emit({ type: "behavior_log", message: `Bedrock: Server protocol ${advertised.protocol}; using client version ${selectedVersion}${version ? " (configured)" : " (auto)"}` });
     progress.advance("authentication");
     emit({ type: "behavior_log", message: "Bedrock: Server discovered; authenticating Microsoft/Xbox session" });
+    installBedrockFrameValidation();
     client = createClient({
       host: config.host,
       port: config.port || 19132,
@@ -145,6 +147,13 @@ async function main(): Promise<void> {
     try { c.close?.(); } catch { /* process exit still closes native sockets */ }
   };
 
+  const packetRecovery = new BedrockPacketRecovery(
+    client as unknown as BedrockDecodeClient,
+    behavior.inventory,
+    () => spawned,
+    message => emit({ type: "warning", message }),
+  );
+
   // --- Lifecycle events ---
   const onSession = () => {
     if (!progress.advance("transport")) return;
@@ -193,6 +202,7 @@ async function main(): Promise<void> {
   });
   c.on("error", (err: unknown) => {
     if (exiting) return;
+    if (packetRecovery.recover(err)) return;
     const options = (client as unknown as { options?: { version?: string } }).options;
     emit({ type: "connection_failed", error: progress.failureMessage(errMsg(err), config.host, config.port || 19132, options?.version ?? version) });
     shutdown(1);

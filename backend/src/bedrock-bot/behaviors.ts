@@ -180,7 +180,7 @@ export class BehaviorState {
     // Continuous auto-sell yields to any foreground task.
     const sellPaused = now >= this.restartPauseStart && now < this.restartPauseEnd;
     if (sellPaused) this.inventory.interrupt();
-    if (this.cfg.autosell_enabled && !actionSentThisTick && !sellPaused) {
+    if (this.cfg.autosell_enabled && !actionSentThisTick && !sellPaused && this.inventory.synchronized) {
       this.inventory.tick(now);
       if (this.inventory.busy || this.inventory.blocked) return;
       const interval = Math.max(0.25, this.cfg.autosell_interval_seconds ?? 60) * 1000;

@@ -29,10 +29,12 @@ export class BedrockInventory {
   private cancelledSellUntil = 0;
   private titles = new Map<string, string>();
   private lastFailureAt = -Infinity;
+  private needsFullPlayerContent = false;
   constructor(private sender: BotSender) {}
 
   get busy(): boolean { return this.requestedAt != null || !!this.container?.owned; }
   get blocked(): boolean { return !!this.container && !this.container.owned; }
+  get synchronized(): boolean { return !this.needsFullPlayerContent; }
   request(now: number): void { this.cancelledSellUntil = 0; this.requestedAt = now; this.targets = null; }
 
   reset(): void {
@@ -40,6 +42,18 @@ export class BedrockInventory {
     this.player = null; this.container = null; this.requestedAt = null;
     this.targets = null; this.pending = null;
   }
+
+  /** A lost inventory packet makes every cached stack potentially stale.
+   * Slot deltas and late transfer acknowledgements cannot repair that baseline. */
+  invalidateAfterDecodeFailure(): void {
+    this.needsFullPlayerContent = true;
+    this.player = null;
+    this.interrupt();
+    if (this.container) this.container.items = null;
+    this.cancelledSellUntil = Date.now() + 10_000;
+  }
+
+  clearMenuTitles(): void { this.titles.clear(); }
 
   interrupt(closeForeign = false, manualSell = false): void {
     if (closeForeign) {
@@ -65,8 +79,8 @@ export class BedrockInventory {
 
   /** Geyser carries Java GUI titles in the fake chest's CustomName NBT.
    * This identifies a late/startup sell GUI even after a spawn reset. */
-  onBlockEntity(packet: { coordinates?: unknown; nbt?: unknown }): void {
-    const position = positionKey(packet.coordinates);
+  onBlockEntity(packet: { position?: unknown; coordinates?: unknown; nbt?: unknown }): void {
+    const position = positionKey(packet.position ?? packet.coordinates);
     const nbt = packet.nbt as { value?: { CustomName?: { value?: unknown } } } | undefined;
     const title = nbt?.value?.CustomName?.value;
     if (!position || typeof title !== "string") return;
@@ -89,7 +103,11 @@ export class BedrockInventory {
 
   onContent(packet: { window_id: WindowId; input: BedrockItem[] }): void {
     if (!Array.isArray(packet.input)) return;
-    if (playerWindow(packet.window_id)) this.player = packet.input.map(item => ({ ...item }));
+    if (playerWindow(packet.window_id)) {
+      if (this.needsFullPlayerContent && packet.input.length < 36) return;
+      this.player = packet.input.map(item => ({ ...item }));
+      this.needsFullPlayerContent = false;
+    }
     else if (this.container?.id === packet.window_id) this.container.items = packet.input.map(item => ({ ...item }));
     this.confirmLegacyTransfer();
   }
@@ -97,6 +115,7 @@ export class BedrockInventory {
   onSlot(packet: { window_id: WindowId; slot: number; item: BedrockItem }): void {
     if (!Number.isInteger(packet.slot) || packet.slot < 0 || packet.slot >= 256) return;
     if (playerWindow(packet.window_id)) {
+      if (this.needsFullPlayerContent) return;
       // A slot update can precede the initial content packet during join.
       this.player ??= Array.from({ length: 36 }, empty);
       this.player[packet.slot] = { ...packet.item };
@@ -140,6 +159,7 @@ export class BedrockInventory {
   }
 
   tick(now: number): void {
+    if (this.needsFullPlayerContent) return;
     if (!this.busy) return;
     const menu = this.container;
     if (!menu?.owned) {

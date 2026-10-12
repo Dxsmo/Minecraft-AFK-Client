@@ -382,6 +382,13 @@ status are exposed.
 
 ### Bedrock UDP connection diagnostics
 
+For `Invalid tag: ... > 20` errors after spawning, the Bedrock reader now
+discards an unreadable, explicitly allowed game NBT packet and continues the
+connection. Warnings identify the packet and protocol instead of only reporting
+`undefined`. Failed inventory packets pause AutoSell until a complete fresh
+inventory arrives; commands remain available. Critical join/registry errors
+still reconnect. See [Bedrock recovery limits and tests](docs/LIMITATIONS.md#what-works-vs-what-is-limited-on-bedrock).
+
 If Microsoft authentication succeeds but Bedrock repeatedly reports a
 `RakNet/UDP connection ... Connect timed out`, run this from the repository
 on the affected host. It uses the existing backend container's network,
