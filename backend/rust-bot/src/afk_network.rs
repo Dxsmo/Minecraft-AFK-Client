@@ -233,11 +233,12 @@ fn diagnostics_message(ecs: &World, entity: Entity, filter: &ItemFilter) -> Stri
     let writes = transport.map_or_else(
         || "TCP-Schreibdaten unbekannt".to_owned(),
         |stats| format!(
-            "Keepalive eingereiht {}, an TCP übergeben {}; Schreibqueue {} Pakete; Lesepuffer {} Bytes{}",
+            "Keepalive eingereiht {}, an TCP übergeben {}; Schreibqueue {} Pakete; Lesepuffer {} Bytes (gesamt {} Bytes){}",
             stats.keepalives_enqueued,
             stats.keepalives_written,
             stats.packets_enqueued.saturating_sub(stats.packets_written),
             stats.buffered_bytes,
+            stats.read_buffer_bytes,
             stats.writer_error.map_or_else(String::new, |error| format!("; TCP-Schreibfehler: {error}")),
         ),
     );
@@ -645,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_frames_preserve_keepalive_replies_over_fragmented_compressed_encrypted_tcp() {
+    fn empty_frames_preserve_server_replies_over_fragmented_compressed_encrypted_tcp() {
         use azalea::protocol::connect::{Connection, RawReadConnection, RawWriteConnection};
         use azalea::protocol::write::{encode_to_network_packet, serialize_packet};
         use tokio::io::AsyncWriteExt;
@@ -688,8 +689,20 @@ mod tests {
                         connection.net_conn().unwrap().set_encryption_key(key);
                     }
                     sim.app.world_mut().entity_mut(sim.entity).insert(connection);
-                    let packets: [ClientboundGamePacket; 5] = [
+                    let packets: [ClientboundGamePacket; 9] = [
                         ClientboundKeepAlive { id: 42 }.into_variant(),
+                        ClientboundPing { id: 44 }.into_variant(),
+                        ClientboundPlayerPosition {
+                            id: 45,
+                            change: azalea::protocol::common::movements::PositionMoveRotation {
+                                pos: azalea::Vec3::ZERO,
+                                delta: azalea::Vec3::ZERO,
+                                look_direction: azalea::entity::LookDirection::new(0.0, 0.0),
+                            },
+                            relative: Default::default(),
+                        }.into_variant(),
+                        ClientboundChunkBatchStart.into_variant(),
+                        ClientboundChunkBatchFinished { batch_size: 1 }.into_variant(),
                         ClientboundBundleDelimiter.into_variant(),
                         ClientboundContainerSetSlot {
                             container_id: 0, state_id: 7, slot: 9,
@@ -720,18 +733,26 @@ mod tests {
                         sim.tick();
                     }
                     let replies = tokio::time::timeout(Duration::from_secs(3), async {
-                        let mut replies = Vec::new();
-                        while replies.len() < 2 {
+                        let mut keepalives = Vec::new();
+                        let mut pongs = Vec::new();
+                        let mut teleports = Vec::new();
+                        let mut batches = 0;
+                        while keepalives.len() + pongs.len() + teleports.len() + batches < 5 {
                             let raw = server.reader.raw.read().await.unwrap();
-                            if let ServerboundGamePacket::KeepAlive(packet) =
-                                deserialize_packet(&mut Cursor::new(raw.as_ref())).unwrap()
-                            {
-                                replies.push(packet.id);
+                            let packet: ServerboundGamePacket =
+                                deserialize_packet(&mut Cursor::new(raw.as_ref())).unwrap();
+                            match packet {
+                                ServerboundGamePacket::KeepAlive(p) => keepalives.push(p.id),
+                                ServerboundGamePacket::Pong(p) => pongs.push(p.id),
+                                ServerboundGamePacket::AcceptTeleportation(p) => teleports.push(p.id),
+                                ServerboundGamePacket::ChunkBatchReceived(_) => batches += 1,
+                                _ => {}
                             }
                         }
-                        replies
-                    }).await.expect("empty frames must not prevent keepalive replies");
-                    assert_eq!(replies, [42, 43], "threshold={threshold:?}, encrypted={encrypted}");
+                        (keepalives, pongs, teleports, batches)
+                    }).await.expect("empty frames must not prevent required server replies");
+                    assert_eq!(replies, (vec![42, 43], vec![44], vec![45], 1),
+                        "threshold={threshold:?}, encrypted={encrypted}");
                     let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
                     assert_eq!(filter.empty_payloads, packets.len() as u64);
                     assert!(filter.last_warning_at.is_none());
@@ -756,6 +777,105 @@ mod tests {
                     assert!(diagnostic.contains("Keepalive erhalten 2"));
                     assert!(diagnostic.contains("an TCP übergeben 2"));
                     assert_eq!(filter.read_errors, 1);
+                });
+            }
+        }
+    }
+
+    #[test]
+    fn continuous_fragmented_tcp_reclaims_consumed_read_buffer_bytes() {
+        use azalea::protocol::connect::{Connection, RawReadConnection, RawWriteConnection};
+        use azalea::protocol::write::{encode_to_network_packet, serialize_packet};
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::{TcpListener, TcpStream};
+
+        // Every write ends inside the next packet, so the buffer never becomes
+        // completely empty. Retaining the consumed prefix would grow forever.
+        const PACKETS: usize = 8192;
+        const BATCH: usize = 256;
+        const MAX_CONSUMED_BYTES: usize = 64 * 1024;
+        let _sim = simulation(); // Initialize Azalea's I/O task pool.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all().build().unwrap();
+        for threshold in [None, Some(1), Some(64)] {
+            for encrypted in [false, true] {
+                runtime.block_on(async {
+                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let (socket, accepted) = tokio::join!(
+                        TcpStream::connect(listener.local_addr().unwrap()), listener.accept(),
+                    );
+                    let (server, _) = accepted.unwrap();
+                    let mut server = Connection::new_from_stream(server).await.unwrap().login();
+                    let (read_stream, write_stream) = socket.unwrap().into_split();
+                    let mut connection = RawConnection::new(
+                        RawReadConnection {
+                            read_stream, buffer: Cursor::new(Vec::new()),
+                            compression_threshold: threshold, dec_cipher: None,
+                        },
+                        RawWriteConnection {
+                            write_stream, compression_threshold: threshold, enc_cipher: None,
+                        },
+                        ConnectionProtocol::Game,
+                    );
+                    if encrypted {
+                        let key = *b"1234567890123456";
+                        server.set_encryption_key(key);
+                        connection.net_conn().unwrap().set_encryption_key(key);
+                    }
+                    let mut bytes = Vec::new();
+                    let mut ends = Vec::new();
+                    let mut lengths = Vec::new();
+                    for id in 0..=PACKETS {
+                        let frame = encode_to_network_packet(
+                            &serialize_packet(&ClientboundKeepAlive { id: id as u64 }.into_variant()).unwrap(),
+                            threshold, &mut server.writer.raw.enc_cipher,
+                        );
+                        lengths.push(frame.len());
+                        bytes.extend(frame);
+                        ends.push(bytes.len());
+                    }
+                    let mut sent = 0;
+                    let mut received = 0;
+                    for target in (BATCH..=PACKETS).step_by(BATCH) {
+                        let end = ends[target] - 1;
+                        server.writer.raw.write_stream.write_all(&bytes[sent..end]).await.unwrap();
+                        sent = end;
+                        let deadline = Instant::now() + Duration::from_secs(3);
+                        loop {
+                            assert!(Instant::now() < deadline, "fragmented TCP must make progress");
+                            match connection.net_conn().unwrap().try_read().unwrap() {
+                                Some(raw) => {
+                                    let packet: ClientboundGamePacket =
+                                        deserialize_packet(&mut Cursor::new(raw.as_ref())).unwrap();
+                                    assert!(matches!(packet, ClientboundGamePacket::KeepAlive(p) if p.id == received as u64));
+                                    received += 1;
+                                }
+                                None => {
+                                    let stats = connection.network_diagnostics().unwrap();
+                                    if received == target && stats.buffered_bytes == lengths[target] - 1 {
+                                        assert!(stats.read_buffer_bytes <= MAX_CONSUMED_BYTES + lengths[target],
+                                            "consumed TCP data retained: {} bytes, threshold={threshold:?}, encrypted={encrypted}", stats.read_buffer_bytes);
+                                        break;
+                                    }
+                                    tokio::time::sleep(Duration::from_millis(1)).await;
+                                }
+                            }
+                        }
+                    }
+                    // Complete the retained tail to verify compaction preserved
+                    // its length prefix, payload and cipher position.
+                    server.writer.raw.write_stream.write_all(&bytes[sent..]).await.unwrap();
+                    tokio::time::timeout(Duration::from_secs(3), async {
+                        loop {
+                            if let Some(raw) = connection.net_conn().unwrap().try_read().unwrap() {
+                                let packet: ClientboundGamePacket =
+                                    deserialize_packet(&mut Cursor::new(raw.as_ref())).unwrap();
+                                assert!(matches!(packet, ClientboundGamePacket::KeepAlive(p) if p.id == PACKETS as u64));
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                    }).await.unwrap();
                 });
             }
         }

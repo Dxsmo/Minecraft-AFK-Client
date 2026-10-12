@@ -262,13 +262,17 @@ additional users access afterwards in the account's **Settings** panel):
   console line `AFK-Netzwerk aktiv` confirms that this reader is enabled.
   Empty framed/decompressed payloads have no packet ID and are silently skipped.
   Valid one-byte bundle delimiters remain intact.
+  Consumed TCP buffer prefixes are reclaimed after 64 KiB even if a fragmented
+  next packet prevents the buffer from becoming completely empty. This prevents
+  already processed data from accumulating throughout a long AFK session.
   Other parse warnings include the payload length and protocol state, are limited
   to one per 30 seconds, and do not prevent processing subsequent packets.
   A Java server-loss announcement or disconnect emits one
   `AFK-Verbindungsdiagnose` line with received keepalives, queued replies,
   replies actually written to TCP, pending outgoing packets, unread buffer
-  bytes, empty frames and read errors. This provides client-side evidence even
-  when server/proxy logs are unavailable. A completed TCP write does not prove
+  bytes (unread and total stored), empty frames and read errors. This provides
+  client-side evidence even when server/proxy logs are unavailable.
+  A completed TCP write does not prove
   the remote server received or acknowledged it, and these counters do not
   expose a kick reason the proxy withheld. Empty frames remain silent.
   A stopped TCP writer no longer immediately discards unread server packets.

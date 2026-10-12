@@ -316,6 +316,7 @@ pub fn handle_raw_packet(
 #[derive(Clone, Copy, Debug, Default)]
 pub struct NetworkDiagnostics {
     pub buffered_bytes: usize,
+    pub read_buffer_bytes: usize,
     pub packets_enqueued: u64,
     pub packets_written: u64,
     pub keepalives_enqueued: u64,
@@ -373,6 +374,15 @@ impl NetworkConnection {
     /// Exposed for the AFK client's bounded reader; compression and encryption
     /// remain handled by the upstream RawReadConnection.
     pub fn try_read(&mut self) -> Result<Option<Box<[u8]>>, Box<ReadPacketError>> {
+        // Upstream clears this buffer only when a frame ends exactly at its
+        // end. Continuous TCP fragmentation can leave a partial next frame
+        // behind indefinitely, retaining every already consumed byte. Reclaim
+        // that prefix periodically while preserving the decrypted unread tail.
+        let consumed = self.reader.buffer.position() as usize;
+        if consumed >= 64 * 1024 {
+            self.reader.buffer.get_mut().drain(..consumed);
+            self.reader.buffer.set_position(0);
+        }
         self.reader.try_read()
     }
 
@@ -412,6 +422,7 @@ impl NetworkConnection {
         NetworkDiagnostics {
             buffered_bytes: self.reader.buffer.get_ref().len()
                 .saturating_sub(self.reader.buffer.position() as usize),
+            read_buffer_bytes: self.reader.buffer.get_ref().len(),
             packets_enqueued: stats.packets_enqueued.load(atomic::Ordering::Relaxed),
             packets_written: stats.packets_written.load(atomic::Ordering::Relaxed),
             keepalives_enqueued: stats.keepalives_enqueued.load(atomic::Ordering::Relaxed),
