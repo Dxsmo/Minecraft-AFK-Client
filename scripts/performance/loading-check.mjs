@@ -244,7 +244,7 @@ try {
     blockDashboard = false;
     releaseSlowDashboard();
     await page.getByText('Datenbank: ok', { exact: true }).waitFor();
-    for (const [path, heading] of [['/item-worth', 'Item Wert'], ['/namesniper', 'Name Sniper'], ['/users', 'Users'], ['/logs', 'Audit Logs'], ['/settings', 'Settings'], ['/notes', 'Notizen']]) {
+    for (const [path, heading] of [['/item-worth', 'Item Wert'], ['/namesniper', 'Name Sniper'], ['/users', 'Admin Panel'], ['/logs', 'Audit Logs'], ['/settings', 'Settings'], ['/notes', 'Notizen']]) {
       await page.locator(`aside a[href="${path}"]`).click();
       await page.getByRole('heading', { name: heading, exact: true }).waitFor();
       await page.waitForTimeout(150);

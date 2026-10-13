@@ -1,9 +1,9 @@
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useDashboardSocket } from "../lib/sockets";
-import type { DashboardAccount } from "../lib/types";
+import type { DashboardAccount, ManagedUser } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 const CreateAccountDialog = lazy(() => import("../components/CreateAccountDialog").then(module => ({ default: module.CreateAccountDialog })));
 import { AccountImageButton } from "../components/AccountImageButton";
@@ -11,11 +11,19 @@ import { AccountCreatorAvatar } from "../components/AccountCreatorAvatar";
 import { AccountSellPreview } from "../components/AccountSellPreview";
 import { AccountDetails } from "../components/AccountDetails";
 import { useCompactLayout } from "../lib/useCompactLayout";
+import { UploaderCategory } from "../components/UploaderCategory";
+import { useUploaderPreferences } from "../lib/useUploaderPreferences";
+
+type Uploader = Pick<ManagedUser, "id" | "username">;
+const uploaderKey = (account: DashboardAccount) => account.createdBy ? `user:${account.createdBy.id}` : "unassigned";
 
 export function DashboardPage() {
   const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
   const compact = useCompactLayout();
   const [accounts, setAccounts] = useState<DashboardAccount[] | null>(null);
+  const [uploaders, setUploaders] = useState<Uploader[] | null>(null);
+  const categories = useUploaderPreferences(isAdmin ? user.id : null);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
@@ -85,9 +93,15 @@ export function DashboardPage() {
     });
   }
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
-      const loaded = await api.get<DashboardAccount[]>("/minecraft/accounts?view=dashboard");
+      // Only admins can list website users. Include users without any uploads;
+      // assignments are deliberately unrelated to uploader categories.
+      const [loaded, users] = await Promise.all([
+        api.get<DashboardAccount[]>("/minecraft/accounts?view=dashboard"),
+        isAdmin ? api.get<Uploader[]>("/users") : Promise.resolve([]),
+      ]);
+      setUploaders(users.map(({ id, username }) => ({ id, username })));
       setError(null);
       setAccounts(loaded.map((account) => {
         const liveSale = lastSales.current[account.id];
@@ -97,16 +111,47 @@ export function DashboardPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to load accounts");
     }
-  }
+  }, [isAdmin]);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   const merged = useMemo(
     () => (accounts ?? []).map((a) => ({ ...a, live: liveStatuses[a.id] ?? a.live })),
     [accounts, liveStatuses],
   );
+
+  const uploaderGroups = useMemo(() => {
+    if (!isAdmin) return [];
+    const groups = new Map<string, { id: string; username: string; accounts: DashboardAccount[] }>();
+    for (const uploader of uploaders ?? []) {
+      const id = `user:${uploader.id}`;
+      groups.set(id, { id, username: uploader.username, accounts: [] });
+    }
+    for (const account of accounts ?? []) {
+      const id = uploaderKey(account);
+      // Preserve legacy accounts and uploads whose creator was deleted, as
+      // well as creators added between the two dashboard requests.
+      if (!groups.has(id)) groups.set(id, { id, username: account.createdBy?.username ?? "Ohne Uploader", accounts: [] });
+      groups.get(id)!.accounts.push(account);
+    }
+    const ranks = new Map(categories.order.map((id, index) => [id, index]));
+    return [...groups.values()].sort((a, b) => {
+      const rankA = ranks.get(a.id), rankB = ranks.get(b.id);
+      if (rankA !== undefined || rankB !== undefined) return (rankA ?? Infinity) - (rankB ?? Infinity);
+      if (a.id === "unassigned" || b.id === "unassigned") return a.id === "unassigned" ? 1 : -1;
+      return a.username.localeCompare(b.username) || a.id.localeCompare(b.id);
+    });
+  }, [isAdmin, uploaders, accounts, categories.order]);
+
+  function moveCategory(id: string, direction: -1 | 1) {
+    const order = uploaderGroups.map(group => group.id);
+    const index = order.indexOf(id), target = index + direction;
+    if (index < 0 || target < 0 || target >= order.length) return;
+    [order[index], order[target]] = [order[target], order[index]];
+    categories.reorder(order);
+  }
 
   const counts = useMemo(() => {
     const statuses = merged.map((a) => a.live?.status ?? a.status);
@@ -153,8 +198,11 @@ export function DashboardPage() {
   async function moveAccount(id: string, direction: -1 | 1) {
     if (!accounts || reorderBusy) return;
     const idx = accounts.findIndex((a) => a.id === id);
-    const nextIdx = idx + direction;
-    if (idx < 0 || nextIdx < 0 || nextIdx >= accounts.length) return;
+    if (idx < 0) return;
+    const siblings = isAdmin ? accounts.filter(account => uploaderKey(account) === uploaderKey(accounts[idx])) : accounts;
+    const neighbor = siblings[siblings.findIndex(account => account.id === id) + direction];
+    if (!neighbor) return;
+    const nextIdx = accounts.findIndex(account => account.id === neighbor.id);
     const next = [...accounts];
     [next[idx], next[nextIdx]] = [next[nextIdx], next[idx]];
     setAccounts(next);
@@ -171,6 +219,14 @@ export function DashboardPage() {
 
   const actions = useRef({ moveAccount, updateImage, toggleBlur, runAction, deleteAccount });
   actions.current = { moveAccount, updateImage, toggleBlur, runAction, deleteAccount };
+
+  function renderAccount(account: DashboardAccount, index: number, total: number) {
+    return <AccountCard key={account.id}
+      account={account} live={liveStatuses[account.id] ?? account.live} index={index} total={total}
+      busy={busyIds.has(account.id)} isBlurred={blurred.has(account.id)} expanded={expandedId === account.id}
+      age={saleAge(account.lastSellAt, now)} reorderBusy={reorderBusy} actions={actions}
+      compact={compact} setExpandedId={setExpandedId} setError={setError} />;
+  }
 
   return (
     <div className="dashboard-page space-y-6">
@@ -197,9 +253,21 @@ export function DashboardPage() {
 
       {error && <p className="alert-error">{error}</p>}
 
-      {accounts === null ? (
+      {accounts === null || (isAdmin && uploaders === null) ? (
         <div className="card p-10 text-center text-sm" style={{ color: "var(--text-subtle)" }}>
           Loading accounts…
+        </div>
+      ) : isAdmin ? (
+        <div className="uploader-categories space-y-3">
+          {uploaderGroups.map((group, index) => <UploaderCategory key={group.id}
+            id={group.id} username={group.username} count={group.accounts.length}
+            expanded={!categories.collapsed.includes(group.id)} index={index} total={uploaderGroups.length}
+            onToggle={() => {
+              if (group.accounts.some(account => account.id === expandedId)) setExpandedId(null);
+              categories.toggle(group.id);
+            }} onMove={direction => moveCategory(group.id, direction)}>
+            {group.accounts.map((account, accountIndex) => renderAccount(account, accountIndex, group.accounts.length))}
+          </UploaderCategory>)}
         </div>
       ) : merged.length === 0 ? (
         <div className="card p-14 text-center">
@@ -215,12 +283,7 @@ export function DashboardPage() {
         </div>
       ) : (
         <div className="space-y-2.5">
-          {merged.map((account, index) => <AccountCard key={account.id}
-            account={accounts[index]} live={account.live} index={index} total={merged.length}
-            busy={busyIds.has(account.id)} isBlurred={blurred.has(account.id)} expanded={expandedId === account.id}
-            age={saleAge(account.lastSellAt, now)} reorderBusy={reorderBusy} actions={actions}
-            compact={compact}
-            setExpandedId={setExpandedId} setError={setError} />)}
+          {accounts.map((account, index) => renderAccount(account, index, accounts.length))}
         </div>
       )}
 

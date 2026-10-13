@@ -25,7 +25,9 @@ try {
         if (!hanging && !logoutFinished) errors.push('Login raced the old logout');
         await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ id: 'admin', username: 'Performance', role: 'ADMIN' }) });
       } else {
-        await route.fulfill({ contentType: 'application/json', body: path.endsWith('/accounts') ? '[]' : '{}' });
+        const data = path.endsWith('/users') ? [{ id: 'admin', username: 'Performance', role: 'ADMIN' }]
+          : path.endsWith('/accounts') ? [] : {};
+        await route.fulfill({ json: data });
       }
     });
     await page.addInitScript(() => {
@@ -45,7 +47,7 @@ try {
     await page.locator('#login-password').fill('test');
     const submitStart = Date.now();
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-    await page.getByText('No Minecraft accounts yet', { exact: true }).waitFor({ timeout: 6000 });
+    await page.getByText('Keine Accounts hochgeladen.', { exact: true }).waitFor({ timeout: 6000 });
     if (!loginStarted || errors.length) throw new Error(errors.join('; ') || 'No login request');
     results.push({ hangingLogout: hanging, loginFormMs, loginToDashboardMs: Date.now() - submitStart, errors });
     await context.close();

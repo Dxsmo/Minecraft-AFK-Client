@@ -129,6 +129,17 @@ reconnect scheduling, manual disconnect, command dispatch, NDJSON event
 handling) using a **mocked `azalea-bot` subprocess** — no real Minecraft
 server or compiled Rust binary is required to run the tests.
 
+With Vite running, the uploader-category browser regression check can be run
+from the repository root using an installed Playwright and Chrome:
+
+```bash
+PLAYWRIGHT_MODULE=/path/to/node_modules/playwright UI_URL=http://127.0.0.1:5173 node scripts/ui/uploader-categories-check.mjs
+```
+
+It mocks all APIs and sockets and checks admin isolation, uploader grouping,
+saved preferences, 500 ms animations and layouts from 320 to 1280 pixels wide.
+Set `CHROME_EXECUTABLE` to use a different Chromium executable.
+
 ---
 
 ## 4. Environment variables
@@ -169,6 +180,13 @@ Copy `.env.example` to `.env` (repo root) for Docker Compose, or to
   unavailable. Browser requests stay on this website's origin.
 - All users can locally blur/reveal their visible accounts using the eye button.
   The preference is saved separately for each website user in that browser.
+- Admin dashboards group accounts by their uploader, with a collapsible category
+  for every website user, including users without uploads. Accounts whose uploader
+  was deleted appear under **Ohne Uploader**. Category arrows change the category
+  order; account arrows move accounts within their uploader's category. Opening
+  and closing animates over 500 ms. Category order and open/closed states are saved
+  separately for each admin in that browser and restored on the next visit.
+  Normal users keep their flat list of assigned accounts.
 - The system will always refuse to delete/disable/demote the **last**
   remaining active admin, so you can't lock yourself out.
 - Any user can change their own password under **Settings** (requires the
