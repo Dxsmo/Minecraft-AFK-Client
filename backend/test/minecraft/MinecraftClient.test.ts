@@ -743,12 +743,17 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
       expect(JSON.parse(String(child.stdin.write.mock.calls.at(-1)![0]))).toEqual({ type: "chat", text: command });
     }
     child.stdin.write.mockClear(); events.length = 0;
-    child.send({ type: "sell_multipliers", entries: Array.from({ length: 9 }, (_, index) => ({ name: `Kategorie ${index}`, multiplier: `${index + 1}x`, progress: '600$/800$ - 67%' })) });
+    const entries = Array.from({ length: 9 }, (_, index) => index === 1
+      ? { name: 'Landwirtschaft', multiplier: '1.6x', progress: '26,28M$/150M$ - 17%' }
+      : { name: `Kategorie ${index}`, multiplier: `${index + 1}x`, progress: '600$/800$ - 67%' });
+    child.send({ type: "sell_multipliers", entries });
     await tick();
     expect(child.stdin.write).not.toHaveBeenCalled();
-    expect(events.filter(event => event.type === "SYSTEM")).toHaveLength(10);
-    expect(events[1].message).toBe("Kategorie 0\nAktueller Multiplikator: 1x\nFortschritt: 600$/800$ - 67%");
-    expect(events[9].message).toBe("Kategorie 8\nAktueller Multiplikator: 9x\nFortschritt: 600$/800$ - 67%");
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('SYSTEM');
+    expect(events[0].message).toBe('Desmo: Verkaufsmultiplikatoren (9 Kategorien)\n\n' + entries.map(entry =>
+      `${entry.name}\n  Aktueller Multiplikator: ${entry.multiplier}\n  Fortschritt: ${entry.progress}`).join('\n\n'));
+    expect(events[0].message).toContain('\n\nLandwirtschaft\n  Aktueller Multiplikator: 1.6x\n  Fortschritt: 26,28M$/150M$ - 17%\n\n');
     events.length = 0;
     child.send({ type: "sell_multipliers", entries: [{ name: "Fische", multiplier: "1x" }] }); await tick();
     expect(events).toHaveLength(1); expect(events[0].type).toBe("WARNING");

@@ -39,6 +39,48 @@ describe("website-only multiplier scan", () => {
     expect(readMultiplier('Fische', ['§7Aktueller\u00a0Multiplikator §a1x', '§7Fortschritt $3.695 / $20.000', '████░░░ 18%'])).toEqual({ name: 'Fische', multiplier: '1x', progress: '3.695$/20.000$ - 18%' });
   });
 
+  it("reads the reported Landwirtschaft tooltip with compact millions", () => {
+    expect(readMultiplier('Landwirtschaft', [
+      'Aktueller Multiplikator: 1.6x', 'Fortschritt: $26,28M / $150M',
+      '[███░░░░░░░░░░░░░░░] 17%', 'Noch benötigt: $123.717.312,80', '', 'Klicken, um den Fortschritt zu öffnen',
+    ])).toEqual({ name: 'Landwirtschaft', multiplier: '1.6x', progress: '26,28M$/150M$ - 17%' });
+  });
+
+  it.each([
+    ['$600K / $800K', '600K$/800K$ - 75%'],
+    ['$26,28M / $150M', '26,28M$/150M$ - 17%'],
+    ['$1.234M / $2M', '1.234M$/2M$ - 61%'],
+    ['$750K / $1,5M', '750K$/1,5M$ - 50%'],
+    ['$1.5B / $2B', '1.5B$/2B$ - 75%'],
+    ['$1T / $2T', '1T$/2T$ - 50%'],
+    ['26,28 m$ / 150 m$', '26,28M$/150M$ - 17%'],
+  ])("supports compact currency %s and computes scaled fallback percentages", (value, expected) => {
+    expect(readMultiplier('Kategorie', ['Aktueller Multiplikator: 1x', `Fortschritt: ${value}`])?.progress).toBe(expected);
+  });
+
+  it.each(['$26Q / $150M', '$26M / $150Q', '$26Mio / $150M', '$26M / $150Mio'])('rejects unknown currency suffixes instead of treating %s as unscaled money', value => {
+    expect(readMultiplier('Kategorie', ['Aktueller Multiplikator: 1x', `Fortschritt: ${value}`, '████ 17%'])).toBeNull();
+  });
+
+  it("reads compact amounts from Bedrock item NBT and emits all nine categories", () => {
+    const { sender, behavior, inventory } = setup(false);
+    behavior.enqueueSellMultipliers(); behavior.onTick(); open(inventory, '\uf801\ue113');
+    const slots = Array.from({ length: 18 }, (_, index) => index < 9 ? item(index) : { network_id: 0 });
+    for (const index of [1, 4]) {
+      const display = (slots[index] as any).extra.nbt.nbt.value.display.value;
+      display.Name.value = index === 1 ? 'Landwirtschaft' : 'Erze';
+      display.Lore.value.value = ['Aktueller Multiplikator: 1.6x', 'Fortschritt: $26,28M / $150M', '[███░░░░░░░░░░░░░░░] 17%'];
+    }
+    inventory.onContent({ window_id: 3, input: slots }); behavior.onTick();
+    const result = events().find(event => event.type === 'sell_multipliers');
+    expect(result?.entries).toHaveLength(9);
+    expect(result.entries[1]).toEqual({ name: 'Landwirtschaft', multiplier: '1.6x', progress: '26,28M$/150M$ - 17%' });
+    expect(result.entries[4].progress).toBe('26,28M$/150M$ - 17%');
+    expect(sender.packet).toHaveBeenCalledExactlyOnceWith('container_close', { window_id: 3, window_type: 'container', server: false });
+    expect(inventory.readingMultipliers).toBe(false);
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
   it.each([18, 27])("waits for every tooltip, closes the %s-slot menu and emits nine website results without clicks", size => {
     const { sender, behavior, inventory } = setup();
     behavior.enqueueSellMultipliers(); behavior.onTick();

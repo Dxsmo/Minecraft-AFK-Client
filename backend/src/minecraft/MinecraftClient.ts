@@ -465,13 +465,12 @@ export class MinecraftClient extends EventEmitter {
           && entry.name.trim().length > 0 && entry.name.length <= 256 && typeof entry.multiplier === "string"
           && entry.multiplier.length <= 32 && /^\d+(?:[.,]\d+)?[x×]$/iu.test(entry.multiplier)
           && typeof entry.progress === "string" && entry.progress.length <= 96
-          && /^\d[\d.,]*\$\/\d[\d.,]*\$ - \d+(?:[.,]\d+)?%$/u.test(entry.progress))) {
+          && /^\d[\d.,]*[KMBT]?\$\/\d[\d.,]*[KMBT]?\$ - \d+(?:[.,]\d+)?%$/iu.test(entry.progress))) {
           this.emitConsole("WARNING", "Desmo: Multiplikatoren konnten nicht vollständig ausgelesen werden");
           break;
         }
-        this.emitConsole("SYSTEM", "Desmo: Verkaufsmultiplikatoren (9 Kategorien)");
-        for (const entry of entries) this.emitConsole("SYSTEM",
-          `${stripMinecraftFormatting(entry.name).replace(/[\r\n]/g, " ")}\nAktueller Multiplikator: ${entry.multiplier}\nFortschritt: ${entry.progress}`);
+        this.emitConsole("SYSTEM", "Desmo: Verkaufsmultiplikatoren (9 Kategorien)\n\n" + entries.map(entry =>
+          `${stripMinecraftFormatting(entry.name).replace(/[\r\n]/g, " ").trim()}\n  Aktueller Multiplikator: ${entry.multiplier}\n  Fortschritt: ${entry.progress}`).join("\n\n"));
         break;
       }
 

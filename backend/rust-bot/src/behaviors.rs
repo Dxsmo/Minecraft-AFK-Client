@@ -1830,6 +1830,51 @@ mod tests {
     }
 
     #[test]
+    fn desmo_completes_with_seven_plain_and_two_compact_currency_tooltips() {
+        use azalea_inventory::components::{CustomName, Lore};
+        let (client, mut state) = sell_client();
+        let clicks = capture_sell_clicks(&client);
+        state.enqueue_sell_multipliers();
+        state.on_control_event(&client);
+        open_multiplier_chest(
+            &client,
+            &mut state,
+            9,
+            Menu::Generic9x2 {
+                contents: Default::default(),
+                player: Default::default(),
+            },
+            "\u{a4c7}ꑃ",
+        );
+        {
+            let mut world = client.ecs.write();
+            let mut inventory = world.get_mut::<Inventory>(client.entity).unwrap();
+            let menu = inventory.container_menu.as_mut().unwrap();
+            for (index, name) in [(1, "Landwirtschaft"), (4, "Erze")] {
+                *menu.slot_mut(index).unwrap() = ItemStack::new(ItemKind::Wheat, 1)
+                    .with_component(CustomName { name: name.into() })
+                    .with_component(Lore {
+                        lines: vec![
+                            "Aktueller Multiplikator: 1.6x".into(),
+                            "Fortschritt: $26,28M / $150M".into(),
+                            "[███░░░░░░░░░░░░░░░] 17%".into(),
+                        ],
+                    });
+            }
+            let result = crate::sell_multipliers::read_top_row(&menu.slots()).unwrap();
+            assert_eq!(result.len(), 9);
+            assert_eq!(result[1].name, "Landwirtschaft");
+            assert_eq!(result[1].progress, "26,28M$/150M$ - 17%");
+        }
+        state.on_control_event(&client);
+        client.ecs.write().flush();
+        assert!(state.active_task.is_none());
+        assert_eq!(client.get_inventory().unwrap().id(), 0);
+        assert!(clicks.lock().is_empty());
+        assert_eq!(take_commands(&client), vec!["/sellmulti"]);
+    }
+
+    #[test]
     fn desmo_uses_real_command_path_waits_for_all_nine_tooltips_and_never_clicks() {
         let (client, mut state) = sell_client();
         let clicks = capture_sell_clicks(&client);

@@ -105,14 +105,31 @@ fn amount(input: &str) -> Option<(String, &str)> {
     if number.len() > 32 {
         return None;
     }
-    let rest = input[end..].trim_start();
+    let mut rest = input[end..].trim_start();
+    let unit_end = rest
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_alphabetic())
+        .map(|(index, _)| index)
+        .unwrap_or(rest.len());
+    let unit = rest[..unit_end].to_ascii_uppercase();
+    if !unit.is_empty() && !matches!(unit.as_str(), "K" | "M" | "B" | "T") {
+        return None;
+    }
+    rest = rest[unit_end..].trim_start();
     Some((
-        number.to_string(),
+        format!("{number}{unit}"),
         rest.strip_prefix('$').unwrap_or(rest).trim(),
     ))
 }
 
 fn money(input: &str) -> Option<f64> {
+    let (input, factor) = match input.as_bytes().last().map(u8::to_ascii_uppercase) {
+        Some(b'K') => (&input[..input.len() - 1], 1e3),
+        Some(b'M') => (&input[..input.len() - 1], 1e6),
+        Some(b'B') => (&input[..input.len() - 1], 1e9),
+        Some(b'T') => (&input[..input.len() - 1], 1e12),
+        _ => (input, 1.0),
+    };
     let pieces: Vec<_> = input.split(['.', ',']).collect();
     if pieces
         .iter()
@@ -129,12 +146,14 @@ fn money(input: &str) -> Option<f64> {
                 &input[decimal + 1..]
             )
         }
+        // Compact money uses a decimal separator, even with three digits.
+        _ if factor != 1.0 && pieces.len() == 2 => pieces.join("."),
         _ if pieces.len() > 1 && pieces[1..].iter().all(|piece| piece.len() == 3) => {
             pieces.join("")
         }
         _ => input.replace(',', "."),
     };
-    let value = normalized.parse::<f64>().ok()?;
+    let value = normalized.parse::<f64>().ok()? * factor;
     value.is_finite().then_some(value)
 }
 
@@ -275,6 +294,47 @@ pub fn describe_top_row(slots: &[ItemStack]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_reported_landwirtschaft_tooltip_with_compact_millions() {
+        let result = tooltip(
+            "Landwirtschaft",
+            &[
+                "Aktueller Multiplikator: 1.6x".into(),
+                "Fortschritt: $26,28M / $150M".into(),
+                "[███░░░░░░░░░░░░░░░] 17%".into(),
+                "Noch benötigt: $123.717.312,80".into(),
+                "".into(),
+                "Klicken, um den Fortschritt zu öffnen".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(result.name, "Landwirtschaft");
+        assert_eq!(result.multiplier, "1.6x");
+        assert_eq!(result.progress, "26,28M$/150M$ - 17%");
+        for (value, expected) in [
+            ("$600K / $800K", "600K$/800K$ - 75%"),
+            ("$26,28M / $150M", "26,28M$/150M$ - 17%"),
+            ("$1.234M / $2M", "1.234M$/2M$ - 61%"),
+            ("$750K / $1,5M", "750K$/1,5M$ - 50%"),
+            ("$1.5B / $2B", "1.5B$/2B$ - 75%"),
+            ("$1T / $2T", "1T$/2T$ - 50%"),
+            ("26,28 m$ / 150 m$", "26,28M$/150M$ - 17%"),
+        ] {
+            assert_eq!(
+                read_progress(&[format!("Fortschritt: {value}")]).as_deref(),
+                Some(expected)
+            );
+        }
+        for value in [
+            "$26Q / $150M",
+            "$26M / $150Q",
+            "$26Mio / $150M",
+            "$26M / $150Mio",
+        ] {
+            assert!(read_progress(&[format!("Fortschritt: {value}"), "████ 17%".into()]).is_none());
+        }
+    }
 
     #[test]
     fn accepts_tooltip_labels_without_colons_and_reports_unreadable_slots() {
