@@ -36,6 +36,13 @@ export interface ManagedUser {
   lastLoginAt: string | null;
 }
 
+export interface DashboardPreferences {
+  accountOrder: string[];
+  blurredAccountIds: string[];
+  uploaderOrder: string[];
+  collapsedUploaderIds: string[];
+}
+
 export interface BannedIp {
   ip: string;
   reason: string | null;

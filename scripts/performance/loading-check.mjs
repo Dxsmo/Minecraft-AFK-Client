@@ -42,6 +42,7 @@ await page.route('**/api/**', async route => {
   await new Promise(resolve => setTimeout(resolve, url.pathname.endsWith('/logout') ? 800 : 100));
   let data = {};
   if (url.pathname.endsWith('/auth/login')) data = user;
+  else if (url.pathname.endsWith('/profile/dashboard')) data = { initialized: true, preferences: { accountOrder: [], blurredAccountIds: [], uploaderOrder: [], collapsedUploaderIds: [] } };
   else if (url.pathname.endsWith('/auth/me')) data = { user };
   else if (url.pathname.endsWith('/namesniper/accounts')) data = [];
   else if (url.pathname.endsWith('/notes/note')) data = note;

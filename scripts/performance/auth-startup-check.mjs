@@ -25,7 +25,8 @@ try {
         if (!hanging && !logoutFinished) errors.push('Login raced the old logout');
         await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ id: 'admin', username: 'Performance', role: 'ADMIN' }) });
       } else {
-        const data = path.endsWith('/users') ? [{ id: 'admin', username: 'Performance', role: 'ADMIN' }]
+        const data = path.endsWith('/profile/dashboard') ? { initialized: true, preferences: { accountOrder: [], blurredAccountIds: [], uploaderOrder: [], collapsedUploaderIds: [] } }
+          : path.endsWith('/users') ? [{ id: 'admin', username: 'Performance', role: 'ADMIN' }]
           : path.endsWith('/accounts') ? [] : {};
         await route.fulfill({ json: data });
       }

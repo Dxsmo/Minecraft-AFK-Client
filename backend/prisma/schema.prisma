@@ -52,6 +52,8 @@ model User {
   status       UserStatus @default(ACTIVE)
   createdAt    DateTime   @default(now())
   lastLoginAt  DateTime?
+  // Personal dashboard layout, independent of devices and other users.
+  dashboardPreferences String?
 
   sessions              Session[]
   assignments           UserMinecraftAccount[]

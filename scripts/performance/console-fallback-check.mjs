@@ -19,6 +19,7 @@ try {
     const path = new URL(route.request().url()).pathname;
     let data = {};
     if (path.endsWith('/login')) data = user;
+    else if (path.endsWith('/profile/dashboard')) data = { initialized: true, preferences: { accountOrder: [], blurredAccountIds: [], uploaderOrder: [], collapsedUploaderIds: [] } };
     else if (path.endsWith('/users')) data = [user];
     else if (path.endsWith('/accounts')) data = [account];
     else if (path.endsWith('/accounts/fallback')) data = account;

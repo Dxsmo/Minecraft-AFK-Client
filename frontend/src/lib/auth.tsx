@@ -1,10 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, ApiError, clearApiReadCache } from "./api";
 import type { CurrentUser } from "./types";
+import { useDashboardPreferences } from "./useDashboardPreferences";
 
 interface AuthContextValue {
   user: CurrentUser | null;
   loading: boolean;
+  dashboardProfile: ReturnType<typeof useDashboardPreferences>;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -14,6 +16,8 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<CurrentUser | null>(null);
+  // Keep pending profile writes alive when navigating between website pages.
+  const dashboardProfile = useDashboardPreferences(user);
   // A fresh document always starts signed out; rendering its login form does
   // not require a round trip to the server.
   const [loading, setLoading] = useState(false);
@@ -61,7 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  const value = useMemo(() => ({ user, loading, login, logout, refresh }), [user, loading, login, logout, refresh]);
+  const value = useMemo(() => ({ user, loading, dashboardProfile, login, logout, refresh }), [user, loading, dashboardProfile, login, logout, refresh]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

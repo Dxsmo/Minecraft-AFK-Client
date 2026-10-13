@@ -137,7 +137,8 @@ PLAYWRIGHT_MODULE=/path/to/node_modules/playwright UI_URL=http://127.0.0.1:5173 
 ```
 
 It mocks all APIs and sockets and checks admin isolation, uploader grouping,
-saved preferences, 500 ms animations and layouts from 320 to 1280 pixels wide.
+profiles shared between separate browser contexts, legacy import, failed-write
+retries, 500 ms animations and layouts from 320 to 1280 pixels wide.
 Set `CHROME_EXECUTABLE` to use a different Chromium executable.
 
 ---
@@ -178,15 +179,23 @@ Copy `.env.example` to `.env` (repo root) for Docker Compose, or to
   [MCHeads](https://mc-heads.net/) through the authenticated backend, with a
   bounded cache and a placeholder if no name is assigned or the service is
   unavailable. Browser requests stay on this website's origin.
-- All users can locally blur/reveal their visible accounts using the eye button.
-  The preference is saved separately for each website user in that browser.
+- All users can blur/reveal their visible accounts using the eye button.
+  Blur status and account order are saved in each website user's database profile
+  and restored on every device. Personal sorting never changes another user's
+  arrangement, including for shared accounts. Profiles are loaded before cards
+  appear, so saved blur settings do not flash unblurred during loading.
 - Admin dashboards group accounts by their uploader, with a collapsible category
   for every website user, including users without uploads. Accounts whose uploader
   was deleted appear under **Ohne Uploader**. Category arrows change the category
   order; account arrows move accounts within their uploader's category. Opening
   and closing animates over 500 ms. Category order and open/closed states are saved
-  separately for each admin in that browser and restored on the next visit.
+  separately in each admin's database profile and restored on every device.
   Normal users keep their flat list of assigned accounts.
+- Existing browser blur/category settings are imported once on first use if the
+  user has no saved server profile yet. An existing server profile always wins;
+  old local keys are only removed after the server confirms the profile. Edits
+  save automatically, remain queued on temporary failures with a retry action, and finish
+  when navigating between pages. Returning focus refreshes the saved profile.
 - The system will always refuse to delete/disable/demote the **last**
   remaining active admin, so you can't lock yourself out.
 - Any user can change their own password under **Settings** (requires the

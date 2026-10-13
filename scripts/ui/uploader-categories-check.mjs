@@ -7,7 +7,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE ?? 'playwright');
 const base = process.env.UI_URL ?? 'http://127.0.0.1:4175';
 const browser = await chromium.launch({ headless: true,
   ...(process.env.CHROME_EXECUTABLE ? { executablePath: process.env.CHROME_EXECUTABLE } : { channel: 'chrome' }) });
-const errors = [], report = [];
+const errors = [], report = [], deviceChecks = [];
 const user = (id, username, role = 'USER', status = 'ACTIVE') => ({ id, username, role, status });
 const admin = user('admin', 'TestAdmin', 'ADMIN');
 const otherAdmin = user('other-admin', 'OtherAdmin', 'ADMIN');
@@ -21,8 +21,10 @@ const accountIds = locator => locator.locator('.account-row-link').evaluateAll(n
 const key = id => `afk.uploaderCategories.v1.${id}`;
 const initialOrder = ['user:alice', 'user:bob', 'user:empty', 'user:other-admin', 'user:admin', 'unassigned'];
 
-async function setup(page, { blockUsers = false, unavailableStorage = false } = {}) {
-  const state = { active: admin, users: [admin, otherAdmin, alice, bob, empty], userRequests: [], reorders: [], failUsers: false };
+const emptyPreferences = () => ({ accountOrder: [], blurredAccountIds: [], uploaderOrder: [], collapsedUploaderIds: [] });
+async function setup(page, { blockUsers = false, blockProfile = false, unavailableStorage = false, profiles = new Map(), legacy = null } = {}) {
+  const state = { active: admin, users: [admin, otherAdmin, alice, bob, empty], userRequests: [], reorders: [], failUsers: false,
+    profiles, failProfileOnce: false, profileFailureStatus: 503, profileDelay: 0 };
   state.accounts = [['a1', alice], ['b1', bob], ['a2', alice], ['b2', bob], ['legacy', null]].map(([id, creator]) => ({
     id, name: `Bot_${id}`, displayName: '', serverHost: 'localhost', serverPort: 25565, edition: 'JAVA',
     minecraftVersion: '', status: 'ONLINE', imageUrl: null, notes: '', lastSellAt: null,
@@ -31,8 +33,11 @@ async function setup(page, { blockUsers = false, unavailableStorage = false } = 
   let releaseUsers;
   const usersReady = blockUsers ? new Promise(resolve => { releaseUsers = resolve; }) : Promise.resolve();
   state.releaseUsers = () => releaseUsers?.();
+  let releaseProfile;
+  const profileReady = blockProfile ? new Promise(resolve => { releaseProfile = resolve; }) : Promise.resolve();
+  state.releaseProfile = () => releaseProfile?.();
   page.on('pageerror', error => errors.push(error.message));
-  await page.addInitScript(({ unavailableStorage }) => {
+  await page.addInitScript(({ unavailableStorage, legacy }) => {
     window.__sockets = [];
     window.WebSocket = class {
       static OPEN = 1; readyState = 1;
@@ -45,7 +50,11 @@ async function setup(page, { blockUsers = false, unavailableStorage = false } = 
     if (unavailableStorage) for (const name of ['getItem', 'setItem']) {
       Storage.prototype[name] = () => { throw new Error('Browser storage unavailable'); };
     }
-  }, { unavailableStorage });
+    if (legacy && !sessionStorage.getItem('legacy-seeded')) {
+      for (const [key, value] of Object.entries(legacy)) localStorage.setItem(key, JSON.stringify(value));
+      sessionStorage.setItem('legacy-seeded', 'yes');
+    }
+  }, { unavailableStorage, legacy });
   await page.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname;
     let data = {}, status = 200;
@@ -54,6 +63,39 @@ async function setup(page, { blockUsers = false, unavailableStorage = false } = 
       state.active = name === otherAdmin.username ? otherAdmin : name === bob.username ? bob : admin;
       data = state.active;
     } else if (path.endsWith('/auth/me')) data = { user: state.active };
+    else if (path.includes('/profile/dashboard')) {
+      await profileReady;
+      await new Promise(resolve => setTimeout(resolve, state.profileDelay));
+      const saved = profiles.get(state.active.id) ?? { initialized: false, preferences: emptyPreferences() };
+      if (request.method() !== 'GET') {
+        if (state.failProfileOnce) {
+          state.failProfileOnce = false;
+          await route.fulfill({ status: state.profileFailureStatus, json: { error: 'Profile storage temporarily unavailable' } });
+          return;
+        }
+        const patch = request.postDataJSON();
+        const membership = (ids, id, value) => value ? [...new Set([...ids, id])] : ids.filter(item => item !== id);
+        if (path.endsWith('/import')) {
+          if (!saved.initialized) saved.preferences = patch;
+        } else {
+          if (patch.accountOrder) { saved.preferences.accountOrder = patch.accountOrder; state.reorders.push(patch.accountOrder); }
+          if (patch.uploaderOrder) saved.preferences.uploaderOrder = patch.uploaderOrder;
+          if (patch.blur) saved.preferences.blurredAccountIds = membership(saved.preferences.blurredAccountIds, patch.blur.accountId, patch.blur.value);
+          if (patch.collapse) saved.preferences.collapsedUploaderIds = membership(saved.preferences.collapsedUploaderIds, patch.collapse.uploaderId, patch.collapse.value);
+        }
+        saved.initialized = true;
+        profiles.set(state.active.id, saved);
+      }
+      const preferences = saved.preferences;
+      const accountIds = state.accounts.filter(account => state.active.role === 'ADMIN' || ['a1', 'b1'].includes(account.id)).map(account => account.id);
+      const uploaderIds = state.active.role === 'ADMIN' ? ['unassigned', ...state.users.map(user => `user:${user.id}`)] : [];
+      data = { initialized: saved.initialized, preferences: {
+        accountOrder: preferences.accountOrder.filter(id => accountIds.includes(id)),
+        blurredAccountIds: preferences.blurredAccountIds.filter(id => accountIds.includes(id)),
+        uploaderOrder: preferences.uploaderOrder.filter(id => uploaderIds.includes(id)),
+        collapsedUploaderIds: preferences.collapsedUploaderIds.filter(id => uploaderIds.includes(id)),
+      } };
+    }
     else if (path.endsWith('/users')) {
       state.userRequests.push(state.active.id);
       assert.equal(state.active.role, 'ADMIN', 'Normal users must never fetch the user list');
@@ -86,7 +128,11 @@ async function login(page, username = admin.username) {
 async function reloadAndLogin(page, username) {
   await page.reload();
   await login(page, username);
-  await page.locator('.uploader-category, .account-card').first().waitFor();
+  try { await page.locator('.uploader-category, .account-card').first().waitFor(); }
+  catch (failure) {
+    console.error(JSON.stringify({ url: page.url(), body: await page.locator('body').innerText(), errors }, null, 2));
+    throw failure;
+  }
 }
 async function animate(locator) {
   return locator.evaluate(async element => {
@@ -113,7 +159,7 @@ async function fits(page) {
 }
 
 try {
-  for (const width of [320, 390, 768, 1280]) {
+  for (const width of process.env.UI_DEVICES_ONLY === '1' ? [] : [320, 390, 768, 1280]) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, isMobile: width < 1024, hasTouch: width < 1024 });
     const page = await context.newPage();
     const state = await setup(page, { blockUsers: true });
@@ -164,7 +210,7 @@ try {
       const cards = group(page, 'user:alice').locator('.account-card');
       assert.equal(await cards.first().getByRole('button', { name: 'Move up', exact: true }).isDisabled(), true);
       assert.equal(await cards.last().getByRole('button', { name: 'Move down', exact: true }).isDisabled(), true);
-      const response = page.waitForResponse(response => response.url().endsWith('/minecraft/accounts/reorder'));
+      const response = page.waitForResponse(response => response.url().endsWith('/profile/dashboard') && response.request().method() === 'PATCH' && response.request().postDataJSON().accountOrder);
       await cards.first().getByRole('button', { name: 'Move down', exact: true }).click();
       await response;
       await page.waitForFunction(() => document.querySelector('[data-uploader-id="user:alice"] .account-row-link').getAttribute('href').includes('/a2?'));
@@ -215,6 +261,96 @@ try {
       openingMidHeight: opening.samples.find(sample => sample.elapsed > 220)?.height, animation: closing.duration });
     await context.close();
   }
+  // Separate browser contexts have no shared cookies or local storage. Only
+  // the mocked server profile is shared, exactly as on different devices.
+  const profiles = new Map();
+  const desktop = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const mobile = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const first = await desktop.newPage(), second = await mobile.newPage();
+  const firstState = await setup(first, { profiles, legacy: {
+    'afk.blurredAccounts.admin': ['a1'],
+    [key(admin.id)]: { order: [...initialOrder].reverse(), collapsed: ['user:alice'] },
+  } });
+  const secondState = await setup(second, { profiles, blockProfile: true });
+  await first.goto(base);
+  await login(first);
+  await group(first, 'user:alice').waitFor();
+  assert.deepEqual(await order(first), [...initialOrder].reverse());
+  assert.equal(await group(first, 'user:alice').locator('.uploader-toggle').getAttribute('aria-expanded'), 'false');
+  assert.equal(await first.locator('a[href="/accounts/a1?tab=console"]').getAttribute('aria-label'), 'Open console for account');
+  assert.equal(await first.evaluate(() => localStorage.getItem('afk.blurredAccounts.admin')), null);
+  assert.equal(await first.evaluate(storageKey => localStorage.getItem(storageKey), key(admin.id)), null);
+  deviceChecks.push('legacy browser settings imported and cleaned up');
+  await second.goto(base);
+  await login(second);
+  await second.getByText('Loading accounts…', { exact: true }).waitFor();
+  assert.equal(await second.locator('.account-card').count(), 0, 'Account cards must wait for the profile to prevent an unblurred flash');
+  secondState.releaseProfile();
+  await group(second, 'user:alice').waitFor();
+  assert.deepEqual(await order(second), [...initialOrder].reverse());
+  assert.equal(await group(second, 'user:alice').locator('.uploader-toggle').getAttribute('aria-expanded'), 'false');
+  assert.equal(await second.locator('a[href="/accounts/a1?tab=console"]').getAttribute('aria-label'), 'Open console for account');
+  assert.equal(await second.evaluate(storageKey => localStorage.getItem(storageKey), key(admin.id)), null);
+  secondState.profileDelay = 0;
+  deviceChecks.push('admin profile restored on a fresh mobile device before rendering cards');
+  await group(first, 'user:bob').locator('.account-card').first().getByRole('button', { name: 'Blur account', exact: true }).click();
+  await first.getByRole('status').filter({ hasText: 'Ansicht wird gespeichert' }).waitFor({ state: 'hidden' });
+  await group(second, 'user:alice').locator('.uploader-toggle').click();
+  await second.getByRole('status').filter({ hasText: 'Ansicht wird gespeichert' }).waitFor({ state: 'hidden' });
+  await group(second, 'user:alice').getByRole('button', { name: 'Reveal account', exact: true }).click();
+  await second.getByRole('status').filter({ hasText: 'Ansicht wird gespeichert' }).waitFor({ state: 'hidden' });
+  assert.deepEqual(profiles.get(admin.id).preferences.blurredAccountIds, ['b1']);
+  await first.evaluate(() => dispatchEvent(new Event('focus')));
+  await first.waitForFunction(() => document.querySelector('a[href="/accounts/a1?tab=console"]').getAttribute('aria-label') === 'Open console for Bot_a1');
+  assert.equal(await first.locator('a[href="/accounts/b1?tab=console"]').getAttribute('aria-label'), 'Open console for account');
+  deviceChecks.push('individual edits from different devices preserve other blur settings');
+  firstState.failProfileOnce = true;
+  await group(first, 'user:alice').locator('.account-card').first().getByRole('button', { name: 'Blur account', exact: true }).click();
+  await first.getByRole('alert').filter({ hasText: 'Ansicht konnte nicht gespeichert werden' }).waitFor();
+  assert.deepEqual(profiles.get(admin.id).preferences.blurredAccountIds, ['b1']);
+  await first.getByRole('button', { name: 'Erneut versuchen', exact: true }).click();
+  await first.getByRole('status').filter({ hasText: 'Ansicht wird gespeichert' }).waitFor({ state: 'hidden' });
+  assert.deepEqual(profiles.get(admin.id).preferences.blurredAccountIds, ['b1', 'a1']);
+  assert.equal(await first.getByRole('alert').count(), 0);
+  deviceChecks.push('failed writes are visible and can be retried');
+  firstState.failProfileOnce = true;
+  firstState.profileFailureStatus = 400;
+  await group(first, 'user:alice').locator('.account-card').first().getByRole('button', { name: 'Move down', exact: true }).click();
+  await first.getByRole('alert').filter({ hasText: 'Ansicht konnte nicht gespeichert werden' }).waitFor();
+  assert.deepEqual(await accountIds(group(first, 'user:alice')), ['a2', 'a1']);
+  await first.getByRole('button', { name: 'Erneut versuchen', exact: true }).click();
+  await first.waitForFunction(() => document.querySelector('[data-uploader-id="user:alice"] .account-row-link').getAttribute('href').includes('/a1?'));
+  assert.deepEqual(await accountIds(group(first, 'user:alice')), ['a1', 'a2']);
+  firstState.profileFailureStatus = 503;
+  deviceChecks.push('rejected outdated orders recover without blocking later changes');
+  firstState.profileDelay = 200;
+  const finished = first.waitForResponse(response => response.url().endsWith('/profile/dashboard') && response.request().method() === 'PATCH' && response.request().postDataJSON().collapse);
+  await group(first, 'user:alice').locator('.account-card').first().getByRole('button', { name: 'Reveal account', exact: true }).click();
+  await group(first, 'user:alice').locator('.account-card').first().getByRole('button', { name: 'Blur account', exact: true }).click();
+  await group(first, 'user:alice').locator('.uploader-toggle').click();
+  await first.evaluate(() => { history.pushState({}, '', '/settings'); dispatchEvent(new PopStateEvent('popstate')); });
+  await first.getByRole('heading', { name: 'Settings', exact: true }).waitFor();
+  await finished;
+  assert.deepEqual(profiles.get(admin.id).preferences.blurredAccountIds, ['b1', 'a1']);
+  assert.deepEqual(profiles.get(admin.id).preferences.collapsedUploaderIds, ['user:alice']);
+  deviceChecks.push('rapid edits stay ordered and finish after page navigation');
+  firstState.profileDelay = 0;
+  await reloadAndLogin(first, bob.username);
+  assert.equal(await first.locator('.uploader-category').count(), 0);
+  assert.deepEqual(await accountIds(first), ['a1', 'b1']);
+  const savedOrder = first.waitForResponse(response => response.url().endsWith('/profile/dashboard') && response.request().method() === 'PATCH' && response.request().postDataJSON().accountOrder);
+  await first.locator('.account-card').first().getByRole('button', { name: 'Move down', exact: true }).click();
+  await savedOrder;
+  await first.locator('a[href="/accounts/a1?tab=console"]').locator('..').getByRole('button', { name: 'Blur account', exact: true }).click();
+  await first.getByRole('status').filter({ hasText: 'Ansicht wird gespeichert' }).waitFor({ state: 'hidden' });
+  await reloadAndLogin(second, bob.username);
+  assert.deepEqual(await accountIds(second), ['b1', 'a1']);
+  assert.equal(await second.locator('.uploader-category').count(), 0);
+  assert.equal(await second.locator('a[href="/accounts/a1?tab=console"]').getAttribute('aria-label'), 'Open console for account');
+  assert.deepEqual(profiles.get(admin.id).preferences.blurredAccountIds, ['b1', 'a1']);
+  deviceChecks.push('normal-user ordering and blur restored on another device independently of admins');
+  await desktop.close();
+  await mobile.close();
   const page = await browser.newPage();
   await setup(page, { unavailableStorage: true });
   await page.goto(base);
@@ -226,5 +362,10 @@ try {
   assert.equal((await order(page))[1], 'user:alice');
   await page.close();
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ scenarios: report, unavailableStorage: 'usable', errors }, null, 2));
+  console.log(JSON.stringify({ scenarios: report, deviceChecks, unavailableStorage: 'usable', errors }, null, 2));
+} catch (failure) {
+  for (const context of browser.contexts()) for (const page of context.pages()) {
+    console.error(JSON.stringify({ url: page.url(), body: await page.locator('body').innerText().catch(() => ''), errors }, null, 2));
+  }
+  throw failure;
 } finally { await browser.close(); }

@@ -28,6 +28,7 @@ try {
         if (failCommand) { status = 409; data = { error: 'OFFLINE' }; }
         else { httpCommands.push(route.request().postDataJSON().command); data = { ok: true }; }
       } else if (url.pathname.includes('/auth/login')) data = user;
+      else if (url.pathname.endsWith('/profile/dashboard')) data = { initialized: true, preferences: { accountOrder: [], blurredAccountIds: [], uploaderOrder: [], collapsedUploaderIds: [] } };
       else if (url.pathname.includes('/auth/me')) data = { user };
       else if (url.pathname.endsWith('/logs')) data = Array.from({ length: 2000 }, (_, i) => ({
         id: `older-${i}`, minecraftAccountId: 'bench', type: 'CHAT', message: `Older line ${i}`, createdAt: new Date(1700000000000 + i * 1000).toISOString(),

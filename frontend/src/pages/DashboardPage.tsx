@@ -12,29 +12,26 @@ import { AccountSellPreview } from "../components/AccountSellPreview";
 import { AccountDetails } from "../components/AccountDetails";
 import { useCompactLayout } from "../lib/useCompactLayout";
 import { UploaderCategory } from "../components/UploaderCategory";
-import { useUploaderPreferences } from "../lib/useUploaderPreferences";
 
 type Uploader = Pick<ManagedUser, "id" | "username">;
 const uploaderKey = (account: DashboardAccount) => account.createdBy ? `user:${account.createdBy.id}` : "unassigned";
 
 export function DashboardPage() {
-  const { user } = useAuth();
+  const { user, dashboardProfile: profile } = useAuth();
+  const refreshProfile = profile.refresh;
   const isAdmin = user?.role === "ADMIN";
   const compact = useCompactLayout();
   const [accounts, setAccounts] = useState<DashboardAccount[] | null>(null);
   const [uploaders, setUploaders] = useState<Uploader[] | null>(null);
-  const categories = useUploaderPreferences(isAdmin ? user.id : null);
+  const preferences = profile.preferences;
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
-  const [reorderBusy, setReorderBusy] = useState(false);
+  const reorderBusy = profile.saving;
   const [now, setNow] = useState(Date.now);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const lastSales = useRef<Record<string, string>>({});
-  // Locally censor individual account cards, e.g. while screen-sharing.
-  // Persisted per website user so the preference survives reloads.
-  const blurKey = user ? `afk.blurredAccounts.${user.id}` : null;
-  const [blurred, setBlurred] = useState<Set<string>>(new Set());
+  const blurred = useMemo(() => new Set(preferences?.blurredAccountIds ?? []), [preferences?.blurredAccountIds]);
   function updateImage(update: { id: string; imageUrl: string }) {
     setAccounts((prev) => prev?.map((account) => account.id === update.id ? { ...account, imageUrl: update.imageUrl } : account) ?? null);
   }
@@ -47,7 +44,7 @@ export function DashboardPage() {
       ? { ...account, lastSellAt: update.lastSellAt } : account) ?? null);
     setNow(Date.now());
   }
-  const liveStatuses = useDashboardSocket(updateImage, () => void load(), updateSale);
+  const liveStatuses = useDashboardSocket(updateImage, () => { void load(); void profile.refresh(); }, updateSale);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -71,26 +68,8 @@ export function DashboardPage() {
     };
   }, [accounts]);
 
-  useEffect(() => {
-    if (!blurKey) return;
-    try {
-      const raw = localStorage.getItem(blurKey);
-      setBlurred(new Set(raw ? (JSON.parse(raw) as string[]) : []));
-    } catch {
-      setBlurred(new Set());
-    }
-  }, [blurKey]);
-
   function toggleBlur(id: string) {
-    setBlurred((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      try {
-        if (blurKey) localStorage.setItem(blurKey, JSON.stringify(Array.from(next)));
-      } catch { /* Blurring remains usable when browser storage is unavailable. */ }
-      return next;
-    });
+    profile.update({ blur: { accountId: id, value: !blurred.has(id) } });
   }
 
   const load = useCallback(async () => {
@@ -115,7 +94,13 @@ export function DashboardPage() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+    void refreshProfile();
+  }, [load, refreshProfile]);
+
+  const orderedAccounts = useMemo(() => {
+    const ranks = new Map((preferences?.accountOrder ?? []).map((id, index) => [id, index]));
+    return [...accounts ?? []].sort((a, b) => (ranks.get(a.id) ?? Infinity) - (ranks.get(b.id) ?? Infinity));
+  }, [accounts, preferences?.accountOrder]);
 
   const merged = useMemo(
     () => (accounts ?? []).map((a) => ({ ...a, live: liveStatuses[a.id] ?? a.live })),
@@ -129,28 +114,28 @@ export function DashboardPage() {
       const id = `user:${uploader.id}`;
       groups.set(id, { id, username: uploader.username, accounts: [] });
     }
-    for (const account of accounts ?? []) {
+    for (const account of orderedAccounts) {
       const id = uploaderKey(account);
       // Preserve legacy accounts and uploads whose creator was deleted, as
       // well as creators added between the two dashboard requests.
       if (!groups.has(id)) groups.set(id, { id, username: account.createdBy?.username ?? "Ohne Uploader", accounts: [] });
       groups.get(id)!.accounts.push(account);
     }
-    const ranks = new Map(categories.order.map((id, index) => [id, index]));
+    const ranks = new Map((preferences?.uploaderOrder ?? []).map((id, index) => [id, index]));
     return [...groups.values()].sort((a, b) => {
       const rankA = ranks.get(a.id), rankB = ranks.get(b.id);
       if (rankA !== undefined || rankB !== undefined) return (rankA ?? Infinity) - (rankB ?? Infinity);
       if (a.id === "unassigned" || b.id === "unassigned") return a.id === "unassigned" ? 1 : -1;
       return a.username.localeCompare(b.username) || a.id.localeCompare(b.id);
     });
-  }, [isAdmin, uploaders, accounts, categories.order]);
+  }, [isAdmin, uploaders, orderedAccounts, preferences?.uploaderOrder]);
 
   function moveCategory(id: string, direction: -1 | 1) {
     const order = uploaderGroups.map(group => group.id);
     const index = order.indexOf(id), target = index + direction;
     if (index < 0 || target < 0 || target >= order.length) return;
     [order[index], order[target]] = [order[target], order[index]];
-    categories.reorder(order);
+    profile.update({ uploaderOrder: order });
   }
 
   const counts = useMemo(() => {
@@ -197,24 +182,15 @@ export function DashboardPage() {
 
   async function moveAccount(id: string, direction: -1 | 1) {
     if (!accounts || reorderBusy) return;
-    const idx = accounts.findIndex((a) => a.id === id);
+    const idx = orderedAccounts.findIndex((a) => a.id === id);
     if (idx < 0) return;
-    const siblings = isAdmin ? accounts.filter(account => uploaderKey(account) === uploaderKey(accounts[idx])) : accounts;
+    const siblings = isAdmin ? orderedAccounts.filter(account => uploaderKey(account) === uploaderKey(orderedAccounts[idx])) : orderedAccounts;
     const neighbor = siblings[siblings.findIndex(account => account.id === id) + direction];
     if (!neighbor) return;
-    const nextIdx = accounts.findIndex(account => account.id === neighbor.id);
-    const next = [...accounts];
+    const nextIdx = orderedAccounts.findIndex(account => account.id === neighbor.id);
+    const next = [...orderedAccounts];
     [next[idx], next[nextIdx]] = [next[nextIdx], next[idx]];
-    setAccounts(next);
-    setReorderBusy(true);
-    try {
-      await api.put("/minecraft/accounts/reorder", { accountIds: next.map((a) => a.id) });
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to reorder accounts");
-      await load();
-    } finally {
-      setReorderBusy(false);
-    }
+    profile.update({ accountOrder: next.map(account => account.id) });
   }
 
   const actions = useRef({ moveAccount, updateImage, toggleBlur, runAction, deleteAccount });
@@ -252,8 +228,12 @@ export function DashboardPage() {
       </div>
 
       {error && <p className="alert-error">{error}</p>}
+      {profile.error && <div className="alert-error" role="alert">{profile.error}
+        <button type="button" className="btn btn-ghost btn-sm ml-2" onClick={profile.retry}>Erneut versuchen</button>
+      </div>}
+      {profile.saving && <p role="status" className="text-sm" style={{ color: "var(--text-muted)" }}>Ansicht wird gespeichert…</p>}
 
-      {accounts === null || (isAdmin && uploaders === null) ? (
+      {accounts === null || preferences === null || (isAdmin && uploaders === null) ? (
         <div className="card p-10 text-center text-sm" style={{ color: "var(--text-subtle)" }}>
           Loading accounts…
         </div>
@@ -261,10 +241,10 @@ export function DashboardPage() {
         <div className="uploader-categories space-y-3">
           {uploaderGroups.map((group, index) => <UploaderCategory key={group.id}
             id={group.id} username={group.username} count={group.accounts.length}
-            expanded={!categories.collapsed.includes(group.id)} index={index} total={uploaderGroups.length}
+            expanded={!preferences.collapsedUploaderIds.includes(group.id)} index={index} total={uploaderGroups.length}
             onToggle={() => {
               if (group.accounts.some(account => account.id === expandedId)) setExpandedId(null);
-              categories.toggle(group.id);
+              profile.update({ collapse: { uploaderId: group.id, value: !preferences.collapsedUploaderIds.includes(group.id) } });
             }} onMove={direction => moveCategory(group.id, direction)}>
             {group.accounts.map((account, accountIndex) => renderAccount(account, accountIndex, group.accounts.length))}
           </UploaderCategory>)}
@@ -283,7 +263,7 @@ export function DashboardPage() {
         </div>
       ) : (
         <div className="space-y-2.5">
-          {accounts.map((account, index) => renderAccount(account, index, accounts.length))}
+          {orderedAccounts.map((account, index) => renderAccount(account, index, orderedAccounts.length))}
         </div>
       )}
 

@@ -2,6 +2,7 @@ import { prisma } from "../database/prisma.js";
 import type { CreateAccountInput, UpdateAccountInput } from "./schemas.js";
 import type { SessionContext } from "../auth/session.js";
 import { parseSpawnerActions } from "../minecraft/spawners.js";
+import { applyAccountOrder, getAccountOrder, updatePreferences } from "../profile/service.js";
 
 /** Decode the remaining JSON settings for API clients. */
 function present<T extends { id: string; image: { revision: string } | null; spawnerActions: string }>(account: T) {
@@ -53,7 +54,7 @@ export async function listAccountsForSession(session: SessionContext) {
           select: publicAccountSelect,
           orderBy: [{ dashboardOrder: "asc" }, { name: "asc" }],
         });
-  return accounts.map(present);
+  return applyAccountOrder(accounts, await getAccountOrder(session.user.id)).map(present);
 }
 
 /** Dashboard cards need neither assignment lists nor all behavior settings. */
@@ -69,7 +70,7 @@ export async function listDashboardAccountsForSession(session: SessionContext) {
       createdBy: publicAccountSelect.createdBy,
     },
   });
-  return accounts.map(({ image, ...account }) => ({
+  return applyAccountOrder(accounts, await getAccountOrder(session.user.id)).map(({ image, ...account }) => ({
     ...account, imageUrl: image ? `/api/minecraft/accounts/${account.id}/image?v=${image.revision}` : null,
   }));
 }
@@ -179,7 +180,7 @@ export async function setAssignments(accountId: string, userIds: string[]) {
   ]);
 }
 
-/** Persist a full dashboard order for all accounts visible to the session user. */
+/** Persist the session user's order, without changing shared account rows. */
 export async function reorderAccountsForSession(session: SessionContext, accountIds: string[]): Promise<boolean> {
   const visible =
     session.user.role === "ADMIN"
@@ -194,14 +195,7 @@ export async function reorderAccountsForSession(session: SessionContext, account
   if (wanted.size !== visibleIds.length) return false;
   for (const id of visibleIds) if (!wanted.has(id)) return false;
 
-  await prisma.$transaction(
-    accountIds.map((id, idx) =>
-      prisma.minecraftAccount.update({
-        where: { id },
-        data: { dashboardOrder: idx },
-      }),
-    ),
-  );
+  await updatePreferences(session, { accountOrder: accountIds });
   return true;
 }
 
