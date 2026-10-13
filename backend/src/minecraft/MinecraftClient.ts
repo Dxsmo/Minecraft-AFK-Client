@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { isSlashCommand } from "./slashCommands.js";
 import { parseSellEarning } from "./sellEarnings.js";
 import {
   parseWorldRestartSeconds, WORLD_RESTART_SELL_LEAD_MS, WORLD_RESTART_SELL_COOLDOWN_MS,
@@ -75,7 +76,6 @@ function javaNetworkMode(account: ClientRuntimeConfig): "optimized" | "standard"
 export class MinecraftClient extends EventEmitter {
   private subprocess: ChildProcess | null = null;
   private status: ClientStatus = "OFFLINE";
-  private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private restartTimer: NodeJS.Timeout | null = null;
   private hangTimer: NodeJS.Timeout | null = null;
@@ -97,9 +97,8 @@ export class MinecraftClient extends EventEmitter {
   private restartCrouchWindowEnd = 0;
   private lastCrouchRestartAt: number | null = null;
   private pendingRestartCrouchCheck = false;
-
-  private health = 20;
-  private food = 20;
+  private periodicCrouchTimer: NodeJS.Timeout | null = null;
+  private pendingPeriodicCrouchCheck = false;
 
   constructor(private config: ClientRuntimeConfig) {
     super();
@@ -115,6 +114,7 @@ export class MinecraftClient extends EventEmitter {
 
   updateConfig(config: ClientRuntimeConfig): void {
     this.config = config;
+    this.syncPeriodicCrouchChecks();
     // Push behavior settings to a running bot so changes take effect live.
     if (this.subprocess && this.status === "ONLINE") {
       this.sendToBot({
@@ -137,11 +137,8 @@ export class MinecraftClient extends EventEmitter {
       status: this.status,
       serverHost: this.config.serverHost,
       serverPort: this.config.serverPort,
-      health: this.health,
-      food: this.food,
       connectedSince: this.connectedSince?.toISOString(),
       lastError: this.lastError,
-      reconnectAttempt: this.reconnectAttempt,
       msaSignIn: this.msaSignIn,
       authenticated: this.authenticated,
     };
@@ -152,12 +149,12 @@ export class MinecraftClient extends EventEmitter {
     if (this.restartTimer) return;
     this.manuallyStopped = false;
     this.clearReconnectTimer();
-    this.reconnectAttempt = 0;
     this.attemptConnect();
   }
 
   disconnect(): void {
     this.manuallyStopped = true;
+    this.syncPeriodicCrouchChecks();
     this.clearRestartTimer();
     this.clearReconnectTimer();
     this.clearHangTimer();
@@ -171,7 +168,6 @@ export class MinecraftClient extends EventEmitter {
     this.clearReconnectTimer();
     this.clearHangTimer();
     this.teardownSubprocess("Restart requested");
-    this.reconnectAttempt = 0;
     this.setStatus("OFFLINE");
     this.emitConsole("SYSTEM", "Restart: waiting 5 seconds before reconnecting...");
     this.restartTimer = setTimeout(() => {
@@ -181,6 +177,10 @@ export class MinecraftClient extends EventEmitter {
   }
 
   sendCommand(command: string): boolean {
+    if (!isSlashCommand(command)) {
+      this.emitConsole("ERROR", "Nur Slash-Befehle mit / am Anfang sind erlaubt");
+      return false;
+    }
     if (this.status !== "ONLINE" || !this.subprocess) {
       this.emitConsole("ERROR", "Bot is not online, cannot send command");
       return false;
@@ -202,7 +202,7 @@ export class MinecraftClient extends EventEmitter {
    * the console log table. Returns false when the bot is not online.
    */
   sendBackgroundCommand(command: string): boolean {
-    if (this.status !== "ONLINE" || !this.subprocess) return false;
+    if (!isSlashCommand(command) || this.status !== "ONLINE" || !this.subprocess) return false;
     return this.sendToBot({ type: "background_chat", text: command });
   }
 
@@ -221,14 +221,13 @@ export class MinecraftClient extends EventEmitter {
     return true;
   }
 
-  private attemptConnect(): void {
+  private attemptConnect(reconnecting = false): void {
     this.connectionEnded = false;
-    this.reconnectAttempt++;
-    this.setStatus(this.reconnectAttempt > 1 ? "RECONNECTING" : "CONNECTING");
+    this.setStatus(reconnecting ? "RECONNECTING" : "CONNECTING");
     this.lastError = undefined;
 
     this.log.info(
-      `Connection attempt ${this.reconnectAttempt} to ${this.config.serverHost}:${this.config.serverPort}`,
+      `Connecting to ${this.config.serverHost}:${this.config.serverPort}`,
     );
 
     const botBinaryPath = this.resolveBotLauncher();
@@ -419,7 +418,6 @@ export class MinecraftClient extends EventEmitter {
         this.connectedSince = new Date();
         this.msaSignIn = undefined;
         this.lastError = undefined;
-        this.reconnectAttempt = 0;
         this.setStatus("ONLINE");
         this.emitConsole("SYSTEM", "Spawned into the world");
         if (this.pendingRestartCrouchCheck && Date.now() <= this.restartCrouchWindowEnd && this.sendRestartCrouchCheck()) {
@@ -460,14 +458,6 @@ export class MinecraftClient extends EventEmitter {
       case "behavior_log":
         this.emitConsole("SYSTEM", String((event as { message: string }).message));
         break;
-
-      case "health": {
-        const { health, food } = event as { health: number; food: number };
-        this.health = health;
-        this.food = food;
-        this.emitStatus();
-        break;
-      }
 
       case "heartbeat":
         this.lastHeartbeatAt = Date.now();
@@ -524,10 +514,10 @@ export class MinecraftClient extends EventEmitter {
     const delay = RECONNECT_DELAY_MS;
     const seconds = Math.round(delay / 1000);
     this.setStatus("RECONNECTING");
-    this.emitConsole("SYSTEM", `Reconnecting in ${seconds}s (attempt ${this.reconnectAttempt + 1})...`);
-    this.log.info({ delay, attempt: this.reconnectAttempt }, `Reconnecting in ${seconds}s`);
+    this.emitConsole("SYSTEM", `Reconnecting in ${seconds}s...`);
+    this.log.info({ delay }, `Reconnecting in ${seconds}s`);
 
-    this.reconnectTimer = setTimeout(() => this.attemptConnect(), delay);
+    this.reconnectTimer = setTimeout(() => this.attemptConnect(true), delay);
   }
 
   private teardownSubprocess(reason: string): void {
@@ -569,7 +559,28 @@ export class MinecraftClient extends EventEmitter {
     if (this.status === newStatus) return;
     this.log.debug(`Status: ${this.status} -> ${newStatus}`);
     this.status = newStatus;
+    this.syncPeriodicCrouchChecks();
     this.emitStatus();
+  }
+
+  private syncPeriodicCrouchChecks(): void {
+    if (this.manuallyStopped || !this.config.crouchEnabled || this.status === "ERROR") {
+      if (this.periodicCrouchTimer) clearInterval(this.periodicCrouchTimer);
+      this.periodicCrouchTimer = null;
+      this.pendingPeriodicCrouchCheck = false;
+    } else if (this.status === "ONLINE") {
+      if (this.pendingPeriodicCrouchCheck && this.sendToBot({ type: "check_crouch" })) {
+        this.pendingPeriodicCrouchCheck = false;
+      }
+      if (!this.periodicCrouchTimer) {
+        // Preserve this cadence across world changes and reconnects. If the
+        // account is temporarily offline at the deadline, check on its rejoin.
+        this.periodicCrouchTimer = setInterval(() => {
+          this.pendingPeriodicCrouchCheck = this.status !== "ONLINE"
+            || !this.sendToBot({ type: "check_crouch" });
+        }, 30 * 60_000);
+      }
+    }
   }
 
   private emitStatus(): void {

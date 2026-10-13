@@ -1148,3 +1148,88 @@ body {
     transform: none;
   }
 }
+
+
+/* Compact layouts keep daily account controls in the thumb's reach. */
+.mobile-only, .mobile-nav, .mobile-brand { display: none; }
+.account-telemetry:empty { display: none; }
+@media (max-width: 1023px) {
+  :root { --app-header-height: calc(56px + env(safe-area-inset-top)); --mobile-nav-height: 64px; }
+  html { scrollbar-gutter: auto; }
+  body, #root, .app-shell, .app-content, main { min-width: 0; max-width: 100%; }
+  .app-content { padding-bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom)); }
+  .app-header { gap: 10px; padding: calc(6px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 6px max(12px, env(safe-area-inset-left)); }
+  .header-user { margin-left: auto; }
+  .mobile-brand { display: flex; align-items: center; gap: 8px; font-weight: 600; flex-shrink: 0; }
+  .desktop-only { display: none; }
+  .mobile-only { display: block; }
+  .input { min-height: 44px; font-size: 16px; }
+  .mobile-nav {
+    display: flex; position: fixed; z-index: 40; bottom: 0; inset-inline: 0;
+    min-height: var(--mobile-nav-height); padding: 5px 8px calc(5px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border-strong); background: var(--bg-elev);
+  }
+  .mobile-nav a {
+    display: flex; flex: 1; min-width: 0; min-height: 54px; flex-direction: column;
+    justify-content: center; align-items: center; gap: 5px; border-radius: 10px;
+    font-size: 11px; line-height: 1.2; text-align: center;
+  }
+  .mobile-nav svg { width: 20px; height: 20px; }
+  main { padding: 12px max(12px, env(safe-area-inset-right)) 12px max(12px, env(safe-area-inset-left)); }
+  main > div, main form, main section, main [class*="min-w-"] { min-width: 0; max-width: 100%; }
+  main h1, main h2, main p, main code, .stat-pill { overflow-wrap: anywhere; }
+  main input:not([type="checkbox"]):not([type="radio"]), main select, main textarea { max-width: 100%; font-size: 16px; min-height: 44px; }
+  .btn, .account-detail-page .account-heading-row .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
+  main [class*="sm:grid-cols-"], main [class*="md:grid-cols-"] { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-page > div:first-child p { display: none; }
+  .account-row {
+    grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto;
+    height: auto; min-height: 92px; column-gap: 12px; padding: 14px;
+  }
+  .account-sort, .account-image-control, .account-creator-avatar { display: none; }
+  .account-summary { grid-column: 1; grid-row: 1; align-self: center; }
+  .account-summary > :not(.account-heading) { display: none; }
+  .account-heading { flex-wrap: wrap; gap: 6px; }
+  .account-heading > span:first-child { width: 100%; font-size: 15px; }
+  .account-heading > span[class*="uppercase"] { display: none; }
+  .account-actions { grid-column: 2; grid-row: 1; gap: 6px; }
+  .account-actions .btn { min-height: 44px; padding: 10px 12px; border-radius: 8px; font-size: 13px; }
+  .account-detail-page { gap: 12px; }
+  .account-console-page { min-height: 0; }
+  .account-heading-row { gap: 12px; }
+  .account-identity { width: 100%; }
+  .account-detail-page .account-heading-row h1 { font-size: 18px; }
+  .account-controls { display: grid; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .account-telemetry:empty { display: none; }
+  .stat-pill { max-width: 100%; flex-wrap: wrap; }
+  .account-detail-page > .tab-bar { align-self: stretch; }
+  .account-detail-page .tab-btn { flex: 1; min-height: 44px; justify-content: center; font-size: 14px; padding: 10px; }
+  .account-console-tab { gap: 8px; }
+  .console-output.account-console-output { padding: 10px; min-height: 72px; font-size: 12px; }
+  .console-time { display: none; }
+  .console-row { gap: 6px; }
+  .account-command .input { min-width: 0; min-height: 44px; font-size: 16px; }
+  .account-command .btn { min-height: 44px; padding: 10px 12px; font-size: 13px; }
+  .admin-restart .btn { width: 100%; }
+  /* Dense desktop tables become vertical cards, without sideways scrolling. */
+  main table, main tbody { display: block; width: 100%; max-width: 100%; }
+  main thead { display: none; }
+  main tbody tr { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 12px; }
+  main td { min-width: 0; max-width: 100%; padding: 4px 0; white-space: normal; overflow-wrap: anywhere; }
+  main td[data-label] { display: grid; grid-template-columns: 78px minmax(0, 1fr); align-items: center; gap: 8px; }
+  main td[data-label]::before { content: attr(data-label); color: var(--text-subtle); font-size: 12px; }
+  main td.desktop-only { display: none; }
+  .note-paper { min-height: 0; padding: 16px; }
+  .note-toolbar { position: static; }
+}
+
+@media (max-width: 1023px) {
+  .account-settings nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
+  .account-settings nav button { min-width: 0; min-height: 48px; }
+  .account-settings label:has(input[type="checkbox"]), .dialog-panel label:has(input[type="checkbox"]) { min-height: 44px; }
+  .account-settings input[type="checkbox"], .dialog-panel input[type="checkbox"] { width: 18px; height: 18px; }
+  .account-settings .settings-nav-chevron { display: none; }
+  .dialog-overlay { padding: 12px; }
+  .dialog-panel { min-width: 0; max-width: 100%; max-height: calc(100dvh - 24px); overflow-y: auto; overscroll-behavior: contain; padding: 16px; }
+  .dialog-panel input:not([type="checkbox"]):not([type="radio"]), .dialog-panel select { font-size: 16px; min-height: 44px; }
+}

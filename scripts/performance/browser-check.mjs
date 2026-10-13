@@ -5,7 +5,7 @@ const base = process.env.PERF_URL ?? 'http://127.0.0.1:4173';
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const account = {
   id: 'bench', name: 'PerformanceBot', displayName: '', serverHost: 'localhost', serverPort: 25565,
-  edition: 'JAVA', authType: 'MICROSOFT', status: 'ONLINE', health: 20, food: 20,
+  edition: 'JAVA', authType: 'MICROSOFT', status: 'ONLINE',
   crouchEnabled: true, autoReconnect: true, autoSellEnabled: true, autoSellIntervalSeconds: 1,
   autoSellCommand: '/sell', minecraftVersion: '', notes: '', spawnerType: '', spawnerActions: {},
   createdBy: { id: 'admin' }, assignments: [],

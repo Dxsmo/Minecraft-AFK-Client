@@ -3,6 +3,7 @@ import { createUserSchema, updateUserSchema } from "./schemas.js";
 import * as usersService from "./service.js";
 import { parseOrReject } from "../utils/validate.js";
 import { recordAuditLog } from "../logging/auditLog.js";
+import { clientManager } from "../minecraft/ClientManager.js";
 
 /**
  * All routes here are admin-only: normal users cannot list, create, edit or
@@ -11,6 +12,17 @@ import { recordAuditLog } from "../logging/auditLog.js";
  */
 export default async function usersRoutes(app: FastifyInstance) {
   app.addHook("preHandler", app.requireAdmin);
+
+  app.post("/api/admin/restart-all", { preHandler: app.requireCsrf }, async (req, reply) => {
+    const result = clientManager.restartAllOnline();
+    await recordAuditLog({
+      userId: req.session!.user.id,
+      action: "ACCOUNTS_RESTART_ALL",
+      targetType: "MinecraftAccount",
+      details: result,
+    });
+    reply.send({ restartedCount: result.restarted.length, failedCount: result.failed.length, cooldownSeconds: 5 });
+  });
 
   app.get("/api/users", async (_req, reply) => {
     reply.send(await usersService.listUsers());

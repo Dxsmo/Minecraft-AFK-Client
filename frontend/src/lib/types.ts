@@ -57,11 +57,8 @@ export interface LiveStatus {
   status: ClientStatus;
   serverHost: string;
   serverPort: number;
-  health?: number;
-  food?: number;
   position?: { x: number; y: number; z: number };
   lastError?: string;
-  reconnectAttempt: number;
   connectedSince?: string;
   msaSignIn?: MsaSignInPrompt;
   authenticated?: boolean;

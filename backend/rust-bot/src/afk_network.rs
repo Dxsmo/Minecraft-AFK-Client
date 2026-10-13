@@ -271,7 +271,7 @@ pub(crate) fn report_network_diagnostics(bot: &azalea::Client) {
     emit(&OutEvent::BehaviorLog { message });
 }
 
-/// The bot handler needs only these raw packet callbacks. Chat, health,
+/// The bot handler needs only these raw packet callbacks. Chat,
 /// keepalive, disconnect, resource packs and world loading are still processed
 /// normally by Azalea and emit their own higher-level events.
 fn needs_callback(packet: &ClientboundGamePacket) -> bool {

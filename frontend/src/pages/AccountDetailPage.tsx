@@ -7,6 +7,7 @@ import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { ConsoleView } from "../components/ConsoleView";
 import { EarningsBox } from "../components/EarningsBox";
+import { useCompactLayout } from "../lib/useCompactLayout";
 const AccountSettingsPanel = lazy(() => import("../components/AccountSettingsPanel").then(module => ({ default: module.AccountSettingsPanel })));
 
 export function AccountDetailPage() {
@@ -33,6 +34,7 @@ export function AccountDetailPage() {
   const { logs, status, historyError } = useAccountConsole(id);
   const inputRef = useRef<HTMLInputElement>(null);
   const isAdmin = user?.role === "ADMIN";
+  const compact = useCompactLayout();
   const isCreator = !!account && !!user && account.createdBy?.id === user.id;
   const canManageAccess = isAdmin || isCreator;
 
@@ -44,22 +46,24 @@ export function AccountDetailPage() {
     const earnings = panel?.querySelector<HTMLElement>('[aria-label="Sell earnings"]');
     const graph = earnings?.querySelector<HTMLElement>(".earnings-details");
     const main = page?.closest("main");
-    if (!page || !panel || !output || !earnings || !graph || !main) return;
+    if (!page || !panel || !output || !main) return;
 
     // Split the available screen space between the console and earnings.
     // The graph gains exactly the height the console gives up, over the same 500ms.
     const measure = () => {
       const siblings = Array.from(panel.children).filter(element => element !== output);
       const otherHeight = siblings.reduce((total, element) => total + element.getBoundingClientRect().height, 0)
-        - graph.getBoundingClientRect().height;
+        - (graph?.getBoundingClientRect().height ?? 0);
       const gaps = parseFloat(getComputedStyle(panel).rowGap) * siblings.length;
       const bottomPadding = parseFloat(getComputedStyle(main).paddingBottom);
       // Ignore the tab's entrance translation when calculating screen space.
       const transform = getComputedStyle(panel).transform;
       const entranceOffset = transform === "none" ? 0 : new DOMMatrixReadOnly(transform).m42;
       const top = output.getBoundingClientRect().top + window.scrollY - entranceOffset;
-      const height = Math.max(48, window.innerHeight - top - bottomPadding - otherHeight - gaps);
-      const summaryHeight = earnings.getBoundingClientRect().height - graph.getBoundingClientRect().height;
+      const navigationHeight = document.querySelector(".mobile-nav")?.getBoundingClientRect().height ?? 0;
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const height = Math.max(72, viewportHeight - top - bottomPadding - navigationHeight - otherHeight - gaps);
+      const summaryHeight = (earnings?.getBoundingClientRect().height ?? 0) - (graph?.getBoundingClientRect().height ?? 0);
       const openHeight = Math.min(height, Math.max(48, Math.min((height + summaryHeight) * 0.32, height - 120)));
       page.style.setProperty("--console-closed-height", `${height}px`);
       page.style.setProperty("--console-open-height", `${openHeight}px`);
@@ -77,12 +81,16 @@ export function AccountDetailPage() {
     for (const element of Array.from(panel.children)) {
       if (element !== output && element !== earnings) observer.observe(element);
     }
-    for (const element of Array.from(earnings.children)) {
+    for (const element of Array.from(earnings?.children ?? [])) {
       if (element !== graph) observer.observe(element);
     }
     window.addEventListener("resize", measure);
-    return () => { observer.disconnect(); window.removeEventListener("resize", measure); };
-  }, [account?.id, tab, error, historyError, commandError, status?.msaSignIn]);
+    window.visualViewport?.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect(); window.removeEventListener("resize", measure);
+      window.visualViewport?.removeEventListener("resize", measure);
+    };
+  }, [account?.id, tab, error, historyError, commandError, status?.msaSignIn, compact]);
 
   async function load() {
     if (!id) return;
@@ -138,6 +146,10 @@ export function AccountDetailPage() {
     e.preventDefault();
     const text = command.trim();
     if (!id || !text || sendingCommand) return;
+    if (!/^\/[^\s\p{Cc}][^\p{Cc}]*$/u.test(text)) {
+      setCommandError("Nur Slash-Befehle mit / am Anfang sind erlaubt.");
+      return;
+    }
     const requestAccount = id;
     setSendingCommand(true);
     setCommandError(null);
@@ -169,7 +181,7 @@ export function AccountDetailPage() {
       data-earnings-expanded={earningsExpanded}>
       {account.edition === "BEDROCK" && (
         <div
-          className="rounded-xl px-5 py-4"
+          className="desktop-only rounded-xl px-5 py-4"
           style={{
             backgroundColor: "rgba(37,99,235,0.15)",
             border: "1px solid rgba(59,130,246,0.5)",
@@ -184,7 +196,7 @@ export function AccountDetailPage() {
         </div>
       )}
       <div className="account-heading-row flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="account-identity min-w-0">
           <Link
             to="/dashboard"
             className="text-xs font-medium transition-colors"
@@ -192,8 +204,8 @@ export function AccountDetailPage() {
           >
             ← Back to dashboard
           </Link>
-          <div className="mt-1.5 flex items-center gap-3">
-            <h1 className="text-xl font-semibold" style={{ color: "var(--text)" }}>
+          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-3">
+            <h1 className="min-w-0 break-words text-xl font-semibold" style={{ color: "var(--text)" }}>
               {displayName}
             </h1>
             <StatusBadge status={liveStatus} />
@@ -213,11 +225,11 @@ export function AccountDetailPage() {
               </span>
             )}
           </div>
-          <p className="mt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
+          <p className="desktop-only mt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
             {account.serverHost}:{account.serverPort} · {account.minecraftVersion || "auto-detect"}
           </p>
         </div>
-        <div className="flex max-w-full flex-wrap gap-1.5">
+        <div className="account-controls flex max-w-full flex-wrap gap-1.5">
           <button onClick={() => void runAction("start")} className="btn btn-secondary btn-sm">
             Start
           </button>
@@ -229,13 +241,13 @@ export function AccountDetailPage() {
           </button>
           <button
             onClick={() => void handleCleanSpawner()}
-            className="btn btn-ghost btn-sm"
+            className="desktop-only btn btn-ghost btn-sm"
             disabled={liveStatus !== "ONLINE"}
             title="Leert den anvisierten Spawner nach den Spawner-Einstellungen"
           >
             Clean spawner
           </button>
-          <button onClick={() => void handleDelete()} className="btn btn-danger btn-sm">
+          <button onClick={() => void handleDelete()} className="desktop-only btn btn-danger btn-sm">
             Delete
           </button>
         </div>
@@ -245,15 +257,12 @@ export function AccountDetailPage() {
 
       {/* Live telemetry strip — always visible across tabs. */}
       <div className="account-telemetry flex flex-wrap items-center gap-2">
-        {status?.health !== undefined && <StatPill label="Health" value={`${status.health}/20`} />}
-        {status?.food !== undefined && <StatPill label="Food" value={`${status.food}/20`} />}
-        {status?.position && (
+        {!compact && status?.position && (
           <StatPill
             label="Position"
             value={`${status.position.x.toFixed(0)}, ${status.position.y.toFixed(0)}, ${status.position.z.toFixed(0)}`}
           />
         )}
-        <StatPill label="Reconnects" value={String(status?.reconnectAttempt ?? 0)} />
         {status?.lastError && <StatPill label="Last error" value={status.lastError} danger />}
       </div>
 
@@ -319,6 +328,11 @@ export function AccountDetailPage() {
               onChange={(e) => setCommand(e.target.value)}
               placeholder="/gamemode creative"
               className="input font-mono"
+              aria-label="Slash-Befehl"
+              maxLength={256}
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               disabled={liveStatus !== "ONLINE"}
             />
             <button type="submit" className="btn btn-primary" disabled={liveStatus !== "ONLINE" || sendingCommand}>
@@ -326,7 +340,7 @@ export function AccountDetailPage() {
             </button>
           </form>
           {commandError && <p role="alert" className="alert-error">{commandError}</p>}
-          {id && <EarningsBox key={id} accountId={id} onExpandedChange={setEarningsExpanded} />}
+          {id && !compact && <EarningsBox key={id} accountId={id} onExpandedChange={setEarningsExpanded} />}
         </div>
       )}
 

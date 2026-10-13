@@ -67,8 +67,8 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: "rgba(0,0,0,0.6)" }}>
-      <div className="card w-full max-w-md p-6" style={{ boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+    <div className="dialog-overlay fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: "rgba(0,0,0,0.6)" }}>
+      <div className="dialog-panel card w-full max-w-md p-6" style={{ boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
         {createdId ? (
           <SignInStep
             name={name}

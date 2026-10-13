@@ -155,8 +155,12 @@ Copy `.env.example` to `.env` (repo root) for Docker Compose, or to
 ## 5. Admin & user management
 
 - The **first** admin is bootstrapped from `.env` on first boot (see above).
-- Admins manage further users under **Users** in the sidebar: create,
+- Admins manage further users under **Admin Panel** in the sidebar: create,
   change role, disable/enable, delete, and reset passwords.
+- **Restart all** in the Admin Panel restarts the Minecraft accounts that are
+  online at the moment of the click, each once with a five-second offline pause.
+  Offline/connecting/reconnecting accounts are left alone. The action requires
+  an admin session and CSRF token and is recorded in the audit log.
 - Admins can assign, change or clear an optional **Minecraft-Name** for each
   website user. The account list shows that creator's small skin head directly
   left of the eye button, including for shared accounts. Heads are fetched from
@@ -237,6 +241,11 @@ additional users access afterwards in the account's **Settings** panel):
   per minute for five minutes. Checks inspect server sneak metadata, reassert
   held input, and survive bot reconnects; a missed check runs on rejoin within
   that window.
+  Enabled crouch also receives an independent server-metadata check every
+  30 minutes while online, for both Java and Bedrock. World changes and the
+  existing checks and reconnects do not postpone it. A check missed during
+  reconnection runs on rejoin; disabling crouch or stopping an account cancels
+  this periodic timer.
   Auto-sell recognizes HugoSMP's `Items verkaufen` menu from the current
   inventory state, even when spawn events or delayed callbacks have cleared
   the request association. Populated late sell menus are reused for selling.
@@ -510,14 +519,27 @@ by a WebSocket (`/ws/accounts/:id`), showing:
 - `USER_COMMAND` (what you sent)
 - `WARNING` / `ERROR`
 
-Commands typed in the console (or sent via `POST
-/api/minecraft/accounts/:id/command`) are forwarded as-is to the
+Only slash commands beginning with `/` can be sent from the console, through
+its WebSocket or via `POST /api/minecraft/accounts/:id/command`. Plain chat,
+empty commands and embedded control characters are rejected before reaching
+the bot. Valid commands are forwarded as-is to the
 Minecraft server through the bot. **The service never bypasses server
 permissions** — if the bot account isn't OP'd or lacks a permission-plugin
 grant, the vanilla server will reject the command exactly as it would for
 a real player. The last 20,000 console lines per account are persisted to
 SQLite and pruned automatically. The console loads recent history and keeps
 new lines visible without losing the user's position when reading older output.
+
+Health, hunger and reconnect-attempt counters are no longer collected or sent
+as website status telemetry by either bot edition or the supervisor.
+
+Below 1024px the website uses full-width content and a bottom navigation for
+Accounts, Admin Panel (admins) and Settings. Account status, lifecycle controls,
+console commands and core settings remain available. Sale graphs, account images,
+creator avatars, sorting, spawner/access tuning and IP-ban administration are
+omitted from this compact view; graphs/images/avatars are not loaded there.
+Dense tables become vertical cards, log messages wrap, account dialogs scroll
+inside the viewport, and the console reserves space for the bottom navigation.
 Restart leaves the account offline for five seconds before reconnecting.
 
 ---

@@ -27,14 +27,14 @@ dashboard) is edition-agnostic.
   Java → the compiled `azalea-bot` binary; Bedrock → `node dist/bedrock-bot/index.js`.
   `ClientManager` sets `edition` in the runtime config.
 - **Bedrock bot** — `backend/src/bedrock-bot/` (protocol/send/behaviors/index)
-  mirrors the Rust bot: lifecycle, reconnect handoff, chat, health,
+  mirrors the Rust bot: lifecycle, reconnect handoff, chat,
   auto-sell (owned container + acknowledged stack transfers), held crouch
   input, and centralized sell chat parsing.
 
 ### What works vs. what is limited on Bedrock
 
 - **Implemented:** connect/login (offline + Microsoft device-code), chat/console,
-  commands, interval auto-sell, crouch, health telemetry, sell chat parsing.
+  commands, interval auto-sell, crouch, sell chat parsing.
 - **Connection:** always uses the configured public port instead of following
   a proxy's advertised internal port. Discovery, Microsoft authentication,
   transport, login and world initialization have separate bounded deadlines;
@@ -179,7 +179,8 @@ The live, real bot state that *is* available is already surfaced elsewhere in
 the UI and stays in sync with the server:
 
 - Live console (chat + server messages + events) via WebSocket.
-- Live status: connection state, health, food, reconnects.
+- Live status: connection state, sign-in prompts and connection errors.
+  Health/food telemetry and reconnect-attempt counters have been removed.
 
 If a rendered Live View is ever required, the realistic path is an **external
 renderer**: run a separate, GPU-capable headless renderer (e.g. a containerised

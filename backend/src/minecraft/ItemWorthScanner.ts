@@ -410,7 +410,7 @@ export class ItemWorthScanner {
     const scan = await prisma.itemWorthScan.findUnique({ where: { id: SCAN_ID } });
     if (!scan || (scan.status !== "PAUSED" && scan.status !== "RUNNING")) return;
     // A scan that gave up stays parked until an admin starts a new one. Status
-    // events fire on every health update, not just on transitions, so
+    // snapshots can repeat without a connection-state transition, so
     // without this guard the give-up state would be undone within seconds.
     if (!scan.resumable) return;
 
@@ -579,7 +579,7 @@ export class ItemWorthScanner {
   /**
    * Park a running scan. `resumable` false means the scan gave up rather than
    * merely losing its bots, so it must NOT be picked up again by the status
-   * listener - otherwise the give-up guard would be undone by the next health
+   * listener - otherwise the give-up guard would be undone by the next repeated status
    * tick and the scan would hammer the server for hours.
    */
   private async pause(reason: string, resumable = true): Promise<void> {

@@ -136,6 +136,108 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(client.getStatus().status).toBe("ONLINE");
   });
 
+  it("does not collect or broadcast removed health, food and reconnect counters", async () => {
+    const client = makeClient();
+    client.connect();
+    lastChild().send({ type: "spawn" });
+    await tick();
+    const status = vi.fn();
+    client.on("status", status);
+    lastChild().send({ type: "health", health: 3, food: 2 });
+    await tick();
+    expect(status).not.toHaveBeenCalled();
+    for (const field of ["health", "food", "reconnectAttempt"]) expect(client.getStatus()).not.toHaveProperty(field);
+  });
+
+  it.each(["JAVA", "BEDROCK"] as const)("checks enabled %s crouch every 30 minutes independently of repeat spawns", async edition => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    const client = makeClient({ edition, crouchEnabled: true });
+    try {
+      client.connect();
+      const child = lastChild();
+      child.send({ type: "spawn" });
+      await tick();
+      heartbeat = setInterval(() => child.send({ type: "heartbeat" }), 30_000);
+      const checks = () => child.stdin.write.mock.calls.map(([line]) => JSON.parse(String(line)))
+        .filter(message => message.type === "check_crouch");
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      child.send({ type: "spawn" });
+      await tick();
+      await vi.advanceTimersByTimeAsync(15 * 60_000 - 1);
+      expect(checks()).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(checks()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(checks()).toHaveLength(2);
+      client.updateConfig(baseConfig({ edition, crouchEnabled: false }));
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(checks()).toHaveLength(2);
+      client.updateConfig(baseConfig({ edition, crouchEnabled: true }));
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(checks()).toHaveLength(3);
+      client.disconnect();
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(checks()).toHaveLength(3);
+    } finally {
+      clearInterval(heartbeat);
+      client.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects plain chat and multiple lines before writing to the bot", async () => {
+    const client = makeClient();
+    client.connect();
+    lastChild().send({ type: "spawn" });
+    await tick();
+    const child = lastChild();
+    child.stdin.write.mockClear();
+    for (const text of ["hello", "/", " /home", "/say hi\nplain chat", "/\u0000"]) {
+      expect(client.sendCommand(text)).toBe(false);
+      expect(client.sendBackgroundCommand(text)).toBe(false);
+    }
+    expect(child.stdin.write).not.toHaveBeenCalled();
+    expect(client.sendCommand("/home farm")).toBe(true);
+    expect(client.sendCommand("//wand")).toBe(true);
+    expect(child.stdin.write).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["JAVA", "BEDROCK"] as const)("retains the %s half-hour cadence across reconnects and catches a missed check on rejoin", async edition => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    const client = makeClient({ edition, crouchEnabled: true });
+    try {
+      client.connect();
+      lastChild().send({ type: "spawn" });
+      await tick();
+      heartbeat = setInterval(() => {
+        if (client.getStatus().status === "ONLINE") lastChild().send({ type: "heartbeat" });
+      }, 30_000);
+      const checks = () => children.flatMap(child => child.stdin.write.mock.calls)
+        .map(([line]) => JSON.parse(String(line))).filter(message => message.type === "check_crouch");
+      await vi.advanceTimersByTimeAsync(30 * 60_000 - 1000);
+      lastChild().exitWith(1);
+      await tick();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(checks()).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(14_000);
+      expect(children).toHaveLength(2);
+      lastChild().send({ type: "spawn" });
+      await tick();
+      expect(checks()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(30 * 60_000 - 14_000);
+      expect(checks()).toHaveLength(2);
+      client.disconnect();
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(checks()).toHaveLength(2);
+    } finally {
+      clearInterval(heartbeat);
+      client.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("writes the config as the first line to the subprocess stdin", () => {
     const client = makeClient({ serverHost: "play.example.com", serverPort: 25566 });
     client.connect();
@@ -697,7 +799,7 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
       expect(client.getStatus().status).toBe("RECONNECTING");
       expect(client.getStatus().lastError).toBe(message);
       expect(client.getStatus().connectedSince).toBeUndefined();
-      expect(consoleEvents).toContain("Reconnecting in 15s (attempt 1)...");
+      expect(consoleEvents).toContain("Reconnecting in 15s...");
       expect(consoleEvents.filter(line => line.startsWith("Reconnecting in"))).toHaveLength(1);
       expect(client.sendCommand("/sell")).toBe(false);
       expect(old.stdin.write.mock.calls.map(([line]) => JSON.parse(line)))

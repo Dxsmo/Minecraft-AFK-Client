@@ -262,30 +262,6 @@ async function main(): Promise<void> {
     if (sneaking !== null) behavior.onSneakStatus(sneaking);
   });
 
-  c.on("set_health", (packet: unknown) => {
-    try {
-      const p = packet as { health?: number };
-      if (typeof p.health === "number") behavior.reportHealth(p.health, null);
-    } catch {
-      /* ignore */
-    }
-  });
-
-  c.on("update_attributes", (packet: unknown) => {
-    try {
-      const attrs = (packet as { attributes?: { name: string; current: number }[] }).attributes ?? [];
-      let health: number | null = null;
-      let food: number | null = null;
-      for (const a of attrs) {
-        if (a.name === "minecraft:health") health = a.current;
-        if (a.name === "minecraft:player.hunger") food = a.current;
-      }
-      if (health != null || food != null) behavior.reportHealth(health, food);
-    } catch {
-      /* ignore */
-    }
-  });
-
   // --- Chat ---
   c.on("text", (packet: unknown) => {
     try {

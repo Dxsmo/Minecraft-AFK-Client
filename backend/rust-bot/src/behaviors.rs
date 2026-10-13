@@ -517,7 +517,7 @@ impl BehaviorState {
             .component::<azalea::entity::metadata::AbstractEntityShiftKeyDown>()
             .map(|flag| if **flag { "bestätigt" } else { "nicht aktiv" })
             .unwrap_or("noch nicht bestätigt");
-        emit(&OutEvent::BehaviorLog { message: format!("Crouch-Check nach Weltneustart: Serverstatus {status}; Sneak wird erneut angefordert") });
+        emit(&OutEvent::BehaviorLog { message: format!("Crouch-Check: Serverstatus {status}; Sneak wird erneut angefordert") });
         self.crouch_resync_pending = true;
         self.next_crouch_check_at = Instant::now();
     }

@@ -73,11 +73,8 @@ export interface ClientStatusSnapshot {
   status: ClientStatus;
   serverHost: string;
   serverPort: number;
-  health?: number;
-  food?: number;
   position?: { x: number; y: number; z: number };
   lastError?: string;
-  reconnectAttempt: number;
   connectedSince?: string;
   msaSignIn?: MsaSignInPrompt;
   /** True once the Microsoft profile has been resolved (device-code sign-in completed). */

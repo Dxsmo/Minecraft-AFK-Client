@@ -22,7 +22,7 @@ const sellListeners = new Set<(event: { id: string; lastSellAt: string }) => voi
 const sendCommand = vi.fn(() => true);
 const headers = (index = 0, csrf = true) => ({ cookie: `${config.session.cookieName}=${sessions[index].sessionId}`, ...(csrf ? {"x-csrf-token": sessions[index].csrfToken} : {}) });
 const snapshot = (account: {id:string;name:string}) => ({ id:account.id, name:account.name, status:"ONLINE", serverHost:"minecraft.example", serverPort:25565,
-  reconnectAttempt:0, msaSignIn:{userCode:account.id === accounts[1]?.id ? "FOREIGN-SECRET-CODE" : "OWN-CODE",verificationUri:"https://microsoft.com/link"} });
+  msaSignIn:{userCode:account.id === accounts[1]?.id ? "FOREIGN-SECRET-CODE" : "OWN-CODE",verificationUri:"https://microsoft.com/link"} });
 const waitFor = async (check:()=>boolean|Promise<boolean>) => {
   const deadline = Date.now()+2500;
   while (!await check()) { if(Date.now()>deadline) throw Error("Security assertion timed out"); await new Promise(r=>setTimeout(r,10)); }
@@ -200,13 +200,42 @@ it("filters the initial dashboard snapshot and live events, including Microsoft 
   await waitFor(()=>connection.messages.some(m=>m.type==="statuses"));
   expect(connection.messages[0].statuses.map((s:any)=>s.id)).toEqual([accounts[0].id]);
   for(const listener of statusListeners) listener(snapshot(accounts[1]));
-  for(const listener of statusListeners) listener({...snapshot(accounts[0]),health:13});
-  await waitFor(()=>connection.messages.some(m=>m.status?.health===13));
+  for(const listener of statusListeners) listener({...snapshot(accounts[0]),name:"Updated-owned-account"});
+  await waitFor(()=>connection.messages.some(m=>m.status?.name==="Updated-owned-account"));
   expect(JSON.stringify(connection.messages)).not.toContain("FOREIGN-SECRET-CODE");
   expect(JSON.stringify(connection.messages)).not.toContain(accounts[1].id);
   const admin=await socket("/ws/dashboard",2);
   await waitFor(()=>admin.messages.some(m=>m.type==="statuses"));
   expect(admin.messages[0].statuses).toHaveLength(2);
+});
+
+it("allows restart-all only for authenticated admins with CSRF protection", async () => {
+  const restart = vi.spyOn(clientManager, "restartAllOnline").mockReturnValue({ restarted: accounts.map(a => a.id), failed: [] });
+  try {
+    expect((await app.inject({ method: "POST", url: "/api/admin/restart-all" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: "/api/admin/restart-all", headers: headers(0) })).statusCode).toBe(403);
+    expect((await app.inject({ method: "POST", url: "/api/admin/restart-all", headers: headers(2, false) })).statusCode).toBe(403);
+    expect(restart).not.toHaveBeenCalled();
+    const response = await app.inject({ method: "POST", url: "/api/admin/restart-all", headers: headers(2) });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ restartedCount: 2, failedCount: 0, cooldownSeconds: 5 });
+    expect(restart).toHaveBeenCalledOnce();
+    expect(await prisma.auditLog.findFirst({ where: { userId: users[2].id, action: "ACCOUNTS_RESTART_ALL" } })).not.toBeNull();
+  } finally { restart.mockRestore(); }
+});
+
+it("rejects plain chat and multiline messages through HTTP and account WebSockets", async () => {
+  const connection = await socket(`/ws/accounts/${accounts[0].id}`);
+  await waitFor(() => connection.messages.some(m => m.type === "history"));
+  for (const command of ["hello world", "/", "/say hi\nplain chat", " /home"]) {
+    const response = await app.inject({ method: "POST", url: `/api/minecraft/accounts/${accounts[0].id}/command`, headers: headers(0), payload: { command } });
+    expect(response.statusCode).toBe(400);
+    const errorsBefore = connection.messages.filter(m => m.type === "error").length;
+    connection.ws.send(JSON.stringify({ type: "command", command, csrfToken: sessions[0].csrfToken }));
+    await waitFor(() => connection.messages.filter(m => m.type === "error").length > errorsBefore);
+    expect(connection.messages.at(-1)).toMatchObject({ type: "error", reason: "INVALID_MESSAGE" });
+  }
+  expect(sendCommand).not.toHaveBeenCalled();
 });
 
 it("exposes last-sale times only to authorized viewers and rechecks dashboard access for every sale",async()=>{

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { api, ApiError } from "../lib/api";
 import type { MinecraftAccount } from "../lib/types";
 import { useAuth } from "../lib/auth";
+import { useCompactLayout } from "../lib/useCompactLayout";
 import { AccessUsernameInput, type AccessUser } from "./AccessUsernameInput";
 import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
 import { SPAWNER_TYPES, getSpawnerType, spawnerItemTexture, type SpawnerAction } from "../lib/spawners";
@@ -18,6 +19,7 @@ export function AccountSettingsPanel({
   onUpdated: () => void;
 }) {
   const { user } = useAuth();
+  const compact = useCompactLayout();
   const [users, setUsers] = useState<AccessUser[]>(() => account.assignments.map((assignment) => assignment.user));
   const [crouchEnabled, setCrouchEnabled] = useState(account.crouchEnabled);
   const [displayName, setDisplayName] = useState(account.displayName ?? "");
@@ -120,11 +122,12 @@ export function AccountSettingsPanel({
     },
     ...(canManageAccess ? [{ id: "users", label: "Access", icon: "users" as CatIcon, meta: `${assigned.size} assigned` }] : []),
   ];
-  const active = categories.find((c) => c.id === activeCat) ?? categories[0];
+  const visibleCategories = compact ? categories.filter(category => !["spawner", "users"].includes(category.id)) : categories;
+  const active = visibleCategories.find((c) => c.id === activeCat) ?? visibleCategories[0];
   const selectedSpawner = getSpawnerType(spawnerType);
 
   return (
-    <div className="card overflow-hidden p-0 text-sm">
+    <div className="account-settings card overflow-hidden p-0 text-sm">
       {/* Header */}
       <div className="flex items-start justify-between gap-3 border-b p-5 py-4" style={{ borderColor: "var(--border)" }}>
         <div>
@@ -136,7 +139,7 @@ export function AccountSettingsPanel({
           </p>
         </div>
         {account.createdBy && (
-          <div className="flex shrink-0 items-center gap-1.5 text-[11px]">
+          <div className="desktop-only flex shrink-0 items-center gap-1.5 text-[11px]">
             <span style={{ color: "var(--text-subtle)" }}>Erstellt von</span>
             <span
               className="rounded-full px-2 py-0.5 font-semibold"
@@ -154,12 +157,12 @@ export function AccountSettingsPanel({
           className="flex gap-1 overflow-x-auto border-b p-3 md:flex-col md:overflow-visible md:border-b-0 md:border-r"
           style={{ borderColor: "var(--border)" }}
         >
-          {categories.map((cat) => (
+          {visibleCategories.map((cat) => (
             <button
               key={cat.id}
               type="button"
               onClick={() => setActiveCat(cat.id)}
-              data-active={activeCat === cat.id}
+              data-active={active.id === cat.id}
               className="settings-nav-btn"
             >
               <CatGlyph name={cat.icon} />
@@ -198,7 +201,7 @@ export function AccountSettingsPanel({
               </h4>
             </div>
 
-            {activeCat === "general" && (
+            {active.id === "general" && (
               <div>
                 <label className="label">Display name</label>
                 <input
@@ -214,7 +217,7 @@ export function AccountSettingsPanel({
               </div>
             )}
 
-            {activeCat === "connection" && (
+            {active.id === "connection" && (
               <>
                 <Field label="Minecraft version" hint={versionMessage ?? undefined}>
                   <select
@@ -259,14 +262,14 @@ export function AccountSettingsPanel({
               </>
             )}
 
-            {activeCat === "behavior" && (
+            {active.id === "behavior" && (
               <>
                 <Toggle label="Crouch" description="Continuously sneak while connected." checked={crouchEnabled} onChange={setCrouchEnabled} />
                 <Toggle label="Auto-reconnect" checked={autoReconnect} onChange={setAutoReconnect} />
               </>
             )}
 
-            {activeCat === "autosell" && (
+            {active.id === "autosell" && (
               <>
                 <Toggle
                   label="Enabled"
@@ -289,7 +292,7 @@ export function AccountSettingsPanel({
               </>
             )}
 
-            {activeCat === "spawner" && (
+            {active.id === "spawner" && (
               <>
                 <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
                   Wähle den Spawner-Typ, vor dem dieser Account steht. Danach kannst du für
@@ -363,7 +366,7 @@ export function AccountSettingsPanel({
               </>
             )}
 
-            {activeCat === "users" && canManageAccess && (
+            {active.id === "users" && canManageAccess && (
               <>
                 <p className="mb-2 text-xs" style={{ color: "var(--text-subtle)" }}>
                   Gib den Benutzernamen ein, um Zugriff auf diesen Account freizugeben. Admins haben immer Zugriff.

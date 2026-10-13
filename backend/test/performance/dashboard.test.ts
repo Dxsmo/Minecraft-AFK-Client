@@ -26,7 +26,7 @@ beforeAll(async () => {
     const account = await prisma.minecraftAccount.create({ data: {
       name: `Batch-${randomUUID()}`, serverHost: "localhost", assignments: { create: { userId } },
     } });
-    statuses.push({ id: account.id, name: account.name, status: "ONLINE", serverHost: "localhost", serverPort: 25565, reconnectAttempt: 0 });
+    statuses.push({ id: account.id, name: account.name, status: "ONLINE", serverHost: "localhost", serverPort: 25565 });
   }
   vi.spyOn(clientManager, "getAllStatuses").mockReturnValue(statuses);
   vi.spyOn(clientManager, "onStatusEvent").mockImplementation(listener => { emitStatus = listener; return () => {}; });
@@ -76,8 +76,8 @@ it("coalesces a burst into one current authorization check and excludes revoked 
     expect(assignments).toHaveBeenCalledTimes(1);
     sessions.mockClear(); assignments.mockClear();
     await prisma.userMinecraftAccount.deleteMany({ where: { userId, minecraftAccountId: statuses[1].id } });
-    for (let i = 0; i < 100; i++) for (const status of statuses) emitStatus({ ...status, health: i });
-    await expect.poll(() => messages.find(m => m.type === "status")?.status.health).toBe(99);
+    for (let i = 0; i < 100; i++) for (const status of statuses) emitStatus({ ...status, name: `Update-${i}` });
+    await expect.poll(() => messages.find(m => m.type === "status")?.status.name).toBe("Update-99");
     expect(messages.filter(m => m.type === "status")).toHaveLength(1);
     expect(messages.find(m => m.type === "status").status.id).toBe(statuses[0].id);
     expect(sessions).toHaveBeenCalledTimes(1);

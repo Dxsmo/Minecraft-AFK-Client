@@ -67,7 +67,6 @@ export type OutEvent =
   | { type: "warning"; message: string }
   | { type: "fatal_error"; error: string }
   | { type: "behavior_log"; message: string }
-  | { type: "health"; health: number; food: number }
   | { type: "heartbeat" };
 
 /**

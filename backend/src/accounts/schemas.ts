@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isSlashCommand } from "../minecraft/slashCommands.js";
 import { SPAWNER_TYPE_IDS } from "../minecraft/spawners.js";
 
 /** Per-item spawner handling: what to do with each item type the spawner makes. */
@@ -78,7 +79,7 @@ export const reorderAccountsSchema = z.object({
 });
 
 export const commandSchema = z.object({
-  command: z.string().min(1).max(256),
+  command: z.string().min(1).max(256).refine(isSlashCommand, "Only slash commands beginning with / are allowed"),
 });
 
 export type CreateAccountInput = z.infer<typeof createAccountSchema>;

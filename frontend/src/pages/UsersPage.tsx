@@ -1,12 +1,36 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "../lib/api";
 import type { BannedIp, ManagedUser } from "../lib/types";
+import { useCompactLayout } from "../lib/useCompactLayout";
+import { useAuth } from "../lib/auth";
 
 export function UsersPage() {
+  const { user: currentUser } = useAuth();
+  const compact = useCompactLayout();
   const [users, setUsers] = useState<ManagedUser[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ username: "", password: "", minecraftUsername: "", role: "USER" as "ADMIN" | "USER" });
   const [creating, setCreating] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [restartMessage, setRestartMessage] = useState<string | null>(null);
+
+  async function restartAll() {
+    if (restarting) return;
+    setRestarting(true);
+    setRestartMessage(null);
+    setError(null);
+    try {
+      const result = await api.post<{ restartedCount: number; failedCount: number; cooldownSeconds: number }>("/admin/restart-all");
+      setRestartMessage(result.restartedCount
+        ? `${result.restartedCount} Online-Accounts werden mit ${result.cooldownSeconds} Sekunden Offline-Pause neu gestartet.`
+        : "Derzeit sind keine Accounts online.");
+      if (result.failedCount) setError(`${result.failedCount} Accounts konnten nicht neu gestartet werden.`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Accounts konnten nicht neu gestartet werden.");
+    } finally {
+      setRestarting(false);
+    }
+  }
 
   async function load() {
     try {
@@ -55,19 +79,29 @@ export function UsersPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="admin-panel space-y-6">
       <div>
         <h1 className="text-xl font-semibold" style={{ color: "var(--text)" }}>
-          Users
+          Admin Panel
         </h1>
         <p className="mt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
-          Create users and manage their access
+          Accounts und Benutzer verwalten
         </p>
       </div>
 
       {error && <p className="alert-error">{error}</p>}
+      {currentUser?.role === "ADMIN" && <section className="card admin-restart flex flex-wrap items-center justify-between gap-3 p-4">
+        <div className="min-w-0">
+          <h2 className="font-semibold">Online-Accounts neu starten</h2>
+          <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>Alle aktuell online befindlichen Minecraft-Accounts starten nach 5 Sekunden Offline-Pause erneut.</p>
+        </div>
+        <button type="button" onClick={() => void restartAll()} disabled={restarting} className="btn btn-primary">
+          {restarting ? "Restarting…" : "Restart all"}
+        </button>
+      </section>}
+      {restartMessage && <p role="status" className="text-sm" style={{ color: "var(--text-muted)" }}>{restartMessage}</p>}
 
-      <form onSubmit={handleCreate} className="card flex flex-wrap items-end gap-3 p-4" autoComplete="off">
+      <form onSubmit={handleCreate} className="desktop-only card flex flex-wrap items-end gap-3 p-4" autoComplete="off">
         <div>
           <label className="label">Username</label>
           <input
@@ -113,8 +147,8 @@ export function UsersPage() {
         </button>
       </form>
 
-      <div className="card overflow-x-auto">
-        <table className="w-full text-left text-sm">
+      <div className="card min-w-0 overflow-x-auto">
+        <table className="responsive-table w-full text-left text-sm">
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
               <Th>Username</Th>
@@ -128,22 +162,22 @@ export function UsersPage() {
           <tbody>
             {(users ?? []).map((u) => (
               <tr key={u.id} style={{ borderTop: "1px solid var(--border)" }}>
-                <Td><span style={{ color: "var(--text)" }} className="font-medium">{u.username}</span></Td>
-                <Td>
+                <Td label="Benutzer"><span style={{ color: "var(--text)" }} className="font-medium">{u.username}</span></Td>
+                <Td secondary>
                   <MinecraftUsernameField user={u} onSaved={(updated) =>
                     setUsers((previous) => previous?.map((entry) => entry.id === updated.id ? updated : entry) ?? null)} />
                 </Td>
-                <Td>{u.role}</Td>
-                <Td>
+                <Td label="Rolle">{u.role}</Td>
+                <Td label="Status">
                   <span style={{ color: u.status === "ACTIVE" ? "#38bdf8" : "var(--text-subtle)" }}>{u.status}</span>
                 </Td>
-                <Td>{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : "Never"}</Td>
-                <Td>
+                <Td secondary>{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : "Never"}</Td>
+                <Td label="Aktionen">
                   <div className="flex gap-1.5">
                     <button onClick={() => void toggleStatus(u)} className="btn btn-secondary btn-sm">
                       {u.status === "ACTIVE" ? "Disable" : "Enable"}
                     </button>
-                    <button onClick={() => void remove(u)} className="btn btn-danger btn-sm">
+                    <button onClick={() => void remove(u)} className="desktop-only btn btn-danger btn-sm">
                       Delete
                     </button>
                   </div>
@@ -159,7 +193,7 @@ export function UsersPage() {
         )}
       </div>
 
-      <IpBanCard />
+      {!compact && <IpBanCard />}
     </div>
   );
 }
@@ -213,9 +247,9 @@ function Th({ children }: { children: React.ReactNode }) {
     </th>
   );
 }
-function Td({ children }: { children: React.ReactNode }) {
+function Td({ children, label, secondary = false }: { children: React.ReactNode; label?: string; secondary?: boolean }) {
   return (
-    <td className="px-4 py-3" style={{ color: "var(--text-muted)" }}>
+    <td data-label={label} className={`${secondary ? "desktop-only " : ""}px-4 py-3`} style={{ color: "var(--text-muted)" }}>
       {children}
     </td>
   );

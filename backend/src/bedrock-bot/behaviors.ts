@@ -64,7 +64,6 @@ export class BehaviorState {
   private serverSneaking: boolean | null = null;
   private crouchResyncGraceUntil = 0;
   private crouchResyncPending = false;
-  private lastHealth: { health: number; food: number } | null = null;
 
   constructor(config: Config, sender: BotSender) {
     this.sender = sender;
@@ -257,19 +256,9 @@ export class BehaviorState {
   checkCrouch(): void {
     if (!this.cfg.crouch_enabled) return;
     const status = this.serverSneaking === true ? "bestätigt" : this.serverSneaking === false ? "nicht aktiv" : "noch nicht bestätigt";
-    emit({ type: "behavior_log", message: `Crouch-Check nach Weltneustart: Serverstatus ${status}; Sneak wird erneut angefordert` });
+    emit({ type: "behavior_log", message: `Crouch-Check: Serverstatus ${status}; Sneak wird erneut angefordert` });
     this.crouchResyncPending = true;
     this.nextCrouchCheckAt = Date.now();
-  }
-
-  // --- Health / food ---
-
-  reportHealth(health: number | null, food: number | null): void {
-    const h = health ?? this.lastHealth?.health ?? 20;
-    const f = food ?? this.lastHealth?.food ?? 20;
-    if (this.lastHealth && this.lastHealth.health === h && this.lastHealth.food === f) return;
-    this.lastHealth = { health: h, food: f };
-    emit({ type: "health", health: h, food: f } satisfies OutEvent);
   }
 
   private applyCrouch(on: boolean, resync = false): void {

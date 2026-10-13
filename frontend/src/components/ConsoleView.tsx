@@ -22,10 +22,10 @@ const TYPE_LABEL: Record<ConsoleLogEntry["type"], string> = {
 const timeFormatter = new Intl.DateTimeFormat(undefined, { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const ConsoleRow = memo(function ConsoleRow({ log }: { log: ConsoleLogEntry }) {
   return (
-    <div className="flex gap-2 whitespace-pre-wrap break-words">
-      <span className="shrink-0 tabular-nums" style={{ color: "#52525b" }}>{timeFormatter.format(new Date(log.createdAt))}</span>
+    <div className="console-row flex min-w-0 gap-2 whitespace-pre-wrap break-words">
+      <span className="console-time shrink-0 tabular-nums" style={{ color: "#52525b" }}>{timeFormatter.format(new Date(log.createdAt))}</span>
       <span className="w-9 shrink-0 text-right text-[10px] font-semibold" style={{ color: TYPE_STYLES[log.type], opacity: 0.7 }}>{TYPE_LABEL[log.type]}</span>
-      <span style={{ color: TYPE_STYLES[log.type] }}>{log.message}</span>
+      <span className="console-message min-w-0 flex-1" style={{ color: TYPE_STYLES[log.type], overflowWrap: "anywhere" }}>{log.message}</span>
     </div>
   );
 });

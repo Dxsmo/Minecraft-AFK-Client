@@ -109,7 +109,7 @@ pub enum Command {
     /// spawner within reach (without walking to it), drop the items in the
     /// container it opens, and close it. Pauses auto-sell for the duration.
     CleanSpawner,
-    /// Verify and reassert enabled crouch after a world restart.
+    /// Verify server sneak metadata and reassert enabled crouch on demand.
     CheckCrouch,
     /// Schedule the restart pause independently of behavior settings and world transitions.
     PauseAutosell {
@@ -156,9 +156,6 @@ pub enum OutEvent {
     FatalError { error: String },
     /// A behavior fired an action worth logging (e.g. a menu was recovered).
     BehaviorLog { message: String },
-    /// The bot's current health (0..=20) and food/hunger level (0..=20),
-    /// emitted whenever either value changes.
-    Health { health: f32, food: u32 },
     /// Periodic liveness signal so the Node supervisor can distinguish a hung
     /// bot from a healthy but idle one.
     Heartbeat,

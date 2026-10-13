@@ -205,6 +205,26 @@ export class ClientManager {
     return true;
   }
 
+  restartAllOnline(): { restarted: string[]; failed: string[] } {
+    // Freeze the selection before restarting any client. Connecting, stopped
+    // and already restarting accounts must not be started by this action.
+    const online = Array.from(this.clients.entries())
+      .filter(([, client]) => client.getStatus().status === "ONLINE");
+    const restarted: string[] = [];
+    const failed: string[] = [];
+    for (const [id, client] of online) {
+      try {
+        client.restart();
+        this.persistAutoStart(id, true);
+        restarted.push(id);
+      } catch (err) {
+        failed.push(id);
+        logger.error({ err, accountId: id }, "Failed to restart online account");
+      }
+    }
+    return { restarted, failed };
+  }
+
   /** Persists the "should be running" intent so a host/process restart can
    * resume exactly the clients that were active. Fire-and-forget (harmless if
    * the account was concurrently deleted). */

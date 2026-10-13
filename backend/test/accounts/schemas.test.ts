@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { createAccountSchema, updateAccountSchema } from "../../src/accounts/schemas.js";
+import { commandSchema, createAccountSchema, updateAccountSchema } from "../../src/accounts/schemas.js";
+
+describe("slash-only Minecraft commands", () => {
+  it.each(["hello", "/", " /help", "/ help", "/say hi\nhello", "/\u0000", "/help\rstop"])("rejects %j", command => {
+    expect(commandSchema.safeParse({ command }).success).toBe(false);
+  });
+  it.each(["/help", "/home farm", "//wand", "/say hello world"])("accepts %j", command => {
+    expect(commandSchema.parse({ command })).toEqual({ command });
+  });
+});
 
 const removedAutomation = {
   autoCommandEnabled: true, autoCommandText: "/home farm",

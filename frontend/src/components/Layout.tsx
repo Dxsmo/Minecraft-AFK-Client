@@ -79,7 +79,7 @@ const navItems: { to: string; label: string; icon: IconName; adminOnly: boolean 
   { to: "/namesniper", label: "Name Sniper", icon: "sniper", adminOnly: true },
   { to: "/minigames", label: "Minigames", icon: "minigames", adminOnly: true },
   { to: "/item-worth", label: "Item Wert", icon: "worth", adminOnly: true },
-  { to: "/users", label: "Users", icon: "users", adminOnly: true },
+  { to: "/users", label: "Admin Panel", icon: "users", adminOnly: true },
   { to: "/logs", label: "Audit Logs", icon: "logs", adminOnly: true },
   { to: "/settings", label: "Settings", icon: "settings", adminOnly: false },
 ];
@@ -94,7 +94,7 @@ export function Layout() {
   return (
     <div className="app-shell flex min-h-dvh">
       <aside
-        className="app-sidebar sticky top-0 flex h-dvh w-14 shrink-0 flex-col overflow-y-auto px-2 py-5 sm:w-60 sm:px-3"
+        className="app-sidebar sticky top-0 hidden h-dvh w-60 shrink-0 flex-col overflow-y-auto px-3 py-5 lg:flex"
       >
         <div className="flex items-center justify-center gap-2.5 sm:justify-start sm:px-2">
           <span
@@ -142,20 +142,21 @@ export function Layout() {
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="app-content flex min-w-0 flex-1 flex-col">
         <header
           className="app-header sticky top-0 z-10 flex items-center justify-end gap-3 px-3 py-3 backdrop-blur sm:px-6"
         >
-          <div className="text-right leading-tight">
-            <p className="text-sm font-medium" style={{ color: "var(--text)" }}>
+          <LinkBrand />
+          <div className="header-user min-w-0 text-right leading-tight">
+            <p className="truncate text-sm font-medium" style={{ color: "var(--text)" }}>
               {user?.username}
             </p>
-            <p className="text-[11px]" style={{ color: "var(--text-subtle)" }}>
+            <p className="desktop-only text-[11px]" style={{ color: "var(--text-subtle)" }}>
               {user?.role}
             </p>
           </div>
           <span
-            className="user-avatar flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold"
+            className="desktop-only user-avatar flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold"
           >
             {initial}
           </span>
@@ -173,6 +174,22 @@ export function Layout() {
           </div>
         </main>
       </div>
+      <nav className="mobile-nav" aria-label="Mobile Navigation">
+        {navItems.filter(item => ["/dashboard", "/users", "/settings"].includes(item.to)
+          && (!item.adminOnly || user?.role === "ADMIN")).map(item => (
+          <NavLink key={item.to} to={item.to} className={({ isActive }) => isActive ? "nav-active" : "nav-idle"}>
+            <Icon name={item.icon} />
+            <span>{item.to === "/dashboard" ? "Accounts" : item.to === "/settings" ? "Einstellungen" : item.label}</span>
+          </NavLink>
+        ))}
+      </nav>
     </div>
   );
+}
+
+function LinkBrand() {
+  return <NavLink to="/dashboard" className="mobile-brand" aria-label="Minecraft AFK Accounts">
+    <img src="/desmodus-head.svg" alt="" width="28" height="28" />
+    <span>AFK</span>
+  </NavLink>;
 }

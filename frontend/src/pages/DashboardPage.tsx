@@ -10,9 +10,11 @@ import { AccountImageButton } from "../components/AccountImageButton";
 import { AccountCreatorAvatar } from "../components/AccountCreatorAvatar";
 import { AccountSellPreview } from "../components/AccountSellPreview";
 import { AccountDetails } from "../components/AccountDetails";
+import { useCompactLayout } from "../lib/useCompactLayout";
 
 export function DashboardPage() {
   const { user } = useAuth();
+  const compact = useCompactLayout();
   const [accounts, setAccounts] = useState<DashboardAccount[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -171,7 +173,7 @@ export function DashboardPage() {
   actions.current = { moveAccount, updateImage, toggleBlur, runAction, deleteAccount };
 
   return (
-    <div className="space-y-6">
+    <div className="dashboard-page space-y-6">
       <div className="flex items-end justify-between">
         <div>
           <h1 className="text-xl font-semibold" style={{ color: "var(--text)" }}>
@@ -186,7 +188,8 @@ export function DashboardPage() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <p className="mobile-only text-sm" style={{ color: "var(--text-muted)" }}>{counts.online} / {counts.total} Accounts online</p>
+      <div className="desktop-only grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard label="Online" value={counts.online} accent="#38bdf8" />
         <StatCard label="Offline" value={counts.offline} accent="#8a8a93" />
         <StatCard label="Errors" value={counts.error} accent="#f87171" />
@@ -216,6 +219,7 @@ export function DashboardPage() {
             account={accounts[index]} live={account.live} index={index} total={merged.length}
             busy={busyIds.has(account.id)} isBlurred={blurred.has(account.id)} expanded={expandedId === account.id}
             age={saleAge(account.lastSellAt, now)} reorderBusy={reorderBusy} actions={actions}
+            compact={compact}
             setExpandedId={setExpandedId} setError={setError} />)}
         </div>
       )}
@@ -237,6 +241,7 @@ export function DashboardPage() {
 
 interface AccountCardProps {
   account: DashboardAccount;
+  compact: boolean;
   live: DashboardAccount["live"];
   index: number;
   total: number;
@@ -259,7 +264,7 @@ interface AccountCardProps {
 /** A live update or hover only renders the affected cards. Event handlers read
  * current page state through a stable ref, so reordering always uses the latest list.
  */
-const AccountCard = memo(function AccountCard({ account, live, index, total, busy, isBlurred, expanded, age,
+const AccountCard = memo(function AccountCard({ account, compact, live, index, total, busy, isBlurred, expanded, age,
   reorderBusy, actions, setExpandedId, setError }: AccountCardProps) {
   const status = live?.status ?? account.status;
   const label = account.displayName?.trim() || live?.name || account.name;
@@ -270,11 +275,11 @@ const AccountCard = memo(function AccountCard({ account, live, index, total, bus
       key={account.id}
       className="card card-hover account-card relative"
       data-expanded={expanded}
-      onPointerEnter={(event) => { if (event.pointerType === "mouse") setExpandedId(account.id); }}
+      onPointerEnter={(event) => { if (!compact && event.pointerType === "mouse") setExpandedId(account.id); }}
       onPointerLeave={(event) => {
         if (event.pointerType === "mouse") setExpandedId(current => current === account.id ? null : current);
       }}
-      onFocusCapture={(event) => { if (event.target.matches(":focus-visible")) setExpandedId(account.id); }}
+      onFocusCapture={(event) => { if (!compact && event.target.matches(":focus-visible")) setExpandedId(account.id); }}
       onBlurCapture={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) setExpandedId(current => current === account.id ? null : current);
       }}
@@ -285,7 +290,7 @@ const AccountCard = memo(function AccountCard({ account, live, index, total, bus
         <div className="account-sort relative z-20 flex flex-col items-center justify-center gap-1">
           <button
             type="button"
-            className="btn btn-ghost btn-sm px-1 sm:px-2"
+            className="desktop-only btn btn-ghost btn-sm px-1 sm:px-2"
             onClick={() => void actions.current.moveAccount(account.id, -1)}
             disabled={reorderBusy || index === 0}
             title="Move up"
@@ -295,7 +300,7 @@ const AccountCard = memo(function AccountCard({ account, live, index, total, bus
           </button>
           <button
             type="button"
-            className="btn btn-ghost btn-sm px-1 sm:px-2"
+            className="desktop-only btn btn-ghost btn-sm px-1 sm:px-2"
             onClick={() => void actions.current.moveAccount(account.id, 1)}
             disabled={reorderBusy || index === total - 1}
             title="Move down"
@@ -311,8 +316,8 @@ const AccountCard = memo(function AccountCard({ account, live, index, total, bus
               style={{ transform: expanded ? "rotate(90deg)" : undefined, transition: "transform 300ms ease" }}><path d="m9 6 6 6-6 6" /></svg>
           </button>
         </div>
-        <AccountImageButton accountId={account.id} imageUrl={account.imageUrl} blurred={isBlurred}
-          onUpdated={updateImage} onError={setError} />
+        {!compact && <AccountImageButton accountId={account.id} imageUrl={account.imageUrl} blurred={isBlurred}
+          onUpdated={updateImage} onError={setError} />}
         <div
           className="account-summary min-w-0"
           style={{
@@ -348,11 +353,11 @@ const AccountCard = memo(function AccountCard({ account, live, index, total, bus
         </div>
 
         <div className="account-actions relative z-20 flex items-center">
-          <AccountCreatorAvatar account={account} blurred={isBlurred} />
+          {!compact && <AccountCreatorAvatar account={account} blurred={isBlurred} />}
           <button
             type="button"
             onClick={() => actions.current.toggleBlur(account.id)}
-            className="btn btn-ghost btn-sm"
+            className={`${compact && !isBlurred ? "desktop-only " : ""}btn btn-ghost btn-sm`}
             title={isBlurred ? "Reveal account" : "Blur / censor account"}
             aria-label={isBlurred ? "Reveal account" : "Blur account"}
             aria-pressed={isBlurred}
@@ -380,7 +385,7 @@ const AccountCard = memo(function AccountCard({ account, live, index, total, bus
           <button
             disabled={busy}
             onClick={() => void actions.current.deleteAccount(account.id, label)}
-            className="btn btn-danger btn-sm"
+            className="desktop-only btn btn-danger btn-sm"
             title="Delete account" aria-label="Delete account"
           >
             <svg className="sm:hidden" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7" /></svg>
@@ -388,7 +393,7 @@ const AccountCard = memo(function AccountCard({ account, live, index, total, bus
           </button>
         </div>
       </div>
-      <AccountDetails id={detailsId} expanded={expanded} blurred={isBlurred}>
+      {!compact && <AccountDetails id={detailsId} expanded={expanded} blurred={isBlurred}>
         <div className="account-details-content"
           style={{ filter: isBlurred ? "blur(6px)" : undefined, userSelect: isBlurred ? "none" : undefined }}>
           <div className="account-details-meta min-w-0">
@@ -406,7 +411,7 @@ const AccountCard = memo(function AccountCard({ account, live, index, total, bus
           </div>
           <AccountSellPreview accountId={account.id} active={expanded} blurred={isBlurred} />
         </div>
-      </AccountDetails>
+      </AccountDetails>}
     </div>
   );
 });
