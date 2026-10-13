@@ -1,3 +1,7 @@
+mod bundle;
+
+pub use bundle::{IncomingBundleError, IncomingPacketBatch, MAX_GAME_BUNDLE_PACKETS};
+
 use std::{
     fmt::{self, Debug},
     io::{self, Cursor},
@@ -70,6 +74,9 @@ pub fn read_packets(ecs: &mut World) {
     for (entity, raw_packets) in entities_with_injected_packets {
         for raw_packet in raw_packets {
             let conn = conn_query.get(ecs, entity).unwrap();
+            if !conn.is_alive() {
+                break;
+            }
             let state = conn.state;
 
             trace!("Received injected packet with bytes: {raw_packet:?}");
@@ -84,7 +91,12 @@ pub fn read_packets(ecs: &mut World) {
     for entity in entities_handling_packets {
         loop {
             let mut conn = conn_query.get_mut(ecs, entity).unwrap();
-            let net_conn = conn.net_conn().unwrap();
+            if !conn.is_alive() {
+                break;
+            }
+            let Some(net_conn) = conn.net_conn() else {
+                break;
+            };
             let read_res = net_conn.try_read();
             let state = conn.state;
             match read_res {
@@ -188,6 +200,7 @@ pub struct RawConnection {
     /// It's basically a way to make our client think it received a packet from
     /// the server without needing to interact with the network.
     pub injected_clientbound_packets: Vec<Box<[u8]>>,
+    incoming_bundle: bundle::GameBundle,
 }
 impl RawConnection {
     pub fn new(
@@ -226,11 +239,21 @@ impl RawConnection {
             state,
             is_alive: true,
             injected_clientbound_packets: Vec::new(),
+            incoming_bundle: bundle::GameBundle::default(),
         }
     }
 
     pub fn is_alive(&self) -> bool {
         self.is_alive
+    }
+
+    /// Hold game bundles across reads/updates and release them only when complete.
+    /// Both network readers must call this before invoking any packet handler.
+    pub fn collect_incoming_packet(
+        &mut self,
+        raw: &[u8],
+    ) -> Result<IncomingPacketBatch, IncomingBundleError> {
+        self.incoming_bundle.collect(self.state, raw)
     }
 
     /// Write a packet to the server without emitting any events.
@@ -265,7 +288,12 @@ impl RawConnection {
     /// A nonblocking snapshot. Completed writes mean TCP accepted the bytes,
     /// not that the remote Minecraft server acknowledged the packet.
     pub fn network_diagnostics(&self) -> Option<NetworkDiagnostics> {
-        self.network.as_ref().map(NetworkConnection::diagnostics)
+        self.network.as_ref().map(|network| {
+            let mut diagnostics = network.diagnostics();
+            diagnostics.completed_bundles = self.incoming_bundle.completed;
+            diagnostics.pending_bundle_packets = self.incoming_bundle.pending_packets();
+            diagnostics
+        })
     }
 }
 
@@ -281,6 +309,46 @@ pub fn handle_raw_packet(
     if raw_packet.is_empty() {
         return Ok(());
     }
+    let batch = ecs
+        .get_mut::<RawConnection>(entity)
+        .unwrap()
+        .collect_incoming_packet(raw_packet);
+    match batch {
+        Ok(IncomingPacketBatch::Pending) => return Ok(()),
+        Ok(IncomingPacketBatch::Complete(packets)) => {
+            let mut first_error = None;
+            for packet in packets {
+                if let Err(error) =
+                    handle_single_raw_packet(ecs, &packet, entity, state, queued_packet_events)
+                {
+                    first_error.get_or_insert(error);
+                }
+            }
+            return first_error.map_or(Ok(()), Err);
+        }
+        Ok(IncomingPacketBatch::Single) => {}
+        Err(error) => {
+            let reason = format!("Java: ungültiges Paket-Bundle: {error}");
+            ecs.get_mut::<RawConnection>(entity).unwrap().is_alive = false;
+            ecs.write_message(crate::disconnect::DisconnectEvent {
+                entity,
+                reason: Some(reason.clone().into()),
+            });
+            return Err(Box::new(ReadPacketError::IoError {
+                source: io::Error::new(io::ErrorKind::InvalidData, reason),
+            }));
+        }
+    }
+    handle_single_raw_packet(ecs, raw_packet, entity, state, queued_packet_events)
+}
+
+fn handle_single_raw_packet(
+    ecs: &mut World,
+    raw_packet: &[u8],
+    entity: Entity,
+    state: ConnectionProtocol,
+    queued_packet_events: &mut QueuedPacketEvents,
+) -> Result<(), Box<ReadPacketError>> {
     let stream = &mut Cursor::new(raw_packet);
     match state {
         ConnectionProtocol::Handshake => {
@@ -322,6 +390,8 @@ pub fn handle_raw_packet(
 pub struct NetworkDiagnostics {
     pub buffered_bytes: usize,
     pub read_buffer_bytes: usize,
+    pub completed_bundles: u64,
+    pub pending_bundle_packets: Option<usize>,
     pub packets_enqueued: u64,
     pub packets_written: u64,
     pub keepalives_enqueued: u64,
@@ -428,6 +498,8 @@ impl NetworkConnection {
             buffered_bytes: self.reader.buffer.get_ref().len()
                 .saturating_sub(self.reader.buffer.position() as usize),
             read_buffer_bytes: self.reader.buffer.get_ref().len(),
+            completed_bundles: 0,
+            pending_bundle_packets: None,
             packets_enqueued: stats.packets_enqueued.load(atomic::Ordering::Relaxed),
             packets_written: stats.packets_written.load(atomic::Ordering::Relaxed),
             keepalives_enqueued: stats.keepalives_enqueued.load(atomic::Ordering::Relaxed),

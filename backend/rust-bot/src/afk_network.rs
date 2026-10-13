@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use azalea::app::{App, Plugin, PreUpdate};
 use azalea::buf::AzBufVar;
 use azalea::client_chat::ChatPacket;
-use azalea::connection::{NetworkDiagnostics, RawConnection};
+use azalea::connection::{IncomingPacketBatch, NetworkDiagnostics, RawConnection};
 use azalea::core::entity_id::MinecraftEntityId;
 use azalea::disconnect::DisconnectEvent;
 use azalea::ecs as bevy_ecs;
@@ -235,12 +235,14 @@ fn diagnostics_message(ecs: &World, entity: Entity, filter: &ItemFilter) -> Stri
     let writes = transport.map_or_else(
         || "TCP-Schreibdaten unbekannt".to_owned(),
         |stats| format!(
-            "Keepalive eingereiht {}, an TCP übergeben {}; Schreibqueue {} Pakete; Lesepuffer {} Bytes (gesamt {} Bytes){}",
+            "Keepalive eingereiht {}, an TCP übergeben {}; Schreibqueue {} Pakete; Lesepuffer {} Bytes (gesamt {} Bytes); Bundles vollständig {}, offen {}{}",
             stats.keepalives_enqueued,
             stats.keepalives_written,
             stats.packets_enqueued.saturating_sub(stats.packets_written),
             stats.buffered_bytes,
             stats.read_buffer_bytes,
+            stats.completed_bundles,
+            stats.pending_bundle_packets.map_or_else(|| "keines".into(), |count| format!("{count} Pakete")),
             stats.writer_error.map_or_else(String::new, |error| format!("; TCP-Schreibfehler: {error}")),
         ),
     );
@@ -283,6 +285,51 @@ fn needs_callback(packet: &ClientboundGamePacket) -> bool {
 }
 
 fn process_packet(
+    ecs: &mut World,
+    entity: Entity,
+    raw: &[u8],
+    filter: &mut ItemFilter,
+) -> Result<bool, Box<ReadPacketError>> {
+    let Some(mut connection) = ecs.get_mut::<RawConnection>(entity) else {
+        return Ok(false);
+    };
+    filter.last_protocol = Some(connection.state);
+    let batch = connection.collect_incoming_packet(raw);
+    drop(connection);
+    match batch {
+        Ok(IncomingPacketBatch::Pending) => {
+            filter.last_received_at = Some(Instant::now());
+            if raw.is_empty() {
+                filter.empty_payloads = filter.empty_payloads.saturating_add(1);
+            }
+            Ok(false)
+        }
+        Ok(IncomingPacketBatch::Single) => process_single_packet(ecs, entity, raw, filter),
+        Ok(IncomingPacketBatch::Complete(packets)) => {
+            // A complete bundle is one atomic unit. The update limits apply
+            // between units, never between its world/inventory/correction packets.
+            let mut applied = false;
+            let mut first_error = None;
+            for packet in packets {
+                match process_single_packet(ecs, entity, &packet, filter) {
+                    Ok(kept) => applied |= kept,
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+            first_error.map_or(Ok(applied), Err)
+        }
+        Err(error) => {
+            let reason = format!("Java: ungültiges Paket-Bundle: {error}");
+            filter.record_error(&reason);
+            disconnect(ecs, entity, filter, reason);
+            Ok(true)
+        }
+    }
+}
+
+fn process_single_packet(
     ecs: &mut World,
     entity: Entity,
     raw: &[u8],
@@ -624,6 +671,7 @@ mod tests {
             slot: 9,
             item_stack: ItemStack::new(ItemKind::Beef, 64),
         });
+        sim.receive_packet(ClientboundBundleDelimiter);
         sim.tick();
         let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
         assert_eq!(filter.empty_payloads, 20);
@@ -724,7 +772,11 @@ mod tests {
                             ClientboundKeepAlive { id: 43 }.into_variant(),
                         ];
                         let mut bytes = Vec::new();
-                        for packet in &packets {
+                        let mut bundle_close_offset = 0;
+                        for (index, packet) in packets.iter().enumerate() {
+                            if index == 7 {
+                                bundle_close_offset = bytes.len();
+                            }
                             bytes.extend(encode_to_network_packet(
                                 &[],
                                 threshold,
@@ -738,7 +790,7 @@ mod tests {
                         }
                         // Force the client to retain incomplete lengths, encrypted
                         // frames and zlib streams across separate socket reads.
-                        for byte in bytes {
+                        for (offset, byte) in bytes.into_iter().enumerate() {
                             server
                                 .writer
                                 .raw
@@ -748,6 +800,13 @@ mod tests {
                                 .unwrap();
                             tokio::time::sleep(Duration::from_millis(1)).await;
                             sim.tick();
+                            if offset < bundle_close_offset {
+                                assert_eq!(
+                                    sim.component::<Inventory>().inventory_menu.slot(9).unwrap().count(),
+                                    0,
+                                    "partial bundle became visible over TCP: {mode:?}, {threshold:?}, encrypted={encrypted}"
+                                );
+                            }
                         }
                         for _ in 0..10 {
                             tokio::time::sleep(Duration::from_millis(1)).await;
@@ -797,6 +856,8 @@ mod tests {
                             .unwrap();
                         assert_eq!(stats.keepalives_enqueued, 2);
                         assert_eq!(stats.keepalives_written, 2);
+                        assert_eq!(stats.completed_bundles, 1);
+                        assert_eq!(stats.pending_bundle_packets, None);
                         assert_eq!(
                             sim.app
                                 .world()
@@ -949,7 +1010,10 @@ mod tests {
             let (read_stream, write_stream) = socket.unwrap().into_split();
             let mut bytes = Vec::new();
             for _ in 0..=MAX_PACKETS_PER_UPDATE {
-                bytes.extend(encode_to_network_packet(&[0], None, &mut None));
+                bytes.extend(encode_to_network_packet(
+                    &serialize_packet(&ClientboundChunkBatchStart.into_variant()).unwrap(),
+                    None, &mut None,
+                ));
             }
             let kick = ClientboundDisconnect { reason: "actual server kick reason".into() };
             bytes.extend(encode_to_network_packet(

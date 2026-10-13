@@ -20,9 +20,23 @@ Its SHA-1 is `2dc72797acbc1b63fc16a11c4ac393605f453754`. The embedded
   an intermediate physics value, so stationary collision changes could be missed.
   The shared sender now keeps both reported flags separately from physics,
   resets them on world changes, and preserves the 20-tick position heartbeat.
+- `PacketBundlePacker` holds game packets between bundle delimiters. Only the
+  closing delimiter releases a `ClientboundBundlePacket`, which
+  `ClientPacketListener.handleBundlePacket` handles in wire order without an
+  intervening game tick. Azalea's delimiter handler was empty, and both readers
+  applied incomplete bundles immediately. In particular, the AFK reader's update
+  budget could yield between bundled world/inventory/position corrections.
+  Both readers now collect bundles per connection across TCP reads and updates,
+  and apply each completed bundle as one unit before yielding. The AFK item
+  filter still runs before decoding each contained packet. Mojang's 4096-packet
+  limit and rejection of `start_configuration` inside a bundle are enforced;
+  invalid bundles disconnect with an explicit reason and discard held contents.
+  Empty frames neither close bundles nor consume their packet limit.
+  Disconnect diagnostics include completed and pending bundle counts, so a
+  subsequent live report can establish whether this connection uses bundles.
 
-Both failures were reproduced by regression tests before applying the fixes.
-Both fixes apply with AutoSell disabled and in either network mode.
+The failures were reproduced by regression tests before applying the fixes.
+The fixes apply with AutoSell disabled and in either network mode.
 
 ## Wire checks
 
@@ -43,8 +57,15 @@ Azalea's decoder to construct expected replies:
 | Pong | `2d` | 4 bytes, including the sign bit |
 
 Incoming raw fixtures exercise both production readers: keepalive/ping echo,
-relative teleport movement and ordered acknowledgements, and all combinations
-of relative rotation. Teleport replies already matched vanilla; its immediate
+relative teleport movement and ordered acknowledgements, all combinations
+of relative rotation, and bundles split across updates or larger than the AFK
+update quota. Tests check that partial bundles cannot change rotation/inventory
+or emit control replies, then check ordered replies on closing. Real TCP tests
+send bundle frames one byte at a time with compression off/1/64 and encryption
+off/on, in both production modes, verifying that inventory remains unchanged
+until the closing frame. Empty/adjacent bundles, the exact 4096-packet limit,
+invalid bundles, and a malformed contained packet followed by a healthy
+keepalive are covered. Teleport replies already matched vanilla; its immediate
 reply also uses both flags false and leaves periodic position/rotation caches
 alone, so those behaviors were retained.
 
@@ -56,6 +77,8 @@ Download the reference above, verify its SHA-1, and use JDK 25 or newer:
 javap -c -p -classpath /tmp/client-26.2.jar \
   net.minecraft.client.multiplayer.ClientPacketListener \
   net.minecraft.client.player.LocalPlayer \
+  net.minecraft.network.PacketBundlePacker \
+  'net.minecraft.network.protocol.BundlerInfo$1$1' \
   net.minecraft.network.protocol.game.GameProtocols
 cd backend/rust-bot
 cargo +nightly test --bin azalea-bot protocol_compatibility

@@ -35,6 +35,21 @@ Azalea's unbounded read-until-empty scheduling and normal packet callbacks.
 `Simulation::new_with_plugins` accepts the production plugin group, allowing
 both network modes to exercise their actual registration and wire behavior.
 
+Both readers also share a per-connection game bundle collector. Raw frames
+between opening/closing delimiters remain invisible to ECS handlers and bot
+callbacks until the closing delimiter arrives. The complete bundle is then
+handled in wire order without yielding to movement/physics between its parts,
+even when it exceeds the AFK update quota. The AFK filter still drops cosmetic
+and item data before decoding the contained packets. Empty frames do not close
+bundles. The collector follows vanilla's 4096-packet limit and rejects terminal
+configuration transitions inside bundles with an explicit disconnect reason.
+Invalid packet bodies retain the readers' existing error policy without losing
+subsequent healthy packets in a completed bundle. Regression tests cover both
+readers, split/adjacent/empty bundles, inventory and control ordering, rejected
+bundles, the size limit, and one-byte TCP fragments with compression/encryption.
+Disconnect snapshots report the number of completed bundles and whether a bundle
+is still open, without recording packet contents or adding routine console logs.
+
 Keep the patch aligned with Azalea when changing its revision. Remove the local
 copy if upstream exposes an equivalent nonblocking reader API.
 
