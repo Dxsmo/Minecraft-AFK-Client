@@ -42,6 +42,20 @@ dashboard) is edition-agnostic.
   the supplied code expiry. After authentication the normal connect deadline
   resumes. Console messages identify each connection stage and explicit
   Bedrock login refusals (including incompatible protocol versions).
+- **Network NBT array decoding:** network `IntArray`/`LongArray` elements use
+  ZigZag VarInts, just like scalar network Int/Long tags. `prismarine-nbt` 2.8.0
+  read them as fixed-width little-endian values, which consumed bytes belonging
+  to the following tag and could report `Invalid tag: 115 > 20` on valid data.
+  `networkNbt.ts` corrects reading, writing and sizing in the existing network
+  codec contexts before connecting. Little-endian item/file NBT and big-endian
+  Java NBT codecs keep their original array encodings. The reference behavior is
+  defined by Cloudburst's [NBT array reader](https://github.com/CloudburstMC/NBT/blob/master/src/main/java/org/cloudburstmc/nbt/NBTInputStream.java)
+  and [network integer stream](https://github.com/CloudburstMC/NBT/blob/master/src/main/java/org/cloudburstmc/nbt/util/stream/NetworkDataInputStream.java).
+  An independently encoded, valid 125-byte block-entity fixture reproduces the
+  exact tag-115 error before the correction and decodes/re-encodes fully after
+  it, including the following `CustomName`. It matches the reported packet
+  type, size and error; the user's original payload was not available, so it
+  does not prove that every observed warning had this cause.
 - **NBT recovery:** after spawn, an `Invalid tag: ... > 20` decode error in an
   explicitly allowed game packet no longer terminates the client. The entire
   failed packet is discarded; following packets in the batch still run, including
@@ -92,6 +106,10 @@ dashboard) is edition-agnostic.
   batches; the next encrypted batch verifies that cipher/checksum state remains
   synchronized. Tests cover invalid inventory data, fresh snapshot recovery,
   manual commands, critical registry errors, warning limits and truncated frames.
+  Network-array tests cover independent expected bytes across all four versions,
+  signed 32/64-bit extremes, empty/nested arrays, later UTF-8 string tags,
+  rejection of malformed lengths/elements, unchanged item/file NBT, and actual
+  menu-title delivery without invoking NBT recovery.
   `packetRecovery.ts` deliberately patches the pinned library's private Framer
   API before creating a client; re-run these tests when changing that dependency.
 - **Not available on Bedrock:** `clean_spawner` (emits a warning) and Live View

@@ -21,6 +21,7 @@ import { BedrockConnectionProgress, bedrockLoginFailure } from "./connection.js"
 import { bedrockVersion } from "./version.js";
 import { discoverBedrockServer } from "./discovery.js";
 import { BedrockPacketRecovery, installBedrockFrameValidation, type BedrockDecodeClient } from "./packetRecovery.js";
+import { installBedrockNetworkNbtArrays } from "./networkNbt.js";
 
 const CONNECT_TIMEOUT_MS =
   (Number.parseInt(process.env.BOT_CONNECT_TIMEOUT_SECS ?? "", 10) || 45) * 1000;
@@ -73,6 +74,7 @@ async function main(): Promise<void> {
     emit({ type: "behavior_log", message: `Bedrock: Server protocol ${advertised.protocol}; using client version ${selectedVersion}${version ? " (configured)" : " (auto)"}` });
     progress.advance("authentication");
     emit({ type: "behavior_log", message: "Bedrock: Server discovered; authenticating Microsoft/Xbox session" });
+    installBedrockNetworkNbtArrays();
     installBedrockFrameValidation();
     client = createClient({
       host: config.host,

@@ -389,6 +389,12 @@ connection. Warnings identify the packet and protocol instead of only reporting
 inventory arrives; commands remain available. Critical join/registry errors
 still reconnect. See [Bedrock recovery limits and tests](docs/LIMITATIONS.md#what-works-vs-what-is-limited-on-bedrock).
 
+The network NBT array codec also corrects a confirmed parsing bug: Int/Long
+array elements use ZigZag VarInts instead of fixed-width values. This prevents
+valid block-entity packets from consuming the next field's bytes and reporting
+tag 115. Independent tests reproduce that error with a valid 125-byte packet;
+after the correction its contents and menu title are delivered normally.
+
 If Microsoft authentication succeeds but Bedrock repeatedly reports a
 `RakNet/UDP connection ... Connect timed out`, run this from the repository
 on the affected host. It uses the existing backend container's network,
