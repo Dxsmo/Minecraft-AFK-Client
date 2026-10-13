@@ -36,6 +36,7 @@ describe("website-only multiplier scan", () => {
     expect(readMultiplier('Fische', ['Aktueller Multiplikator: 1x', 'Fortschritt: $0 / $0'])).toBeNull();
     expect(readMultiplier('Fische', ['Aktueller Multiplikator: 1x', 'Progress: $3,695 / $20,000'])).toEqual({ name: 'Fische', multiplier: '1x', progress: '3,695$/20,000$ - 18%' });
     expect(readMultiplier('Fische', ['Aktueller Multiplikator: 1x', 'Fortschritt: $3.695,50 / $20.000,00', '████ 18,47%'])).toEqual({ name: 'Fische', multiplier: '1x', progress: '3.695,50$/20.000,00$ - 18,47%' });
+    expect(readMultiplier('Fische', ['§7Aktueller\u00a0Multiplikator §a1x', '§7Fortschritt $3.695 / $20.000', '████░░░ 18%'])).toEqual({ name: 'Fische', multiplier: '1x', progress: '3.695$/20.000$ - 18%' });
   });
 
   it.each([18, 27])("waits for every tooltip, closes the %s-slot menu and emits nine website results without clicks", size => {
@@ -75,12 +76,27 @@ describe("website-only multiplier scan", () => {
     expect(events().some(event => event.type === 'sell_multipliers')).toBe(false);
   });
 
-  it("accepts a delayed GUI title and closes only its own menu on timeout", () => {
+  it.each([9, 18, 27, 54])("reads a %s-slot chest with a resource-pack title using all nine tooltips", size => {
+    const { sender, behavior, inventory } = setup(false);
+    behavior.enqueueSellMultipliers(); behavior.onTick();
+    open(inventory, '\uf801\ue113');
+    inventory.onContent({ window_id: 3, input: Array.from({ length: size }, (_, index) => index < 8 ? item(index) : { network_id: 0 }) });
+    behavior.onTick();
+    expect(sender.packet).not.toHaveBeenCalled();
+    expect(events().some(event => event.type === 'sell_multipliers')).toBe(false);
+    inventory.onSlot({ window_id: 3, slot: 8, item: item(8) }); behavior.onTick();
+    expect(sender.packet).toHaveBeenCalledExactlyOnceWith('container_close', { window_id: 3, window_type: 'container', server: false });
+    expect(events().find(event => event.type === 'sell_multipliers')?.entries).toHaveLength(9);
+    expect(sender.command).toHaveBeenCalledExactlyOnceWith('/sellmulti');
+    expect(sender.send).not.toHaveBeenCalled();
+  });
+
+  it("identifies complete tooltips before a delayed GUI title and closes only its own menu on timeout", () => {
     const { sender, behavior, inventory } = setup(false);
     behavior.enqueueSellMultipliers(); behavior.onTick();
     inventory.onOpen({ window_id: 3, window_type: 'container', coordinates: position });
     inventory.onContent({ window_id: 3, input: Array.from({ length: 18 }, (_, index) => index < 9 ? item(index) : { network_id: 0 }) });
-    behavior.onTick(); expect(events().some(event => event.type === 'sell_multipliers')).toBe(false);
+    behavior.onTick(); expect(events().some(event => event.type === 'sell_multipliers')).toBe(true);
     inventory.onBlockEntity({ position, nbt: { value: { CustomName: { value: 'SELLMULTI' } } } }); behavior.onTick();
     expect(events().some(event => event.type === 'sell_multipliers')).toBe(true);
     sender.packet.mockClear();
@@ -91,6 +107,34 @@ describe("website-only multiplier scan", () => {
     behavior.enqueueSellMultipliers(); behavior.onTick(); open(inventory);
     vi.advanceTimersByTime(10_000); behavior.onTick();
     expect(sender.packet).toHaveBeenLastCalledWith('container_close', { window_id: 3, window_type: 'container', server: false });
+    expect(events().filter(event => event.type === 'warning').at(-1)?.message).toContain('Tooltips vollständig 0/9');
+  });
+
+  it("includes the first unreadable tooltip in a bounded timeout diagnostic without partial results", () => {
+    const { sender, behavior, inventory } = setup(false);
+    behavior.enqueueSellMultipliers(); behavior.onTick(); open(inventory);
+    const broken = item(0) as any;
+    broken.extra.nbt.nbt.value.display.value.Lore.value.value = ['Aktueller Multiplikator: 1x'];
+    inventory.onContent({ window_id: 3, input: Array.from({ length: 18 }, (_, index) => index === 0 ? broken : index < 9 ? item(index) : { network_id: 0 }) });
+    vi.advanceTimersByTime(10_000); behavior.onTick();
+    const message = events().find(event => event.type === 'warning')?.message;
+    expect(message).toContain('18 GUI-Slots; Tooltips vollständig 8/9');
+    expect(message).toContain('Slot 1: Name "Kategorie 0", Lore ["Aktueller Multiplikator: 1x"]');
+    expect(events().some(event => event.type === 'sell_multipliers')).toBe(false);
+    expect(sender.packet).toHaveBeenCalledExactlyOnceWith('container_close', { window_id: 3, window_type: 'container', server: false });
+  });
+
+  it("closes an incomplete resource-pack menu on timeout so automation can resume", () => {
+    const { sender, behavior, inventory } = setup(false);
+    behavior.enqueueSellMultipliers(); behavior.onTick(); open(inventory, '\uf801\ue113');
+    inventory.onContent({ window_id: 3, input: Array.from({ length: 18 }, (_, index) => index < 8 ? item(index) : { network_id: 0 }) });
+    vi.advanceTimersByTime(10_000); behavior.onTick();
+    expect(events().some(event => event.type === 'sell_multipliers')).toBe(false);
+    expect(events().find(event => event.type === 'warning')?.message).toContain('Tooltips vollständig 8/9');
+    expect(sender.packet).toHaveBeenCalledExactlyOnceWith('container_close', { window_id: 3, window_type: 'container', server: false });
+    expect(inventory.readingMultipliers).toBe(false);
+    expect(inventory.blocked).toBe(false);
+    expect(sender.send).not.toHaveBeenCalled();
   });
 
   it("cancels on manual commands, world changes or an inventory decoding error", () => {

@@ -20,7 +20,7 @@ export function readMultiplier(name: unknown, lore: unknown[]): SellMultiplier |
   const displayName = tooltipText(name).replace(/[\r\n]/g, " ").trim();
   if (!displayName || displayName.length > 256) return null;
   const lines = lore.map(line => tooltipText(line).trim());
-  const multiplier = lines.map(line => line.match(/^(?:Aktueller Multiplikator|Current multiplier)\s*:\s*(\d+(?:[.,]\d+)?[x×])\s*$/iu)?.[1]).find(Boolean);
+  const multiplier = lines.map(line => line.match(/^(?:Aktueller\s+Multiplikator|Current\s+multiplier)\s*:?\s*(\d+(?:[.,]\d+)?[x×])\s*$/iu)?.[1]).find(Boolean);
   const progress = readProgress(lines);
   return multiplier && multiplier.length <= 32 && progress ? { name: displayName, multiplier, progress } : null;
 }
@@ -46,7 +46,7 @@ function percentage(line: string): string | null {
 
 function readProgress(lines: string[]): string | null {
   for (let index = 0; index < lines.length; index++) {
-    const match = lines[index].match(/^(?:Fortschritt|Progress)\s*:\s*\$?\s*(\d[\d.,]*)\s*\$?\s*\/\s*\$?\s*(\d[\d.,]*)\s*\$?(.*)$/iu);
+    const match = lines[index].match(/^(?:Fortschritt|Progress)\s*:?\s*\$?\s*(\d[\d.,]*)\s*\$?\s*\/\s*\$?\s*(\d[\d.,]*)\s*\$?(.*)$/iu);
     if (!match || match[1].length > 32 || match[2].length > 32) continue;
     const current = money(match[1]), target = money(match[2]);
     if (!Number.isFinite(current) || !Number.isFinite(target)) continue;

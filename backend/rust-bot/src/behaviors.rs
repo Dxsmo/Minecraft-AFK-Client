@@ -17,7 +17,7 @@ use azalea::registry::builtin::BlockKind;
 use azalea::{BlockPos, Client, InGameState};
 use azalea_inventory::components::{CustomName, Lore};
 use azalea_inventory::operations::{PickupClick, ThrowClick};
-use azalea_inventory::{ItemStack, Menu};
+use azalea_inventory::ItemStack;
 
 use crate::emit;
 use crate::protocol::{BehaviorConfig, Config, OutEvent};
@@ -681,10 +681,11 @@ impl BehaviorState {
         let now = Instant::now();
         self.manual_menu_id = None;
         if let Some(ActiveTask::SellMultipliers(progress)) = &mut self.active_task {
-            if sell_multipliers::menu_title(&title) {
-                progress.menu_id = Some(id);
-                progress.next_check = now;
-            }
+            // A resource pack may draw SELLMULTI using font glyphs, so the
+            // packet's title is not necessarily the text visible in-game.
+            // Associate the newly opened menu; its nine tooltips identify it.
+            progress.menu_id = Some(id);
+            progress.next_check = now;
             return;
         }
         if self.manual_menu_guard_until.is_some_and(|at| now < at) {
@@ -849,41 +850,70 @@ impl BehaviorState {
         if let Some(ActiveTask::SellMultipliers(current)) = &mut self.active_task {
             current.next_check = now + Duration::from_millis(50);
         }
-        let owns_menu = bot.component::<Inventory>().is_ok_and(|inventory| {
-            Some(inventory.id) == progress.menu_id
-                && inventory.id != 0
-                && inventory
-                    .container_menu_title
+        let inspection = bot.component::<Inventory>().ok().map(|inventory| {
+            let title = inventory
+                .container_menu_title
+                .as_ref()
+                .map(|title| title.to_string())
+                .unwrap_or_default();
+            let associated = Some(inventory.id) == progress.menu_id && inventory.id != 0;
+            let slots = if associated {
+                inventory
+                    .container_menu
                     .as_ref()
-                    .is_some_and(|title| sell_multipliers::menu_title(&title.to_string()))
+                    .filter(|menu| sell_multipliers::chest_menu(menu))
+                    .map(|menu| menu.slots())
+            } else {
+                None
+            };
+            let entries = slots
+                .as_ref()
+                .and_then(|slots| sell_multipliers::read_top_row(slots));
+            // An incomplete response must still release a recognized menu on
+            // timeout, otherwise the open GUI would block subsequent selling.
+            let owns_menu = associated
+                && (sell_multipliers::menu_title(&title)
+                    || slots
+                        .as_ref()
+                        .is_some_and(|slots| sell_multipliers::has_multiplier_tooltip(slots)));
+            let detail = if now >= progress.deadline {
+                if inventory.id == 0 {
+                    "kein Menü geöffnet".to_string()
+                } else {
+                    let slots = inventory
+                        .container_menu
+                        .as_ref()
+                        .map(|menu| sell_multipliers::describe_top_row(&menu.slots()))
+                        .unwrap_or_else(|| "keine Menü-Inhalte".into());
+                    format!(
+                        "Menü-ID {} (erwartet {:?}); Titel {:?}; {slots}",
+                        inventory.id,
+                        progress.menu_id,
+                        sell_multipliers::bounded_text(&title)
+                    )
+                }
+            } else {
+                String::new()
+            };
+            (entries, owns_menu, detail)
         });
-        if owns_menu {
-            let entries = bot.component::<Inventory>().ok().and_then(|inventory| {
-                if Some(inventory.id) != progress.menu_id {
-                    return None;
-                }
-                let menu = inventory.container_menu.as_ref()?;
-                if !matches!(menu, Menu::Generic9x2 { .. }) {
-                    return None;
-                }
-                sell_multipliers::read_top_row(&menu.slots())
-            });
-            if let Some(entries) = entries {
-                self.close_open_menu(bot);
-                self.active_task = None;
-                self.next_autosell_at = self
-                    .next_autosell_at
-                    .max(now + AUTOSELL_ORPHAN_RECOVERY_DELAY);
-                emit(&OutEvent::SellMultipliers { entries });
-                return;
-            }
+        let (entries, owns_menu, detail) =
+            inspection.unwrap_or_else(|| (None, false, "Inventar nicht verfügbar".into()));
+        if let Some(entries) = entries {
+            self.close_open_menu(bot);
+            self.active_task = None;
+            self.next_autosell_at = self
+                .next_autosell_at
+                .max(now + AUTOSELL_ORPHAN_RECOVERY_DELAY);
+            emit(&OutEvent::SellMultipliers { entries });
+            return;
         }
         if now >= progress.deadline {
             if owns_menu {
                 self.close_open_menu(bot);
             }
             self.active_task = None;
-            emit(&OutEvent::Warning { message: "Desmo: SELL MULTI nicht vollständig lesbar (10s Timeout); keine unvollständigen Ergebnisse ausgegeben".into() });
+            emit(&OutEvent::Warning { message: format!("Desmo: SELL MULTI nicht vollständig lesbar (10s Timeout); {detail}; keine unvollständigen Ergebnisse ausgegeben") });
         }
     }
 
@@ -1718,21 +1748,85 @@ mod tests {
     }
 
     fn open_multiplier_menu(client: &Client, state: &mut BehaviorState, count: usize) {
+        open_multiplier_chest(
+            client,
+            state,
+            count,
+            Menu::Generic9x2 {
+                contents: Default::default(),
+                player: Default::default(),
+            },
+            "SELLMULTI",
+        );
+    }
+
+    fn open_multiplier_chest(
+        client: &Client,
+        state: &mut BehaviorState,
+        count: usize,
+        mut menu: Menu,
+        title: &str,
+    ) {
         let mut world = client.ecs.write();
         let mut inventory = world.get_mut::<Inventory>(client.entity).unwrap();
         inventory.id = 7;
-        inventory.container_menu_title = Some("SELLMULTI".into());
-        let mut menu = Menu::Generic9x2 {
-            contents: Default::default(),
-            player: Default::default(),
-        };
+        inventory.container_menu_title = Some(title.into());
         for index in 0..count {
             *menu.slot_mut(index).unwrap() = multiplier_item(index);
         }
         inventory.container_menu = Some(menu);
         drop(inventory);
         drop(world);
-        state.on_menu_open(7, "SELLMULTI".into());
+        state.on_menu_open(7, title.into());
+    }
+
+    #[test]
+    fn desmo_reads_resource_pack_titles_and_different_chest_rows() {
+        for menu in [
+            Menu::Generic9x1 {
+                contents: Default::default(),
+                player: Default::default(),
+            },
+            Menu::Generic9x2 {
+                contents: Default::default(),
+                player: Default::default(),
+            },
+            Menu::Generic9x3 {
+                contents: Default::default(),
+                player: Default::default(),
+            },
+            Menu::Generic9x6 {
+                contents: Default::default(),
+                player: Default::default(),
+            },
+        ] {
+            let (client, mut state) = sell_client();
+            let clicks = capture_sell_clicks(&client);
+            state.enqueue_sell_multipliers();
+            state.on_control_event(&client);
+            assert_eq!(take_commands(&client), vec!["/sellmulti"]);
+            open_multiplier_chest(&client, &mut state, 8, menu, "\u{f801}\u{e113}");
+            state.on_control_event(&client);
+            assert!(state.active_task.is_some());
+            assert_eq!(client.get_inventory().unwrap().id(), 7);
+            *client
+                .ecs
+                .write()
+                .get_mut::<Inventory>(client.entity)
+                .unwrap()
+                .container_menu
+                .as_mut()
+                .unwrap()
+                .slot_mut(8)
+                .unwrap() = multiplier_item(8);
+            state.on_multiplier_slot(7);
+            state.on_control_event(&client);
+            client.ecs.write().flush();
+            assert!(state.active_task.is_none());
+            assert_eq!(client.get_inventory().unwrap().id(), 0);
+            assert!(clicks.lock().is_empty());
+            assert!(take_commands(&client).is_empty());
+        }
     }
 
     #[test]
@@ -1844,6 +1938,34 @@ mod tests {
             take_commands(&client),
             vec!["/sellmulti", "/sellmulti", "/home farm"]
         );
+    }
+
+    #[test]
+    fn desmo_incomplete_resource_pack_menu_closes_on_timeout_without_clicking() {
+        let (client, mut state) = sell_client();
+        let clicks = capture_sell_clicks(&client);
+        state.enqueue_sell_multipliers();
+        state.on_control_event(&client);
+        open_multiplier_chest(
+            &client,
+            &mut state,
+            8,
+            Menu::Generic9x1 {
+                contents: Default::default(),
+                player: Default::default(),
+            },
+            "\u{f801}\u{e113}",
+        );
+        if let Some(super::ActiveTask::SellMultipliers(progress)) = state.active_task {
+            state.advance_sell_multipliers(&client, progress.deadline, progress);
+        } else {
+            panic!("scan was not started");
+        }
+        client.ecs.write().flush();
+        assert!(state.active_task.is_none());
+        assert_eq!(client.get_inventory().unwrap().id(), 0);
+        assert!(clicks.lock().is_empty());
+        assert_eq!(take_commands(&client), vec!["/sellmulti"]);
     }
 
     #[test]

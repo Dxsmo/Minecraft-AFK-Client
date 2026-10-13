@@ -17,15 +17,22 @@ const sellTitle = (title: string) => ["items verkaufen", "sell"].includes(title.
 const playerWindow = (id: WindowId) => id === 0 || id === "inventory";
 const multiplierTitle = (title: string | null) => tooltipText(title).replace(/\s/g, "").toLowerCase() === "sellmulti";
 
-function multiplierItem(item: BedrockItem): SellMultiplier | null {
-  if (!present(item)) return null;
+function multiplierTooltip(item: BedrockItem): { name: unknown; lore: unknown[] } {
+  if (!present(item)) return { name: '', lore: [] };
   const unwrap = (value: any): any => value && typeof value === "object" && "value" in value ? value.value : value;
   const tag = (item.extra as { nbt?: any } | undefined)?.nbt;
   const root = unwrap(tag?.nbt ?? tag);
   const display = unwrap(root?.display);
   const lore = unwrap(unwrap(display?.Lore));
-  return readMultiplier(unwrap(display?.Name), Array.isArray(lore) ? lore : []);
+  return { name: unwrap(display?.Name), lore: Array.isArray(lore) ? lore : [] };
 }
+
+function multiplierItem(item: BedrockItem): SellMultiplier | null {
+  const { name, lore } = multiplierTooltip(item);
+  return readMultiplier(name, lore);
+}
+
+const boundedText = (value: unknown) => Array.from(tooltipText(value).replace(/[\r\n]/g, ' ')).slice(0, 160).join('');
 
 /** Only the sell command's own GUI is automated. Inventory pickup traffic never
  * postpones the loading deadline, so a busy farm cannot starve selling. */
@@ -75,7 +82,8 @@ export class BedrockInventory {
   clearMenuTitles(): void { this.titles.clear(); }
 
   interrupt(closeForeign = false, manualSell = false): void {
-    const scanOwned = this.multiplierScan?.windowId === this.container?.id && multiplierTitle(this.container?.title ?? null);
+    const scanOwned = this.container && this.multiplierScan?.windowId === this.container.id
+      && (multiplierTitle(this.container.title) || this.container.items?.slice(0, 9).some(item => multiplierItem(item) !== null));
     this.cancelMultiplierScan();
     if (closeForeign) {
       this.manualGuardUntil = Date.now() + 5_000;
@@ -129,21 +137,30 @@ export class BedrockInventory {
     const scan = this.multiplierScan;
     if (!scan) return;
     const menu = this.container;
-    const owned = menu && scan.windowId === menu.id && menu.type === "container" && multiplierTitle(menu.title);
-    // Accept a padded Bedrock chest as well as the two-row slot count.
-    if (owned && menu.items && [18, 27].includes(menu.items.length)) {
-      const entries = menu.items.slice(0, 9).map(multiplierItem);
-      if (entries.length === 9 && entries.every((entry): entry is SellMultiplier => entry !== null)) {
-        this.multiplierScan = null;
-        this.close();
-        emit({ type: "sell_multipliers", entries });
-        return;
-      }
+    const associated = menu && scan.windowId === menu.id && menu.type === "container";
+    // A resource pack can draw the title using glyphs, and Geyser can pad the
+    // chest. Only a pending /desmo request plus nine valid tooltips identifies it.
+    const entries = associated && menu.items && menu.items.length >= 9 && menu.items.length <= 54 && menu.items.length % 9 === 0
+      ? menu.items.slice(0, 9).map(multiplierItem) : [];
+    if (entries.length === 9 && entries.every((entry): entry is SellMultiplier => entry !== null)) {
+      this.multiplierScan = null;
+      this.close();
+      emit({ type: "sell_multipliers", entries });
+      return;
     }
     if (now >= scan.deadline) {
+      let detail = "kein Menü geöffnet";
+      if (menu) {
+        const items = menu.items?.slice(0, 9) ?? [];
+        const readable = items.filter(item => multiplierItem(item) !== null).length;
+        const first = items.findIndex(item => multiplierItem(item) === null);
+        const tooltip = first >= 0 ? multiplierTooltip(items[first]) : null;
+        detail = `Menü-ID ${menu.id} (erwartet ${scan.windowId}); Titel ${JSON.stringify(boundedText(menu.title))}; ${menu.items?.length ?? 0} GUI-Slots; Tooltips vollständig ${readable}/9`;
+        if (tooltip) detail += `; Slot ${first + 1}: Name ${JSON.stringify(boundedText(tooltip.name))}, Lore ${JSON.stringify(tooltip.lore.slice(0, 6).map(boundedText))}`;
+      }
       this.multiplierScan = null;
-      if (owned) this.close();
-      emit({ type: "warning", message: "Desmo: SELL MULTI nicht vollständig lesbar (10s Timeout); keine unvollständigen Ergebnisse ausgegeben" });
+      if (associated && (multiplierTitle(menu.title) || entries.some(entry => entry !== null))) this.close();
+      emit({ type: "warning", message: `Desmo: SELL MULTI nicht vollständig lesbar (10s Timeout); ${detail}; keine unvollständigen Ergebnisse ausgegeben` });
     }
   }
 

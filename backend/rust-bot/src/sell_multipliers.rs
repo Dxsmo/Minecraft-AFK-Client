@@ -1,5 +1,5 @@
-use azalea_inventory::ItemStack;
 use azalea_inventory::components::{CustomName, ItemName, Lore};
+use azalea_inventory::{ItemStack, Menu};
 
 use crate::protocol::SellMultiplier;
 
@@ -23,6 +23,29 @@ pub fn menu_title(title: &str) -> bool {
         .eq_ignore_ascii_case("sellmulti")
 }
 
+pub fn chest_menu(menu: &Menu) -> bool {
+    matches!(
+        menu,
+        Menu::Generic9x1 { .. }
+            | Menu::Generic9x2 { .. }
+            | Menu::Generic9x3 { .. }
+            | Menu::Generic9x4 { .. }
+            | Menu::Generic9x5 { .. }
+            | Menu::Generic9x6 { .. }
+    )
+}
+
+fn labelled<'a>(line: &'a str, labels: &[&str]) -> Option<&'a str> {
+    labels.iter().find_map(|label| {
+        let prefix = line.get(..label.len())?;
+        if !prefix.eq_ignore_ascii_case(label) {
+            return None;
+        }
+        let rest = line.get(label.len()..)?.trim_start();
+        Some(rest.strip_prefix(':').unwrap_or(rest).trim())
+    })
+}
+
 fn tooltip(name: &str, lore: &[String]) -> Option<SellMultiplier> {
     let name = plain_text(name)
         .replace(['\r', '\n'], " ")
@@ -33,18 +56,18 @@ fn tooltip(name: &str, lore: &[String]) -> Option<SellMultiplier> {
     }
     let lines: Vec<String> = lore
         .iter()
-        .map(|line| plain_text(line).trim().to_string())
+        .map(|line| {
+            plain_text(line)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
         .collect();
     let progress = read_progress(&lines)?;
     for line in &lines {
-        let Some((label, value)) = line.split_once(':') else {
+        let Some(value) = labelled(line, &["Aktueller Multiplikator", "Current multiplier"]) else {
             continue;
         };
-        if !label.trim().eq_ignore_ascii_case("Aktueller Multiplikator")
-            && !label.trim().eq_ignore_ascii_case("Current multiplier")
-        {
-            continue;
-        }
         let value = value.trim();
         let Some(number) = value.strip_suffix(['x', 'X', '×']) else {
             continue;
@@ -132,14 +155,9 @@ fn percentage(line: &str) -> Option<String> {
 
 fn read_progress(lines: &[String]) -> Option<String> {
     for (index, line) in lines.iter().enumerate() {
-        let Some((label, value)) = line.split_once(':') else {
+        let Some(value) = labelled(line, &["Fortschritt", "Progress"]) else {
             continue;
         };
-        if !label.trim().eq_ignore_ascii_case("Fortschritt")
-            && !label.trim().eq_ignore_ascii_case("Progress")
-        {
-            continue;
-        }
         let Some((left, right)) = value.split_once('/') else {
             continue;
         };
@@ -176,37 +194,119 @@ fn read_progress(lines: &[String]) -> Option<String> {
 
 /** Never read the bottom GUI row or the appended player inventory. */
 pub fn read_top_row(slots: &[ItemStack]) -> Option<Vec<SellMultiplier>> {
-    if slots.len() != 54 {
+    if !(45..=90).contains(&slots.len()) || slots.len() % 9 != 0 {
         return None;
     }
     slots[..9]
         .iter()
         .map(|stack| {
-            if !stack.is_present() {
-                return None;
-            }
-            let name = stack
-                .get_component::<CustomName>()
-                .map(|name| name.name.to_string())
-                .or_else(|| {
-                    stack
-                        .get_component::<ItemName>()
-                        .map(|name| name.name.to_string())
-                })?;
-            let lore = stack
-                .get_component::<Lore>()?
-                .lines
-                .iter()
-                .map(|line| line.to_string())
-                .collect::<Vec<_>>();
+            let (name, lore) = item_tooltip(stack);
             tooltip(&name, &lore)
         })
         .collect()
 }
 
+pub fn has_multiplier_tooltip(slots: &[ItemStack]) -> bool {
+    slots.iter().take(9).any(|stack| {
+        let (name, lore) = item_tooltip(stack);
+        tooltip(&name, &lore).is_some()
+    })
+}
+
+fn item_tooltip(stack: &ItemStack) -> (String, Vec<String>) {
+    if !stack.is_present() {
+        return (String::new(), vec![]);
+    }
+    let name = stack
+        .get_component::<CustomName>()
+        .map(|name| name.name.to_string())
+        .or_else(|| {
+            stack
+                .get_component::<ItemName>()
+                .map(|name| name.name.to_string())
+        })
+        .unwrap_or_default();
+    let lore = stack
+        .get_component::<Lore>()
+        .map(|lore| lore.lines.iter().map(|line| line.to_string()).collect())
+        .unwrap_or_default();
+    (name, lore)
+}
+
+pub fn bounded_text(text: &str) -> String {
+    plain_text(text)
+        .replace(['\r', '\n'], " ")
+        .chars()
+        .take(160)
+        .collect()
+}
+
+/// One bounded diagnostic per failed request, including the first unreadable
+/// tooltip. Resource-pack glyphs cannot be reconstructed from a visible title.
+pub fn describe_top_row(slots: &[ItemStack]) -> String {
+    let tooltips: Vec<_> = slots.iter().take(9).map(item_tooltip).collect();
+    let readable = tooltips
+        .iter()
+        .filter(|(name, lore)| tooltip(name, lore).is_some())
+        .count();
+    let first = tooltips
+        .iter()
+        .enumerate()
+        .find(|(_, (name, lore))| tooltip(name, lore).is_none());
+    let detail = first
+        .map(|(index, (name, lore))| {
+            format!(
+                "; Slot {}: Name {:?}, Lore {:?}",
+                index + 1,
+                bounded_text(name),
+                lore.iter()
+                    .take(6)
+                    .map(|line| bounded_text(line))
+                    .collect::<Vec<_>>()
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "{} GUI-Slots; Tooltips vollständig {readable}/9{detail}",
+        slots.len().saturating_sub(36)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_tooltip_labels_without_colons_and_reports_unreadable_slots() {
+        assert_eq!(
+            tooltip(
+                "Fische",
+                &[
+                    "§7Aktueller\u{a0}Multiplikator §a1x".into(),
+                    "§7Fortschritt $3.695 / $20.000".into(),
+                    "████░░░ 18%".into(),
+                ]
+            )
+            .unwrap()
+            .progress,
+            "3.695$/20.000$ - 18%"
+        );
+        let mut slots = vec![ItemStack::Empty; 54];
+        slots[0] = ItemStack::new(azalea::registry::builtin::ItemKind::Cod, 1)
+            .with_component(CustomName {
+                name: "Fische".into(),
+            })
+            .with_component(Lore {
+                lines: vec!["Aktueller Multiplikator: 1x".into()],
+            });
+        let description = describe_top_row(&slots);
+        assert!(description.contains("18 GUI-Slots; Tooltips vollständig 0/9"));
+        assert!(description.contains("Slot 1: Name \"Fische\""));
+        assert!(description.contains("Aktueller Multiplikator: 1x"));
+        assert_eq!(bounded_text(&"ä".repeat(500)).chars().count(), 160);
+        assert!(read_top_row(&slots[..9]).is_none());
+    }
+
     #[test]
     fn parses_the_screenshot_and_coloured_decimals_with_progress() {
         let result = tooltip(
