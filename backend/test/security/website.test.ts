@@ -12,6 +12,7 @@ import { config } from "../../src/config/config.js";
 import { clientManager } from "../../src/minecraft/ClientManager.js";
 import { sniperManager } from "../../src/namesniper/SniperManager.js";
 import { recordAuditLog } from "../../src/logging/auditLog.js";
+import { PNG } from "pngjs";
 
 let app: Awaited<ReturnType<typeof buildApp>>, url: string, passwordHash: string;
 let users: {id:string;username:string}[] = [], accounts: {id:string;name:string}[] = [];
@@ -83,6 +84,25 @@ it("rejects anonymous requests and ordinary users accessing administration",asyn
   const escalation=await app.inject({method:"PATCH",url:`/api/users/${users[0].id}`,headers:headers(),payload:{role:"ADMIN"}});
   expect(escalation.statusCode).toBe(403);
   expect((await prisma.user.findUniqueOrThrow({where:{id:users[0].id}})).role).toBe("USER");
+});
+
+it("serves user-category skin heads only to admins, including users with no uploads", async () => {
+  const path = `/api/users/${users[1].id}/avatar`;
+  expect((await app.inject({ url: path })).statusCode).toBe(401);
+  expect((await app.inject({ url: path, headers: headers() })).statusCode).toBe(403);
+  expect((await app.inject({ url: path, headers: headers(2) })).statusCode).toBe(404);
+  await prisma.user.update({ where: { id: users[1].id }, data: { minecraftUsername: "CategorySkin" } });
+  await prisma.minecraftAccount.delete({ where: { id: accounts[1].id } });
+  const request = vi.fn().mockResolvedValue(new Response(new Uint8Array(PNG.sync.write(new PNG({ width: 32, height: 32 }))), { headers: { "content-type": "image/png" } }));
+  vi.stubGlobal("fetch", request);
+  try {
+    const response = await app.inject({ url: path, headers: headers(2) });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("image/png");
+    expect(PNG.sync.read(response.rawPayload).width).toBe(32);
+    expect(request).toHaveBeenCalledExactlyOnceWith("https://mc-heads.net/avatar/CategorySkin/32", expect.anything());
+    expect((await app.inject({ url: `/api/users/missing/avatar`, headers: headers(2) })).statusCode).toBe(404);
+  } finally { vi.unstubAllGlobals(); }
 });
 
 it("hides foreign Minecraft accounts and credentials through every operation",async()=>{

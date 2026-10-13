@@ -302,6 +302,9 @@ function handleCommand(
     case "clean_spawner":
       behavior.enqueueCleanSpawner();
       break;
+    case "read_sell_multipliers":
+      behavior.enqueueSellMultipliers();
+      break;
     case "pause_autosell":
       behavior.pauseAutosell(cmd.autosell_pause_after_ms, cmd.autosell_resume_after_ms);
       break;

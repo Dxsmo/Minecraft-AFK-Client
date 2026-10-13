@@ -185,7 +185,7 @@ export class MinecraftClient extends EventEmitter {
       this.emitConsole("ERROR", "Bot is not online, cannot send command");
       return false;
     }
-    const sent = this.sendToBot({ type: "chat", text: command });
+    const sent = this.sendToBot(command === "/desmo" ? { type: "read_sell_multipliers" } : { type: "chat", text: command });
     if (sent) this.emitConsole("USER_COMMAND", command);
     else this.emitConsole("ERROR", "Command konnte nicht an den Bot übermittelt werden");
     return sent;
@@ -458,6 +458,22 @@ export class MinecraftClient extends EventEmitter {
       case "behavior_log":
         this.emitConsole("SYSTEM", String((event as { message: string }).message));
         break;
+
+      case "sell_multipliers": {
+        const entries = event.entries;
+        if (!Array.isArray(entries) || entries.length !== 9 || !entries.every(entry => entry && typeof entry.name === "string"
+          && entry.name.trim().length > 0 && entry.name.length <= 256 && typeof entry.multiplier === "string"
+          && entry.multiplier.length <= 32 && /^\d+(?:[.,]\d+)?[x×]$/iu.test(entry.multiplier)
+          && typeof entry.progress === "string" && entry.progress.length <= 96
+          && /^\d[\d.,]*\$\/\d[\d.,]*\$ - \d+(?:[.,]\d+)?%$/u.test(entry.progress))) {
+          this.emitConsole("WARNING", "Desmo: Multiplikatoren konnten nicht vollständig ausgelesen werden");
+          break;
+        }
+        this.emitConsole("SYSTEM", "Desmo: Verkaufsmultiplikatoren (9 Kategorien)");
+        for (const entry of entries) this.emitConsole("SYSTEM",
+          `${stripMinecraftFormatting(entry.name).replace(/[\r\n]/g, " ")}\nAktueller Multiplikator: ${entry.multiplier}\nFortschritt: ${entry.progress}`);
+        break;
+      }
 
       case "heartbeat":
         this.lastHeartbeatAt = Date.now();

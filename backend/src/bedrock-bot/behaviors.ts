@@ -22,6 +22,7 @@ const INVENTORY_BUSY_DELAY_MS = 250;
 
 type ForegroundTask =
   | { kind: "command"; text: string }
+  | { kind: "sell_multipliers" }
   | { kind: "clean_spawner" };
 
 function isTeleportCommand(text: string): boolean {
@@ -139,6 +140,9 @@ export class BehaviorState {
   enqueueCleanSpawner(): void {
     this.queue.push({ kind: "clean_spawner" });
   }
+  enqueueSellMultipliers(): void {
+    this.manualQueue.push({ kind: "sell_multipliers" });
+  }
 
   // --- Periodic tick, driven by index.ts ---
 
@@ -165,6 +169,10 @@ export class BehaviorState {
 
     if (this.spawned && this.manualQueue.length) {
       this.runForeground(this.manualQueue.shift()!, now, true);
+      return;
+    }
+    if (this.inventory.readingMultipliers) {
+      this.inventory.tickMultipliers(now);
       return;
     }
     if (!this.spawned || now < this.automationReadyAt || now < this.manualAutosellPauseUntil) return;
@@ -194,6 +202,12 @@ export class BehaviorState {
 
   private runForeground(task: ForegroundTask, now: number, manual = false): void {
     switch (task.kind) {
+      case "sell_multipliers":
+        this.inventory.interrupt(true);
+        this.inventory.requestMultipliers(now);
+        this.sender.command("/sellmulti");
+        this.postponeAutomation(now + CHAT_COMMAND_GUARD_MS);
+        break;
       case "command":
         if (manual) this.manualAutosellPauseUntil = now + 5000;
         this.inventory.interrupt(true, task.text.trim() === (this.cfg.autosell_command ?? "/sell").trim());

@@ -1,8 +1,10 @@
 import type { ReactNode } from "react";
+import { UploaderAvatar } from "./UploaderAvatar";
 
 interface UploaderCategoryProps {
   id: string;
   username: string;
+  minecraftUsername: string | null;
   count: number;
   expanded: boolean;
   index: number;
@@ -12,7 +14,7 @@ interface UploaderCategoryProps {
   children: ReactNode;
 }
 
-export function UploaderCategory({ id, username, count, expanded, index, total,
+export function UploaderCategory({ id, username, minecraftUsername, count, expanded, index, total,
   onToggle, onMove, children }: UploaderCategoryProps) {
   const contentId = `uploader-accounts-${id}`;
   return (
@@ -30,6 +32,7 @@ export function UploaderCategory({ id, username, count, expanded, index, total,
             <svg className="uploader-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="m9 6 6 6-6 6" /></svg>
             <span className="truncate font-medium" title={username}>{username}</span>
+            {id.startsWith("user:") && <UploaderAvatar userId={id.slice(5)} username={username} minecraftUsername={minecraftUsername} />}
             <span className="uploader-count">{count} {count === 1 ? "Account" : "Accounts"}</span>
           </button>
         </h2>

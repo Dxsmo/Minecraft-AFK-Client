@@ -13,7 +13,7 @@ import { AccountDetails } from "../components/AccountDetails";
 import { useCompactLayout } from "../lib/useCompactLayout";
 import { UploaderCategory } from "../components/UploaderCategory";
 
-type Uploader = Pick<ManagedUser, "id" | "username">;
+type Uploader = Pick<ManagedUser, "id" | "username" | "minecraftUsername">;
 const uploaderKey = (account: DashboardAccount) => account.createdBy ? `user:${account.createdBy.id}` : "unassigned";
 
 export function DashboardPage() {
@@ -80,7 +80,7 @@ export function DashboardPage() {
         api.get<DashboardAccount[]>("/minecraft/accounts?view=dashboard"),
         isAdmin ? api.get<Uploader[]>("/users") : Promise.resolve([]),
       ]);
-      setUploaders(users.map(({ id, username }) => ({ id, username })));
+      setUploaders(users.map(({ id, username, minecraftUsername }) => ({ id, username, minecraftUsername: minecraftUsername ?? null })));
       setError(null);
       setAccounts(loaded.map((account) => {
         const liveSale = lastSales.current[account.id];
@@ -109,16 +109,17 @@ export function DashboardPage() {
 
   const uploaderGroups = useMemo(() => {
     if (!isAdmin) return [];
-    const groups = new Map<string, { id: string; username: string; accounts: DashboardAccount[] }>();
+    const groups = new Map<string, { id: string; username: string; minecraftUsername: string | null; accounts: DashboardAccount[] }>();
     for (const uploader of uploaders ?? []) {
       const id = `user:${uploader.id}`;
-      groups.set(id, { id, username: uploader.username, accounts: [] });
+      groups.set(id, { id, username: uploader.username, minecraftUsername: uploader.minecraftUsername, accounts: [] });
     }
     for (const account of orderedAccounts) {
       const id = uploaderKey(account);
       // Preserve legacy accounts and uploads whose creator was deleted, as
       // well as creators added between the two dashboard requests.
-      if (!groups.has(id)) groups.set(id, { id, username: account.createdBy?.username ?? "Ohne Uploader", accounts: [] });
+      if (!groups.has(id)) groups.set(id, { id, username: account.createdBy?.username ?? "Ohne Uploader",
+        minecraftUsername: account.createdBy?.minecraftUsername ?? null, accounts: [] });
       groups.get(id)!.accounts.push(account);
     }
     const ranks = new Map((preferences?.uploaderOrder ?? []).map((id, index) => [id, index]));
@@ -240,7 +241,7 @@ export function DashboardPage() {
       ) : isAdmin ? (
         <div className="uploader-categories space-y-3">
           {uploaderGroups.map((group, index) => <UploaderCategory key={group.id}
-            id={group.id} username={group.username} count={group.accounts.length}
+            id={group.id} username={group.username} minecraftUsername={group.minecraftUsername} count={group.accounts.length}
             expanded={!preferences.collapsedUploaderIds.includes(group.id)} index={index} total={uploaderGroups.length}
             onToggle={() => {
               if (group.accounts.some(account => account.id === expandedId)) setExpandedId(null);

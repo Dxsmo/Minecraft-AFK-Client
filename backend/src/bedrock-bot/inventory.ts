@@ -1,9 +1,10 @@
 import { BotSender } from "./send.js";
 import { emit } from "./protocol.js";
+import { readMultiplier, tooltipText, type SellMultiplier } from "../minecraft/sellMultipliers.js";
 
 export type BedrockItem = { network_id: number; count?: number; stack_id?: number; [key: string]: unknown };
 type WindowId = number | string;
-type Container = { id: WindowId; type: string; items: BedrockItem[] | null; owned: boolean; position: string | null; manual: boolean };
+type Container = { id: WindowId; type: string; items: BedrockItem[] | null; owned: boolean; position: string | null; manual: boolean; title: string | null };
 type Pending = { id: number; source: number; destination: number; item: BedrockItem; sentAt: number };
 const SELL_MENU_TIMEOUT_MS = 500;
 const empty = (): BedrockItem => ({ network_id: 0 });
@@ -14,6 +15,17 @@ const positionKey = (position: unknown): string | null => {
 };
 const sellTitle = (title: string) => ["items verkaufen", "sell"].includes(title.replace(/§./g, "").trim().toLowerCase());
 const playerWindow = (id: WindowId) => id === 0 || id === "inventory";
+const multiplierTitle = (title: string | null) => tooltipText(title).replace(/\s/g, "").toLowerCase() === "sellmulti";
+
+function multiplierItem(item: BedrockItem): SellMultiplier | null {
+  if (!present(item)) return null;
+  const unwrap = (value: any): any => value && typeof value === "object" && "value" in value ? value.value : value;
+  const tag = (item.extra as { nbt?: any } | undefined)?.nbt;
+  const root = unwrap(tag?.nbt ?? tag);
+  const display = unwrap(root?.display);
+  const lore = unwrap(unwrap(display?.Lore));
+  return readMultiplier(unwrap(display?.Name), Array.isArray(lore) ? lore : []);
+}
 
 /** Only the sell command's own GUI is automated. Inventory pickup traffic never
  * postpones the loading deadline, so a busy farm cannot starve selling. */
@@ -30,14 +42,21 @@ export class BedrockInventory {
   private titles = new Map<string, string>();
   private lastFailureAt = -Infinity;
   private needsFullPlayerContent = false;
+  private multiplierScan: { deadline: number; windowId: WindowId | null } | null = null;
   constructor(private sender: BotSender) {}
 
   get busy(): boolean { return this.requestedAt != null || !!this.container?.owned; }
   get blocked(): boolean { return !!this.container && !this.container.owned; }
   get synchronized(): boolean { return !this.needsFullPlayerContent; }
+  get readingMultipliers(): boolean { return this.multiplierScan !== null; }
+  requestMultipliers(now: number): void {
+    this.manualGuardUntil = 0;
+    this.multiplierScan = { deadline: now + 10_000, windowId: null };
+  }
   request(now: number): void { this.cancelledSellUntil = 0; this.requestedAt = now; this.targets = null; }
 
   reset(): void {
+    this.cancelMultiplierScan();
     this.titles.clear(); this.manualGuardUntil = 0; this.cancelledSellUntil = 0;
     this.player = null; this.container = null; this.requestedAt = null;
     this.targets = null; this.pending = null;
@@ -56,11 +75,13 @@ export class BedrockInventory {
   clearMenuTitles(): void { this.titles.clear(); }
 
   interrupt(closeForeign = false, manualSell = false): void {
+    const scanOwned = this.multiplierScan?.windowId === this.container?.id && multiplierTitle(this.container?.title ?? null);
+    this.cancelMultiplierScan();
     if (closeForeign) {
       this.manualGuardUntil = Date.now() + 5_000;
       this.cancelledSellUntil = manualSell ? 0 : this.busy ? Date.now() + 10_000 : this.cancelledSellUntil;
     }
-    if (this.container && (this.container.owned || closeForeign)) this.close();
+    if (this.container && (this.container.owned || closeForeign || scanOwned)) this.close();
     this.requestedAt = null; this.targets = null; this.pending = null;
   }
 
@@ -72,7 +93,8 @@ export class BedrockInventory {
     if (position) this.titles.delete(position);
     const recentRequest = this.requestedAt != null && now - this.requestedAt <= 5_000;
     const owned = !manual && packet.window_type === "container" && (recentRequest || (!!title && sellTitle(title)));
-    this.container = { id: packet.window_id, type: packet.window_type, items: null, owned, position, manual };
+    this.container = { id: packet.window_id, type: packet.window_type, items: null, owned, position, manual, title: title ?? null };
+    if (this.multiplierScan && packet.window_type === "container") this.multiplierScan.windowId = packet.window_id;
     this.openedAt = now; this.targets = null; this.pending = null;
     if (title && sellTitle(title) && now < this.cancelledSellUntil) this.close();
   }
@@ -89,6 +111,7 @@ export class BedrockInventory {
     if (this.titles.size > 16) this.titles.delete(this.titles.keys().next().value!);
     const menu = this.container;
     if (menu?.position === position) {
+      menu.title = title;
       const recentRequest = this.requestedAt != null && Date.now() - this.requestedAt <= 5_000;
       menu.owned = menu.type === "container" && !menu.manual && (sellTitle(title) || recentRequest);
       this.titles.delete(position);
@@ -98,7 +121,35 @@ export class BedrockInventory {
 
   onClose(packet: { window_id: WindowId }): void {
     if (this.container?.id !== packet.window_id) return;
+    if (this.multiplierScan?.windowId === packet.window_id) this.cancelMultiplierScan();
     this.container = null; this.requestedAt = null; this.targets = null; this.pending = null;
+  }
+
+  tickMultipliers(now: number): void {
+    const scan = this.multiplierScan;
+    if (!scan) return;
+    const menu = this.container;
+    const owned = menu && scan.windowId === menu.id && menu.type === "container" && multiplierTitle(menu.title);
+    // Accept a padded Bedrock chest as well as the two-row slot count.
+    if (owned && menu.items && [18, 27].includes(menu.items.length)) {
+      const entries = menu.items.slice(0, 9).map(multiplierItem);
+      if (entries.length === 9 && entries.every((entry): entry is SellMultiplier => entry !== null)) {
+        this.multiplierScan = null;
+        this.close();
+        emit({ type: "sell_multipliers", entries });
+        return;
+      }
+    }
+    if (now >= scan.deadline) {
+      this.multiplierScan = null;
+      if (owned) this.close();
+      emit({ type: "warning", message: "Desmo: SELL MULTI nicht vollständig lesbar (10s Timeout); keine unvollständigen Ergebnisse ausgegeben" });
+    }
+  }
+
+  private cancelMultiplierScan(): void {
+    if (this.multiplierScan) emit({ type: "warning", message: "Desmo: Auslesen durch neuen Command oder Weltwechsel abgebrochen" });
+    this.multiplierScan = null;
   }
 
   onContent(packet: { window_id: WindowId; input: BedrockItem[] }): void {

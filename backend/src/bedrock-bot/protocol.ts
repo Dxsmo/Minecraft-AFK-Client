@@ -51,6 +51,7 @@ export type Command =
   | { type: "background_chat"; text: string }
   | ({ type: "configure" } & BehaviorConfig)
   | { type: "clean_spawner" }
+  | { type: "read_sell_multipliers" }
   | { type: "check_crouch" }
   | { type: "pause_autosell"; autosell_pause_after_ms: number; autosell_resume_after_ms: number }
   | { type: "disconnect" };
@@ -67,6 +68,7 @@ export type OutEvent =
   | { type: "warning"; message: string }
   | { type: "fatal_error"; error: string }
   | { type: "behavior_log"; message: string }
+  | { type: "sell_multipliers"; entries: Array<{ name: string; multiplier: string; progress: string }> }
   | { type: "heartbeat" };
 
 /**

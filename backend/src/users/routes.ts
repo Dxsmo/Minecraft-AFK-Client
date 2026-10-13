@@ -4,6 +4,7 @@ import * as usersService from "./service.js";
 import { parseOrReject } from "../utils/validate.js";
 import { recordAuditLog } from "../logging/auditLog.js";
 import { clientManager } from "../minecraft/ClientManager.js";
+import { getMinecraftAvatar } from "./minecraftAvatar.js";
 
 /**
  * All routes here are admin-only: normal users cannot list, create, edit or
@@ -26,6 +27,15 @@ export default async function usersRoutes(app: FastifyInstance) {
 
   app.get("/api/users", async (_req, reply) => {
     reply.send(await usersService.listUsers());
+  });
+
+  app.get("/api/users/:id/avatar", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const user = await usersService.getUserById(id);
+    if (!user?.minecraftUsername) return reply.code(404).send({ error: "Minecraft username not assigned" });
+    const image = await getMinecraftAvatar(user.minecraftUsername);
+    if (!image) return reply.code(502).send({ error: "Minecraft avatar unavailable" });
+    return reply.type("image/png").send(image);
   });
 
   app.get("/api/users/:id", async (req, reply) => {

@@ -20,6 +20,7 @@ mod network_mode;
 mod protocol;
 #[cfg(test)]
 mod protocol_compatibility;
+mod sell_multipliers;
 mod server_message_details;
 
 use std::io::{BufRead, Write};
@@ -235,6 +236,7 @@ fn process_pending_commands(bot: &Client) {
             Command::Configure(cfg) => shared().lock().behavior.update_config(cfg),
             Command::CheckCrouch => shared().lock().behavior.check_crouch(&bot),
             Command::CleanSpawner => shared().lock().behavior.enqueue_clean_spawner(),
+            Command::ReadSellMultipliers => shared().lock().behavior.enqueue_sell_multipliers(),
             Command::PauseAutosell {
                 autosell_pause_after_ms,
                 autosell_resume_after_ms,
@@ -302,6 +304,12 @@ async fn handle(bot: Client, event: Event, state: State) -> eyre::Result<()> {
             }
             ClientboundGamePacket::ContainerSetContent(packet) => {
                 shared().lock().behavior.on_container_content(&bot, packet);
+            }
+            ClientboundGamePacket::ContainerSetSlot(packet) => {
+                shared()
+                    .lock()
+                    .behavior
+                    .on_multiplier_slot(packet.container_id);
             }
             ClientboundGamePacket::Respawn(_) => shared().lock().behavior.on_respawn(&bot),
             ClientboundGamePacket::PlayerPosition(_) => {

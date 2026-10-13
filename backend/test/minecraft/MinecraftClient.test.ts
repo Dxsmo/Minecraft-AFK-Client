@@ -730,6 +730,30 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(JSON.parse(written.trim())).toEqual({ type: "chat", text: "/gamemode creative" });
   });
 
+  it("intercepts only exact /desmo and prints all nine results without sending them to Minecraft", async () => {
+    const client = makeClient();
+    const events: any[] = [];
+    client.on("console", event => events.push(event));
+    client.connect(); lastChild().send({ type: "spawn" }); await tick();
+    const child = lastChild(); child.stdin.write.mockClear();
+    expect(client.sendCommand("/desmo")).toBe(true);
+    expect(JSON.parse(String(child.stdin.write.mock.calls[0][0]))).toEqual({ type: "read_sell_multipliers" });
+    for (const command of ["/sellmulti", "/DESMO", "/desmo extra", "/desmo/"]) {
+      expect(client.sendCommand(command)).toBe(true);
+      expect(JSON.parse(String(child.stdin.write.mock.calls.at(-1)![0]))).toEqual({ type: "chat", text: command });
+    }
+    child.stdin.write.mockClear(); events.length = 0;
+    child.send({ type: "sell_multipliers", entries: Array.from({ length: 9 }, (_, index) => ({ name: `Kategorie ${index}`, multiplier: `${index + 1}x`, progress: '600$/800$ - 67%' })) });
+    await tick();
+    expect(child.stdin.write).not.toHaveBeenCalled();
+    expect(events.filter(event => event.type === "SYSTEM")).toHaveLength(10);
+    expect(events[1].message).toBe("Kategorie 0\nAktueller Multiplikator: 1x\nFortschritt: 600$/800$ - 67%");
+    expect(events[9].message).toBe("Kategorie 8\nAktueller Multiplikator: 9x\nFortschritt: 600$/800$ - 67%");
+    events.length = 0;
+    child.send({ type: "sell_multipliers", entries: [{ name: "Fische", multiplier: "1x" }] }); await tick();
+    expect(events).toHaveLength(1); expect(events[0].type).toBe("WARNING");
+  });
+
   it("reports failed command pipes and does not log an unsent user command", async () => {
     const client = makeClient();
     const events: { type: string }[] = [];

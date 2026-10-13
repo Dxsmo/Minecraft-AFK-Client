@@ -11,7 +11,7 @@ const errors = [], report = [], deviceChecks = [];
 const user = (id, username, role = 'USER', status = 'ACTIVE') => ({ id, username, role, status });
 const admin = user('admin', 'TestAdmin', 'ADMIN');
 const otherAdmin = user('other-admin', 'OtherAdmin', 'ADMIN');
-const alice = user('alice', 'Alice');
+const alice = { ...user('alice', 'Alice'), minecraftUsername: 'MogliHD' };
 const bob = user('bob', 'Bob_with_a_very_long_username_'.repeat(2));
 const empty = user('empty', 'EmptyUser', 'USER', 'DISABLED');
 // Select the category itself, rather than relying on translated button text.
@@ -63,6 +63,10 @@ async function setup(page, { blockUsers = false, blockProfile = false, unavailab
       state.active = name === otherAdmin.username ? otherAdmin : name === bob.username ? bob : admin;
       data = state.active;
     } else if (path.endsWith('/auth/me')) data = { user: state.active };
+    else if (path.endsWith('/avatar')) {
+      await route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64') });
+      return;
+    }
     else if (path.includes('/profile/dashboard')) {
       await profileReady;
       await new Promise(resolve => setTimeout(resolve, state.profileDelay));
@@ -170,6 +174,12 @@ try {
     state.releaseUsers();
     await group(page, 'user:alice').waitFor();
     assert.deepEqual(await order(page), initialOrder);
+    assert.equal(await page.locator('.uploader-avatar').count(), 5);
+    const head = group(page, 'user:alice').locator('.uploader-avatar img');
+    await head.waitFor();
+    assert.equal(await head.getAttribute('src'), '/api/users/alice/avatar?v=MogliHD');
+    assert.equal(await head.evaluate(image => image.getBoundingClientRect().width), 20);
+    assert.equal(await group(page, 'unassigned').locator('.uploader-avatar').count(), 0);
     assert.deepEqual(await accountIds(group(page, 'user:alice')), ['a1', 'a2']);
     assert.deepEqual(await accountIds(group(page, 'user:bob')), ['b1', 'b2']);
     assert.deepEqual(await accountIds(group(page, 'unassigned')), ['legacy']);
