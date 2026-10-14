@@ -24,7 +24,11 @@ handoff to TCP, and do not claim receipt or acknowledgement by the server.
 Keepalive packets are identified by the pinned protocol's resource name rather
 than hardcoded game/config packet IDs. Diagnostics carry no packet payloads.
 The writer also retains the failed packet's resource name, I/O error kind and
-OS error code. `poll_writer` remembers completion so callers can safely poll it
+OS error code, together with its age since enqueueing. Pong has its own queued
+and completed counters. Successful keepalive/pong writes record their latest
+and maximum enqueue-to-TCP duration in milliseconds; failed writes do not count
+as completed replies. These local durations are not server acknowledgements or
+round-trip measurements. `poll_writer` remembers completion so callers can safely poll it
 again while incoming disconnect frames are drained. The stock writer poller is
 exposed for the simulation to disable the complete connection plugin, matching
 production; leaving it enabled would bypass the AFK reader's drain policy.
@@ -48,7 +52,24 @@ subsequent healthy packets in a completed bundle. Regression tests cover both
 readers, split/adjacent/empty bundles, inventory and control ordering, rejected
 bundles, the size limit, and one-byte TCP fragments with compression/encryption.
 Disconnect snapshots report the number of completed bundles and whether a bundle
-is still open, without recording packet contents or adding routine console logs.
+is still open, its age, the number/age of held keepalive and ping frames, and the
+maximum completed bundle/control wait. Held controls remain unprocessed until
+the delimiter; these counters identify raw packet types and do not imply a
+successful body decode. Pending measurements clear on close, protocol changes
+and invalid bundles. No packet payloads or extra routine console logs are added.
+The AFK reader also reports its latest/maximum update gap and read work duration,
+so a CPU/scheduling pause can be distinguished from waiting for a delimiter or
+an outgoing socket write. Maxima cover the current connection's lifetime.
+
+Game keepalive/pong replies now use the transport's Game protocol state rather
+than the presence of the gameplay ECS marker. A missing marker previously
+suppressed these replies despite an active Game transport. The normal guard is
+retained for gameplay commands, and game control replies are blocked in other
+transport phases. Terminal game acknowledgements retain their original path.
+The real TCP regression covers present/absent markers in both readers, including
+rejection of ordinary commands without the marker and of game controls during
+configuration. This is a defensive correction; the user's reset log does not
+establish that their ECS marker was absent.
 
 Keep the patch aligned with Azalea when changing its revision. Remove the local
 copy if upstream exposes an equivalent nonblocking reader API.

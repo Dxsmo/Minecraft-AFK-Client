@@ -122,6 +122,13 @@ struct ItemFilter {
     last_received_at: Option<Instant>,
     keepalives_received: u64,
     last_keepalive_at: Option<Instant>,
+    pings_received: u64,
+    last_ping_at: Option<Instant>,
+    last_network_update_at: Option<Instant>,
+    last_network_gap_ms: u64,
+    max_network_gap_ms: u64,
+    last_network_work_ms: u64,
+    max_network_work_ms: u64,
     read_errors: u64,
     last_read_error: Option<String>,
     last_protocol: Option<ConnectionProtocol>,
@@ -232,24 +239,40 @@ fn diagnostics_message(ecs: &World, entity: Entity, filter: &ItemFilter) -> Stri
         .get::<RawConnection>(entity)
         .and_then(RawConnection::network_diagnostics)
         .or(filter.last_transport);
+    let millis =
+        |value: Option<u64>| value.map_or_else(|| "unbekannt".into(), |value| format!("{value}ms"));
     let writes = transport.map_or_else(
         || "TCP-Schreibdaten unbekannt".to_owned(),
         |stats| format!(
-            "Keepalive eingereiht {}, an TCP übergeben {}; Schreibqueue {} Pakete; Lesepuffer {} Bytes (gesamt {} Bytes); Bundles vollständig {}, offen {}{}",
+            "Keepalive eingereiht {}, an TCP übergeben {}; Pong eingereiht {}, an TCP übergeben {}; lokale TCP-Verzögerung Keepalive zuletzt {}, max {}ms; Pong zuletzt {}, max {}ms; Schreibqueue {} Pakete; Lesepuffer {} Bytes (gesamt {} Bytes); Bundles vollständig {}, offen {}; Bundle-Alter {}, darin Keepalive {}, Ping {}, älteste Kontrollnachricht {}; Bundle-Alter max {}ms, Kontrollwartezeit max {}ms{}",
             stats.keepalives_enqueued,
             stats.keepalives_written,
+            stats.pongs_enqueued,
+            stats.pongs_written,
+            millis(stats.last_keepalive_write_ms),
+            stats.max_keepalive_write_ms,
+            millis(stats.last_pong_write_ms),
+            stats.max_pong_write_ms,
             stats.packets_enqueued.saturating_sub(stats.packets_written),
             stats.buffered_bytes,
             stats.read_buffer_bytes,
             stats.completed_bundles,
             stats.pending_bundle_packets.map_or_else(|| "keines".into(), |count| format!("{count} Pakete")),
+            millis(stats.bundle.pending_age_ms),
+            stats.bundle.pending_keepalives,
+            stats.bundle.pending_pings,
+            millis(stats.bundle.pending_control_age_ms),
+            stats.bundle.max_completed_age_ms,
+            stats.bundle.max_control_wait_ms,
             stats.writer_error.map_or_else(String::new, |error| format!("; TCP-Schreibfehler: {error}")),
         ),
     );
     format!(
-        "AFK-Verbindungsdiagnose: Status {:?}; Keepalive erhalten {}, letzter vor {}; letzte Daten vor {}; {writes}; leere Pakete {}; Lesefehler {}{}{}",
+        "AFK-Verbindungsdiagnose: Status {:?}; Keepalive erhalten {}, letzter vor {}; Ping erhalten {}, letzter vor {}; letzte Daten vor {}; Netzwerkschleife Abstand zuletzt {}ms, max {}ms; Leseverarbeitung zuletzt {}ms, max {}ms; {writes}; leere Pakete {}; Lesefehler {}{}{}",
         filter.last_protocol, filter.keepalives_received, age(filter.last_keepalive_at),
-        age(filter.last_received_at), filter.empty_payloads, filter.read_errors,
+        filter.pings_received, age(filter.last_ping_at),
+        age(filter.last_received_at), filter.last_network_gap_ms, filter.max_network_gap_ms,
+        filter.last_network_work_ms, filter.max_network_work_ms, filter.empty_payloads, filter.read_errors,
         filter.last_read_error.as_ref().map_or_else(String::new, |error| format!("; letzter Fehler: {error}")),
         filter.server_tooltip_text.as_ref().map_or_else(String::new, |text| format!("; Server-Tooltip: {text}")),
     )
@@ -364,6 +387,10 @@ fn process_single_packet(
                 filter.keepalives_received = filter.keepalives_received.saturating_add(1);
                 filter.last_keepalive_at = Some(Instant::now());
             }
+            if matches!(&packet, ClientboundGamePacket::Ping(_)) {
+                filter.pings_received = filter.pings_received.saturating_add(1);
+                filter.last_ping_at = Some(Instant::now());
+            }
             filter.server_disconnect_received |=
                 matches!(&packet, ClientboundGamePacket::Disconnect(_));
             let failed_server = match &packet {
@@ -419,6 +446,10 @@ fn process_single_packet(
             if matches!(&*packet, ClientboundConfigPacket::KeepAlive(_)) {
                 filter.keepalives_received = filter.keepalives_received.saturating_add(1);
                 filter.last_keepalive_at = Some(Instant::now());
+            }
+            if matches!(&*packet, ClientboundConfigPacket::Ping(_)) {
+                filter.pings_received = filter.pings_received.saturating_add(1);
+                filter.last_ping_at = Some(Instant::now());
             }
             config::process_packet(ecs, entity, &packet);
             ecs.write_message(config::ReceiveConfigPacketEvent { entity, packet });
@@ -477,6 +508,11 @@ fn read_packets(ecs: &mut World) {
         )
         .into();
         let started = Instant::now();
+        filter.last_network_gap_ms = filter
+            .last_network_update_at
+            .map_or(0, |at| started.duration_since(at).as_millis() as u64);
+        filter.max_network_gap_ms = filter.max_network_gap_ms.max(filter.last_network_gap_ms);
+        filter.last_network_update_at = Some(started);
         let mut applied = 0;
         for _ in 0..MAX_SCANNED_PACKETS_PER_UPDATE {
             if applied >= MAX_PACKETS_PER_UPDATE
@@ -535,6 +571,8 @@ fn read_packets(ecs: &mut World) {
                 }
             }
         }
+        filter.last_network_work_ms = started.elapsed().as_millis() as u64;
+        filter.max_network_work_ms = filter.max_network_work_ms.max(filter.last_network_work_ms);
         if let Some(mut connection) = ecs.get_mut::<RawConnection>(entity) {
             // Preserve order and unread data when yielding. Poll the writer even
             // if incoming packets are still waiting: commands must get out.
@@ -1089,7 +1127,13 @@ mod tests {
             assert_eq!(error.packet_name, "keep_alive");
             assert_eq!(stats.keepalives_enqueued, 1);
             assert_eq!(stats.keepalives_written, 0);
-            sim.app.world_mut().entity_mut(sim.entity).insert(connection);
+            assert_eq!(stats.last_keepalive_write_ms, None);
+            assert_eq!(stats.pongs_written, 0);
+            assert!(error.to_string().contains("seit Einreihung"));
+            sim.app
+                .world_mut()
+                .entity_mut(sim.entity)
+                .insert(connection);
             sim.tick();
             assert!(sim.app.world().get::<RawConnection>(sim.entity).is_some());
             assert!(sim.app.world_mut().resource_mut::<Messages<DisconnectEvent>>().drain().next().is_none());
@@ -1106,6 +1150,308 @@ mod tests {
             assert!(diagnostics_message(sim.app.world(), sim.entity, filter).contains(&error.to_string()));
             drop(server);
         });
+    }
+
+    #[test]
+    fn delayed_tcp_bundle_reports_held_controls_and_writes_each_reply_once_after_close() {
+        use azalea::protocol::connect::{Connection, RawReadConnection, RawWriteConnection};
+        use azalea::protocol::write::{encode_to_network_packet, serialize_packet};
+        use tokio::io::AsyncWriteExt;
+        use tokio::net::{TcpListener, TcpStream};
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for mode in [
+            crate::protocol::JavaNetworkMode::Optimized,
+            crate::protocol::JavaNetworkMode::Standard,
+        ] {
+            for missing_game_marker in [false, true] {
+                let mut sim = simulation_with_mode(mode);
+                if missing_game_marker {
+                    sim.app
+                        .world_mut()
+                        .entity_mut(sim.entity)
+                        .remove::<azalea::InGameState>();
+                }
+                runtime.block_on(async {
+                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let (socket, accepted) = tokio::join!(
+                        TcpStream::connect(listener.local_addr().unwrap()),
+                        listener.accept()
+                    );
+                    let socket = socket.unwrap();
+                    let (server, _) = accepted.unwrap();
+                    socket.set_nodelay(true).unwrap();
+                    server.set_nodelay(true).unwrap();
+                    let mut server = Connection::new_from_stream(server).await.unwrap().login();
+                    let (read_stream, write_stream) = socket.into_split();
+                    sim.app
+                        .world_mut()
+                        .entity_mut(sim.entity)
+                        .insert(RawConnection::new(
+                            RawReadConnection {
+                                read_stream,
+                                buffer: Cursor::new(Vec::new()),
+                                compression_threshold: None,
+                                dec_cipher: None,
+                            },
+                            RawWriteConnection {
+                                write_stream,
+                                compression_threshold: None,
+                                enc_cipher: None,
+                            },
+                            ConnectionProtocol::Game,
+                        ));
+                    if missing_game_marker {
+                        sim.app.world_mut().trigger(
+                            azalea::packet::game::SendGamePacketEvent::new(
+                                sim.entity,
+                                ServerboundChatCommand {
+                                    command: "home".into(),
+                                },
+                            ),
+                        );
+                        assert_eq!(
+                            sim.app
+                                .world()
+                                .get::<RawConnection>(sim.entity)
+                                .unwrap()
+                                .network_diagnostics()
+                                .unwrap()
+                                .packets_enqueued,
+                            0
+                        );
+                    }
+                    let mut bytes = Vec::new();
+                    for packet in [
+                        ClientboundBundleDelimiter.into_variant(),
+                        ClientboundKeepAlive {
+                            id: 0x8000_0000_0102_0304,
+                        }
+                        .into_variant(),
+                        ClientboundPing { id: 0x8000_0102 }.into_variant(),
+                    ] {
+                        bytes.extend(encode_to_network_packet(
+                            &serialize_packet(&packet).unwrap(),
+                            None,
+                            &mut None,
+                        ));
+                    }
+                    // Reproduce the reported open bundle size without exposing
+                    // any of its world packets before the closing delimiter.
+                    for _ in 0..760 {
+                        bytes.extend(encode_to_network_packet(
+                            &serialize_packet(
+                                &ClientboundSetEntityMotion {
+                                    id: 0.into(),
+                                    delta: Default::default(),
+                                }
+                                .into_variant(),
+                            )
+                            .unwrap(),
+                            None,
+                            &mut None,
+                        ));
+                    }
+                    server
+                        .writer
+                        .raw
+                        .write_stream
+                        .write_all(&bytes)
+                        .await
+                        .unwrap();
+                    let held = tokio::time::timeout(Duration::from_secs(3), async {
+                        loop {
+                            sim.update();
+                            let stats = sim
+                                .app
+                                .world()
+                                .get::<RawConnection>(sim.entity)
+                                .unwrap()
+                                .network_diagnostics()
+                                .unwrap();
+                            if stats.pending_bundle_packets == Some(762) {
+                                break stats;
+                            }
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                    })
+                    .await
+                    .expect("observe the open bundle");
+                    assert_eq!(held.bundle.pending_keepalives, 1);
+                    assert_eq!(held.bundle.pending_pings, 1);
+                    assert_eq!(held.keepalives_enqueued, 0);
+                    assert_eq!(held.pongs_enqueued, 0);
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    let aged = sim
+                        .app
+                        .world()
+                        .get::<RawConnection>(sim.entity)
+                        .unwrap()
+                        .network_diagnostics()
+                        .unwrap();
+                    assert!(aged.bundle.pending_age_ms.unwrap() >= 20);
+                    assert!(aged.bundle.pending_control_age_ms.unwrap() >= 20);
+                    server
+                        .writer
+                        .raw
+                        .write_stream
+                        .write_all(&encode_to_network_packet(
+                            &serialize_packet(&ClientboundBundleDelimiter.into_variant()).unwrap(),
+                            None,
+                            &mut None,
+                        ))
+                        .await
+                        .unwrap();
+                    let done = tokio::time::timeout(Duration::from_secs(3), async {
+                        loop {
+                            sim.update();
+                            let stats = sim
+                                .app
+                                .world()
+                                .get::<RawConnection>(sim.entity)
+                                .unwrap()
+                                .network_diagnostics()
+                                .unwrap();
+                            if stats.keepalives_written == 1 && stats.pongs_written == 1 {
+                                break stats;
+                            }
+                            tokio::time::sleep(Duration::from_millis(1)).await;
+                        }
+                    })
+                    .await
+                    .expect("write both complete-bundle replies");
+                    assert_eq!(done.pending_bundle_packets, None);
+                    assert_eq!(done.bundle.pending_age_ms, None);
+                    assert_eq!(done.bundle.pending_keepalives, 0);
+                    assert_eq!(done.bundle.pending_pings, 0);
+                    assert!(
+                        done.bundle.max_control_wait_ms
+                            >= aged.bundle.pending_control_age_ms.unwrap()
+                    );
+                    assert!(done.last_keepalive_write_ms.is_some());
+                    assert!(done.last_pong_write_ms.is_some());
+                    assert_eq!(done.keepalives_enqueued, 1);
+                    assert_eq!(done.pongs_enqueued, 1);
+                    for expected in [
+                        ServerboundKeepAlive {
+                            id: 0x8000_0000_0102_0304,
+                        }
+                        .into_variant(),
+                        ServerboundPong { id: 0x8000_0102 }.into_variant(),
+                    ] {
+                        let raw =
+                            tokio::time::timeout(Duration::from_secs(3), server.reader.raw.read())
+                                .await
+                                .unwrap()
+                                .unwrap();
+                        assert_eq!(raw.as_ref(), serialize_packet(&expected).unwrap().as_ref());
+                    }
+                    if mode == crate::protocol::JavaNetworkMode::Optimized {
+                        let filter = sim.app.world().get::<ItemFilter>(sim.entity).unwrap();
+                        assert_eq!(filter.keepalives_received, 1);
+                        assert_eq!(filter.pings_received, 1);
+                        assert!(filter.max_network_gap_ms >= 20);
+                        let line = diagnostics_message(sim.app.world(), sim.entity, filter);
+                        assert!(line.contains("Pong eingereiht 1, an TCP übergeben 1"));
+                        assert!(line.contains("lokale TCP-Verzögerung"));
+                    }
+                    // Never send game keepalive/pong in the configuration phase,
+                    // even while the deferred ECS marker still says Game. The
+                    // terminal game acknowledgement must retain its normal path.
+                    sim.app
+                        .world_mut()
+                        .get_mut::<RawConnection>(sim.entity)
+                        .unwrap()
+                        .state = ConnectionProtocol::Configuration;
+                    let before = sim
+                        .app
+                        .world()
+                        .get::<RawConnection>(sim.entity)
+                        .unwrap()
+                        .network_diagnostics()
+                        .unwrap()
+                        .packets_enqueued;
+                    for packet in [
+                        ServerboundKeepAlive { id: 88 }.into_variant(),
+                        ServerboundPong { id: 89 }.into_variant(),
+                    ] {
+                        sim.app.world_mut().trigger(
+                            azalea::packet::game::SendGamePacketEvent::new(sim.entity, packet),
+                        );
+                    }
+                    assert_eq!(
+                        sim.app
+                            .world()
+                            .get::<RawConnection>(sim.entity)
+                            .unwrap()
+                            .network_diagnostics()
+                            .unwrap()
+                            .packets_enqueued,
+                        before
+                    );
+                    if !missing_game_marker {
+                        sim.app.world_mut().trigger(
+                            azalea::packet::game::SendGamePacketEvent::new(
+                                sim.entity,
+                                ServerboundConfigurationAcknowledged,
+                            ),
+                        );
+                        let raw =
+                            tokio::time::timeout(Duration::from_secs(3), server.reader.raw.read())
+                                .await
+                                .unwrap()
+                                .unwrap();
+                        assert_eq!(
+                            raw.as_ref(),
+                            serialize_packet(&ServerboundConfigurationAcknowledged.into_variant())
+                                .unwrap()
+                                .as_ref()
+                        );
+                    }
+                    sim.app
+                        .world_mut()
+                        .get_mut::<RawConnection>(sim.entity)
+                        .unwrap()
+                        .state = ConnectionProtocol::Game;
+                    // An invalid later bundle must discard its measurements as
+                    // well as its packets, without resurrecting held controls.
+                    let mut connection = sim
+                        .app
+                        .world_mut()
+                        .get_mut::<RawConnection>(sim.entity)
+                        .unwrap();
+                    connection.collect_incoming_packet(&[0]).unwrap();
+                    connection
+                        .collect_incoming_packet(
+                            &serialize_packet(&ClientboundKeepAlive { id: 77 }.into_variant())
+                                .unwrap(),
+                        )
+                        .unwrap();
+                    assert_eq!(
+                        connection
+                            .network_diagnostics()
+                            .unwrap()
+                            .bundle
+                            .pending_keepalives,
+                        1
+                    );
+                    assert!(connection.collect_incoming_packet(&[0, 1]).is_err());
+                    let cleared = connection.network_diagnostics().unwrap();
+                    assert_eq!(cleared.pending_bundle_packets, None);
+                    assert_eq!(cleared.bundle.pending_age_ms, None);
+                    assert_eq!(cleared.bundle.pending_control_age_ms, None);
+                    assert_eq!(cleared.bundle.pending_keepalives, 0);
+                    assert_eq!(cleared.keepalives_enqueued, 1);
+                    assert_eq!(
+                        cleared.bundle.max_control_wait_ms,
+                        done.bundle.max_control_wait_ms
+                    );
+                });
+            }
+        }
     }
 
     #[test]

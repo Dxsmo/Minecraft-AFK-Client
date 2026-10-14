@@ -94,3 +94,40 @@ every packet handler. A simultaneous long-running comparison at the same farm
 with the normal Minecraft client still requires a live user session. The
 standard Azalea reader is useful for isolating the AFK filter, but shares these
 protocol handlers and is not a replacement for that vanilla comparison.
+
+## Reset diagnostics, 2026-10-14
+
+A reported TCP reset while writing a pong included an open 762-packet bundle.
+That count is below the official 4096-packet limit and does not by itself show
+that the client exceeded a response deadline. A reset gives no Minecraft kick
+reason and does not establish why the remote connection was closed.
+
+Disconnect snapshots now include the age and held keepalive/ping counts of an
+open bundle, maximum completed bundle/control waits, queued/written pong counts,
+local enqueue-to-TCP timings, and AFK network update gaps/read work. These are
+bounded counters/timestamps; packet bodies and control IDs are not logged. Failed
+writes retain their enqueue age and never count as completed replies. Timing
+maxima refer to the connection's lifetime, and successful TCP writes do not prove
+server receipt. The bundle collector still waits for its closing delimiter.
+
+A real TCP regression reproduces a 762-packet bundle in both production modes,
+delays its closing delimiter, and checks that held controls are visible in the
+diagnostics without early replies. It then verifies the exact high-bit keepalive
+and pong bytes, in order and once each, with successful write counters. Existing
+socket failure and compression/encryption tests cover preservation of failed
+write diagnostics and byte framing.
+
+The same TCP regression reproduced suppressed game keepalive/pong replies when
+the transport remained Game but the internal gameplay ECS marker was absent.
+The shared sender now uses the transport phase for those two control replies;
+ordinary commands retain their gameplay guard and game controls cannot be sent
+in Configuration. The terminal configuration acknowledgement keeps its existing
+send path. This was tested with both marker states in both readers. Mojang's
+`ClientCommonPacketListenerImpl.handlePing` sends its pong on the client thread,
+and `handleKeepAlive` defers only for `RenderSystem.isFrozenAtPollEvents`, without
+a loaded-world/gameplay-marker condition. These methods were inspected in the
+same official 26.2 JAR with `javap -c -p`.
+
+The user's reset log does not show whether the internal marker was absent or
+any response deadline was exceeded. The sender correction and timing metrics
+therefore do not establish that the live disconnect cause has been resolved.

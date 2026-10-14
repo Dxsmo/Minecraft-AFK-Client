@@ -1,6 +1,8 @@
 mod bundle;
 
-pub use bundle::{IncomingBundleError, IncomingPacketBatch, MAX_GAME_BUNDLE_PACKETS};
+pub use bundle::{
+    IncomingBundleDiagnostics, IncomingBundleError, IncomingPacketBatch, MAX_GAME_BUNDLE_PACKETS,
+};
 
 use std::{
     fmt::{self, Debug},
@@ -10,6 +12,7 @@ use std::{
         Arc,
         atomic::{self, AtomicBool, AtomicU64},
     },
+    time::Instant,
 };
 
 use azalea_crypto::Aes128CfbEnc;
@@ -292,6 +295,7 @@ impl RawConnection {
             let mut diagnostics = network.diagnostics();
             diagnostics.completed_bundles = self.incoming_bundle.completed;
             diagnostics.pending_bundle_packets = self.incoming_bundle.pending_packets();
+            diagnostics.bundle = self.incoming_bundle.diagnostics();
             diagnostics
         })
     }
@@ -392,10 +396,17 @@ pub struct NetworkDiagnostics {
     pub read_buffer_bytes: usize,
     pub completed_bundles: u64,
     pub pending_bundle_packets: Option<usize>,
+    pub bundle: IncomingBundleDiagnostics,
     pub packets_enqueued: u64,
     pub packets_written: u64,
     pub keepalives_enqueued: u64,
     pub keepalives_written: u64,
+    pub pongs_enqueued: u64,
+    pub pongs_written: u64,
+    pub last_keepalive_write_ms: Option<u64>,
+    pub max_keepalive_write_ms: u64,
+    pub last_pong_write_ms: Option<u64>,
+    pub max_pong_write_ms: u64,
     pub writer_error: Option<NetworkWriteError>,
 }
 
@@ -404,6 +415,7 @@ pub struct NetworkWriteError {
     pub kind: io::ErrorKind,
     pub os_code: Option<i32>,
     pub packet_name: &'static str,
+    pub queued_ms: u64,
 }
 
 impl fmt::Display for NetworkWriteError {
@@ -412,6 +424,7 @@ impl fmt::Display for NetworkWriteError {
         if let Some(code) = self.os_code {
             write!(f, " ({})", io::Error::from_raw_os_error(code))?;
         }
+        write!(f, "; seit Einreihung {}ms", self.queued_ms)?;
         Ok(())
     }
 }
@@ -422,12 +435,19 @@ struct WriteStatistics {
     packets_written: AtomicU64,
     keepalives_enqueued: AtomicU64,
     keepalives_written: AtomicU64,
+    pongs_enqueued: AtomicU64,
+    pongs_written: AtomicU64,
+    last_keepalive_write_ms: AtomicU64,
+    max_keepalive_write_ms: AtomicU64,
+    last_pong_write_ms: AtomicU64,
+    max_pong_write_ms: AtomicU64,
     writer_error: parking_lot::Mutex<Option<NetworkWriteError>>,
 }
 
 struct PendingNetworkPacket {
     bytes: Box<[u8]>,
     packet_name: &'static str,
+    enqueued_at: Instant,
 }
 
 pub struct NetworkConnection {
@@ -483,11 +503,22 @@ impl NetworkConnection {
             &mut self.enc_cipher,
         );
         self.network_packet_writer_tx
-            .send(PendingNetworkPacket { bytes: network_packet.into_boxed_slice(), packet_name })
+            .send(PendingNetworkPacket {
+                bytes: network_packet.into_boxed_slice(),
+                packet_name,
+                enqueued_at: Instant::now(),
+            })
             .map_err(|error| mpsc::error::SendError(error.0.bytes))?;
         self.write_statistics.packets_enqueued.fetch_add(1, atomic::Ordering::Relaxed);
         if packet_name == "keep_alive" {
-            self.write_statistics.keepalives_enqueued.fetch_add(1, atomic::Ordering::Relaxed);
+            self.write_statistics
+                .keepalives_enqueued
+                .fetch_add(1, atomic::Ordering::Relaxed);
+        }
+        if packet_name == "pong" {
+            self.write_statistics
+                .pongs_enqueued
+                .fetch_add(1, atomic::Ordering::Relaxed);
         }
         Ok(())
     }
@@ -500,10 +531,23 @@ impl NetworkConnection {
             read_buffer_bytes: self.reader.buffer.get_ref().len(),
             completed_bundles: 0,
             pending_bundle_packets: None,
+            bundle: IncomingBundleDiagnostics::default(),
             packets_enqueued: stats.packets_enqueued.load(atomic::Ordering::Relaxed),
             packets_written: stats.packets_written.load(atomic::Ordering::Relaxed),
             keepalives_enqueued: stats.keepalives_enqueued.load(atomic::Ordering::Relaxed),
             keepalives_written: stats.keepalives_written.load(atomic::Ordering::Relaxed),
+            pongs_enqueued: stats.pongs_enqueued.load(atomic::Ordering::Relaxed),
+            pongs_written: stats.pongs_written.load(atomic::Ordering::Relaxed),
+            last_keepalive_write_ms: (stats.keepalives_written.load(atomic::Ordering::Relaxed) > 0)
+                .then(|| {
+                    stats
+                        .last_keepalive_write_ms
+                        .load(atomic::Ordering::Relaxed)
+                }),
+            max_keepalive_write_ms: stats.max_keepalive_write_ms.load(atomic::Ordering::Relaxed),
+            last_pong_write_ms: (stats.pongs_written.load(atomic::Ordering::Relaxed) > 0)
+                .then(|| stats.last_pong_write_ms.load(atomic::Ordering::Relaxed)),
+            max_pong_write_ms: stats.max_pong_write_ms.load(atomic::Ordering::Relaxed),
             writer_error: *stats.writer_error.lock(),
         }
     }
@@ -546,13 +590,35 @@ async fn write_task(
                 kind: e.kind(),
                 os_code: e.raw_os_error(),
                 packet_name: network_packet.packet_name,
+                queued_ms: network_packet.enqueued_at.elapsed().as_millis() as u64,
             });
             debug!("Error writing packet to server: {e}");
             break;
         };
         statistics.packets_written.fetch_add(1, atomic::Ordering::Relaxed);
         if network_packet.packet_name == "keep_alive" {
-            statistics.keepalives_written.fetch_add(1, atomic::Ordering::Relaxed);
+            let elapsed = network_packet.enqueued_at.elapsed().as_millis() as u64;
+            statistics
+                .last_keepalive_write_ms
+                .store(elapsed, atomic::Ordering::Relaxed);
+            statistics
+                .max_keepalive_write_ms
+                .fetch_max(elapsed, atomic::Ordering::Relaxed);
+            statistics
+                .keepalives_written
+                .fetch_add(1, atomic::Ordering::Relaxed);
+        }
+        if network_packet.packet_name == "pong" {
+            let elapsed = network_packet.enqueued_at.elapsed().as_millis() as u64;
+            statistics
+                .last_pong_write_ms
+                .store(elapsed, atomic::Ordering::Relaxed);
+            statistics
+                .max_pong_write_ms
+                .fetch_max(elapsed, atomic::Ordering::Relaxed);
+            statistics
+                .pongs_written
+                .fetch_add(1, atomic::Ordering::Relaxed);
         }
     }
 

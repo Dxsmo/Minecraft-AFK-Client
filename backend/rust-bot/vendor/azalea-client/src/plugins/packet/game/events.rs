@@ -2,7 +2,7 @@ use std::sync::{Arc, Weak};
 
 use azalea_chat::FormattedText;
 use azalea_protocol::packets::{
-    Packet,
+    ConnectionProtocol, Packet,
     game::{ClientboundGamePacket, ClientboundPlayerCombatKill, ServerboundGamePacket},
 };
 use azalea_world::{World, WorldName};
@@ -59,7 +59,16 @@ pub fn handle_outgoing_packets_observer(
     let event = trigger.event();
 
     if let Ok((mut raw_connection, in_game_state)) = query.get_mut(event.sent_by) {
-        if in_game_state.is_none() {
+        // The transport's protocol state is authoritative for connection
+        // replies. A temporarily absent gameplay marker must not suppress
+        // keepalive/pong during login or proxy/world transitions.
+        let connection_reply = matches!(
+            event.packet,
+            ServerboundGamePacket::KeepAlive(_) | ServerboundGamePacket::Pong(_)
+        );
+        if (connection_reply && raw_connection.state != ConnectionProtocol::Game)
+            || (!connection_reply && in_game_state.is_none())
+        {
             error!(
                 "Tried to send a game packet {:?} while not in game state",
                 event.packet
