@@ -44,9 +44,10 @@ struct MultiplierProgress {
 /// Never overlap sell commands, and cap even very short configured intervals
 /// at four commands per second.
 const AUTOSELL_MIN_COMMAND_INTERVAL: Duration = Duration::from_millis(250);
-/// All player slots are shift-clicked immediately when the populated container
-/// becomes visible. Keep it open for one game tick so the queued click packets
-/// precede the close packet on the wire.
+/// Send at most one automatic inventory click per interval, across sell cycles.
+/// Never catch up missed intervals with a burst after a delayed tick.
+const AUTOSELL_CLICK_INTERVAL: Duration = Duration::from_millis(100);
+/// Keep the menu open for a game tick after its final click.
 const AUTOSELL_CLOSE_DELAY: Duration = Duration::from_millis(50);
 /// A menu that appears while auto-sell is idle is a delayed response from an
 /// earlier timed-out request (or a close that has not settled locally). Close
@@ -104,8 +105,8 @@ const SPAWNER_MAX_STEPS: u32 = 200;
 const SPAWNER_KEEP_STACKS: usize = 1;
 /// Keywords identifying the spawner GUI's sell button by item name/lore.
 const SPAWNER_SELL_KEYWORDS: [&str; 6] = ["verkauf", "sell", "vend", "money", "geld", "$"];
-/// Tracks one auto-sell cycle. Each cycle opens the sell menu, immediately
-/// shift-clicks the inventory and closes it again ("open/close principle") —
+/// Tracks one auto-sell cycle. Each cycle opens the sell menu, shift-clicks
+/// player slots individually and closes it again ("open/close principle") —
 /// the menu is never left open between cycles, so the bot's GUI is free for chat,
 /// manual commands and the spawner tasks in between.
 #[derive(Clone, Copy)]
@@ -121,10 +122,19 @@ enum AutoSellPhase {
         /// loading signal. A confirmed empty menu is still fully loaded.
         content_received: Option<(i32, usize)>,
     },
-    /// Every occupied player slot has already been shift-clicked. Close the
-    /// menu on the following game tick and immediately release the next cycle.
+    /// Visit each player slot once using the latest inventory revision. Pickups
+    /// into already-visited slots are handled by the next cycle.
+    Selling {
+        menu_id: i32,
+        session: u64,
+        next_slot: usize,
+        end_slot: usize,
+    },
+    /// Close the menu after the final click has had a game tick to settle.
     Closing {
         close_at: Instant,
+        menu_id: i32,
+        session: u64,
     },
 }
 
@@ -194,6 +204,7 @@ pub struct BehaviorState {
     /// Earliest time a new auto-sell cycle may start. The timestamp is advanced
     /// when a command is sent, so a slow cycle never overlaps the next one.
     next_autosell_at: Instant,
+    next_autosell_click_at: Instant,
     /// Independent of spawn/teleport/config guards, which may be reset at any time.
     restart_sell_pause: Option<(Instant, Instant)>,
     manual_chat_queue: VecDeque<ManualTask>,
@@ -244,6 +255,7 @@ impl BehaviorState {
                 spawner_sell_items: config.spawner_sell_items.clone(),
             },
             next_autosell_at: now,
+            next_autosell_click_at: now,
             restart_sell_pause: (config.autosell_resume_after_ms > 0).then(|| {
                 (
                     now + Duration::from_millis(config.autosell_pause_after_ms),
@@ -679,6 +691,16 @@ impl BehaviorState {
 
     pub fn on_menu_open(&mut self, id: i32, title: String) {
         let now = Instant::now();
+        // A reopened/replaced screen invalidates an old slot cursor, including
+        // when the server reuses the same numeric container ID.
+        if matches!(
+            self.autosell_phase,
+            AutoSellPhase::Selling { .. } | AutoSellPhase::Closing { .. }
+        ) {
+            self.autosell_phase = AutoSellPhase::Idle;
+            self.last_sell_request_at = None;
+            self.sell_menu = None;
+        }
         self.manual_menu_id = None;
         if let Some(ActiveTask::SellMultipliers(progress)) = &mut self.active_task {
             // A resource pack may draw SELLMULTI using font glyphs, so the
@@ -1149,9 +1171,8 @@ impl BehaviorState {
 
     /// Drives the auto-sell cycle.
     ///
-    /// Basic fast path: open the menu, shift every occupied player slot in one
-    /// pass, close on the next game tick. There is no batch/confirmation phase
-    /// and no success logging on the hot path.
+    /// Open the menu, visit player slots with bounded click spacing, then close.
+    /// Packet callbacks never advance this automatic click sequence.
     fn tick_autosell(&mut self, bot: &Client, now: Instant) {
         if !self.config.autosell_enabled || self.sell_paused(now) {
             if !matches!(self.autosell_phase, AutoSellPhase::Idle) {
@@ -1221,29 +1242,25 @@ impl BehaviorState {
                     .map(|inventory| (inventory.id, inventory.container_menu.clone()))
                 {
                     if id != 0 && self.owns_sell_menu(bot) {
-                        let inv = ContainerHandleRef::new(id, bot.clone());
                         if let Some(menu) = menu {
                             let slots = menu.slots();
-                            let player_slots: Vec<usize> = menu
+                            let has_player_items = menu
                                 .player_slots_range()
-                                .filter(|&slot| slots.get(slot).is_some_and(ItemStack::is_present))
-                                .collect();
+                                .any(|slot| slots.get(slot).is_some_and(ItemStack::is_present));
                             let complete_content = content_received
-                                .is_some_and(|(id, count)| id == inv.id() && count >= slots.len());
+                                .is_some_and(|(packet_id, count)| packet_id == id && count >= slots.len());
                             let has_container = *menu.player_slots_range().start() > 0;
                             // Non-empty player slots are also valid for servers
                             // that synchronize via individual slot packets.
-                            if has_container && (complete_content || !player_slots.is_empty()) {
-                                // Process a ready menu before the deadline check:
-                                // a delayed tick must not discard data that has
-                                // already arrived. Empty menus need no clicks.
-                                for slot in &player_slots {
-                                    inv.shift_click(*slot);
-                                }
+                            if has_container && (complete_content || has_player_items) {
                                 self.last_autosell_failure_log = None;
-                                self.autosell_phase = AutoSellPhase::Closing {
-                                    close_at: now + AUTOSELL_CLOSE_DELAY,
+                                self.autosell_phase = AutoSellPhase::Selling {
+                                    menu_id: id,
+                                    session: menu_session(bot),
+                                    next_slot: *menu.player_slots_range().start(),
+                                    end_slot: *menu.player_slots_range().end(),
                                 };
+                                self.advance_autosell_click(bot, now);
                                 return;
                             }
                         }
@@ -1266,15 +1283,85 @@ impl BehaviorState {
                 }
             }
 
-            AutoSellPhase::Closing { close_at } => {
+            AutoSellPhase::Selling { .. } => self.advance_autosell_click(bot, now),
+
+            AutoSellPhase::Closing {
+                close_at,
+                menu_id,
+                session,
+            } => {
                 if now < close_at {
                     return;
                 }
-                self.close_sell_menu(bot);
+                if menu_session(bot) == session
+                    && bot.component::<Inventory>().is_ok_and(|inventory| inventory.id == menu_id)
+                {
+                    self.close_sell_menu(bot);
+                }
                 self.autosell_phase = AutoSellPhase::Idle;
                 self.last_sell_request_at = None;
             }
         }
+    }
+
+    fn advance_autosell_click(&mut self, bot: &Client, now: Instant) {
+        let AutoSellPhase::Selling {
+            menu_id,
+            session,
+            next_slot,
+            end_slot,
+        } = self.autosell_phase
+        else {
+            return;
+        };
+        if menu_session(bot) != session || !self.owns_sell_menu(bot) {
+            self.autosell_phase = AutoSellPhase::Idle;
+            return;
+        }
+        // Read afresh after each network update. The server may have removed
+        // stacks, resynchronized the menu, or opened a different container.
+        let Ok(inventory) = bot.component::<Inventory>() else {
+            return;
+        };
+        let Some(menu) = inventory.container_menu.as_ref() else {
+            return;
+        };
+        if inventory.id != menu_id || *menu.player_slots_range().end() != end_slot {
+            self.autosell_phase = AutoSellPhase::Idle;
+            return;
+        }
+        let slot =
+            (next_slot..=end_slot).find(|&slot| menu.slot(slot).is_some_and(ItemStack::is_present));
+        let Some(slot) = slot else {
+            self.autosell_phase = AutoSellPhase::Closing {
+                close_at: now + AUTOSELL_CLOSE_DELAY,
+                menu_id,
+                session,
+            };
+            return;
+        };
+        if now < self.next_autosell_click_at {
+            return;
+        }
+        let has_more =
+            (slot + 1..=end_slot).any(|slot| menu.slot(slot).is_some_and(ItemStack::is_present));
+        drop(inventory);
+        ContainerHandleRef::new(menu_id, bot.clone()).shift_click(slot);
+        self.next_autosell_click_at = now + AUTOSELL_CLICK_INTERVAL;
+        self.autosell_phase = if has_more {
+            AutoSellPhase::Selling {
+                menu_id,
+                session,
+                next_slot: slot + 1,
+                end_slot,
+            }
+        } else {
+            AutoSellPhase::Closing {
+                close_at: now + AUTOSELL_CLOSE_DELAY,
+                menu_id,
+                session,
+            }
+        };
     }
 
     /// Log repeated server/menu failures without changing the configured retry
@@ -1405,6 +1492,11 @@ impl BehaviorState {
             });
         }
     }
+}
+
+fn menu_session(bot: &Client) -> u64 {
+    bot.component::<azalea::inventory::MenuSession>()
+        .map_or(0, |session| session.0)
 }
 
 /// Exact known titles only: a homes/server selector must never be clicked as a
@@ -2457,6 +2549,9 @@ mod tests {
             menu_type: MenuKind::Generic9x3,
             title: "Items verkaufen".into(),
         });
+        // Match the packet system's deferred-command flush before the bot
+        // handler sees the new screen and snapshots its session.
+        world.flush();
         let client = Client {
             entity,
             ecs: Arc::new(RwLock::new(world)),
@@ -2464,12 +2559,25 @@ mod tests {
         let (_, mut state) = sell_client();
         let mut slots = vec![ItemStack::Empty; 63];
         slots[27] = ItemStack::new(ItemKind::Beef, 64);
+        slots[28] = ItemStack::new(ItemKind::Cobblestone, 32);
+        slots[29] = ItemStack::new(ItemKind::Beef, 16);
         receive_content(&client, &mut state, 7, slots);
-        assert!(state.recover_orphaned_autosell_menu(&client, Instant::now()));
+        let selling_at = Instant::now();
+        assert!(state.recover_orphaned_autosell_menu(&client, selling_at));
         assert!(matches!(
             state.autosell_phase,
-            AutoSellPhase::Closing { .. }
+            AutoSellPhase::Selling { .. }
         ));
+        tick_sell(&client, &mut state, selling_at + Duration::from_millis(99));
+        azalea::inventory::apply_container_slot(
+            &mut client.ecs.write().get_mut::<Inventory>(entity).unwrap(),
+            &ClientboundContainerSetSlot {
+                container_id: 7, state_id: 25, slot: 28,
+                item_stack: ItemStack::new(ItemKind::Cobblestone, 16),
+            },
+        );
+        tick_sell(&client, &mut state, selling_at + Duration::from_millis(100));
+        assert!(matches!(state.autosell_phase, AutoSellPhase::Selling { next_slot: 29, .. }));
         // Now interrupt the sale with manual commands, without Spawn or Tick,
         // and even while the world-restart pause is active.
         state.spawned = false;
@@ -2483,7 +2591,7 @@ mod tests {
         let packets = tokio::time::timeout(Duration::from_secs(3), async {
             let mut packets = Vec::new();
             let mut buffer = Cursor::new(Vec::new());
-            for _ in 0..5 {
+            for _ in 0..6 {
                 let raw = read_raw_packet(&mut server_socket, &mut buffer, None, &mut None)
                     .await
                     .unwrap();
@@ -2501,10 +2609,14 @@ mod tests {
             if packet.container_id == 7 && packet.slot_num == 27 && packet.state_id == 18)
         );
         assert!(
-            matches!(&packets[1], ServerboundGamePacket::ContainerClose(packet)
+            matches!(&packets[1], ServerboundGamePacket::ContainerClick(packet)
+            if packet.container_id == 7 && packet.slot_num == 28 && packet.state_id == 25)
+        );
+        assert!(
+            matches!(&packets[2], ServerboundGamePacket::ContainerClose(packet)
             if packet.container_id == 7)
         );
-        for (packet, expected) in packets[2..].iter().zip(["home", "homes", "tpa Steve"]) {
+        for (packet, expected) in packets[3..].iter().zip(["home", "homes", "tpa Steve"]) {
             assert!(
                 matches!(packet, ServerboundGamePacket::ChatCommand(command)
                 if command.command == expected),
@@ -2594,6 +2706,130 @@ mod tests {
             },
         );
         clicks
+    }
+
+    #[test]
+    fn autosell_spaces_full_inventory_clicks_without_catchup_bursts() {
+        let (client, mut state) = sell_client();
+        let clicks = capture_sell_clicks(&client);
+        let since = Instant::now();
+        tick_sell(&client, &mut state, since);
+        open_empty_sell_menu(&client, &mut state);
+        let mut slots = vec![ItemStack::Empty; 63];
+        for slot in &mut slots[27..63] {
+            *slot = ItemStack::new(ItemKind::Beef, 64);
+        }
+        receive_content(&client, &mut state, 7, slots);
+        let first = since + Duration::from_millis(50);
+        tick_sell(&client, &mut state, first);
+        assert_eq!(
+            *clicks.lock(),
+            [(7, 27, 18)],
+            "a full inventory must not produce a click burst"
+        );
+        for millis in [0, 1, 49, 99] {
+            tick_sell(&client, &mut state, first + Duration::from_millis(millis));
+        }
+        assert_eq!(clicks.lock().len(), 1);
+        assert_eq!(client.get_inventory().unwrap().id(), 7);
+        // A delayed tick may send one next click, never replay missed intervals.
+        let resumed = first + Duration::from_secs(2);
+        tick_sell(&client, &mut state, resumed);
+        tick_sell(&client, &mut state, resumed);
+        assert_eq!(clicks.lock().len(), 2);
+        for step in 1..=34 {
+            tick_sell(
+                &client,
+                &mut state,
+                resumed + Duration::from_millis(step * 100),
+            );
+            assert_eq!(clicks.lock().len(), step as usize + 2);
+        }
+        assert_eq!(client.get_inventory().unwrap().id(), 7);
+        tick_sell(&client, &mut state, resumed + Duration::from_millis(3450));
+        assert_eq!(client.get_inventory().unwrap().id(), 0);
+        assert_eq!(
+            clicks
+                .lock()
+                .iter()
+                .map(|(_, slot, _)| *slot)
+                .collect::<Vec<_>>(),
+            (27..63).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn autosell_reads_live_slots_and_revision_between_clicks_and_cancels_for_manual_commands() {
+        let (client, mut state) = sell_client();
+        let clicks = capture_sell_clicks(&client);
+        let since = Instant::now();
+        tick_sell(&client, &mut state, since);
+        assert_eq!(take_commands(&client), ["/sell"]);
+        open_empty_sell_menu(&client, &mut state);
+        let mut slots = vec![ItemStack::Empty; 63];
+        for slot in &mut slots[27..31] {
+            *slot = ItemStack::new(ItemKind::Beef, 64);
+        }
+        receive_content(&client, &mut state, 7, slots);
+        tick_sell(&client, &mut state, since + Duration::from_millis(50));
+        {
+            let mut ecs = client.ecs.write();
+            let mut inventory = ecs.get_mut::<Inventory>(client.entity).unwrap();
+            azalea::inventory::apply_container_slot(
+                &mut inventory,
+                &ClientboundContainerSetSlot {
+                    container_id: 7,
+                    state_id: 25,
+                    slot: 28,
+                    item_stack: ItemStack::Empty,
+                },
+            );
+        }
+        tick_sell(&client, &mut state, since + Duration::from_millis(150));
+        assert_eq!(*clicks.lock(), [(7, 27, 18), (7, 29, 25)]);
+        state.enqueue_chat(&client, "/home farm".into());
+        state.on_control_event(&client);
+        tick_sell(&client, &mut state, since + Duration::from_millis(500));
+        assert_eq!(clicks.lock().len(), 2);
+        assert_eq!(take_commands(&client), ["/home farm"]);
+    }
+
+    #[test]
+    fn replaced_screen_cancels_pending_sell_clicks_and_closes_before_delayed_callbacks() {
+        for stacks in [1, 2] {
+            let (client, mut state) = sell_client();
+            let clicks = capture_sell_clicks(&client);
+            client
+                .ecs
+                .write()
+                .entity_mut(client.entity)
+                .insert(azalea::inventory::MenuSession(1));
+            let since = Instant::now();
+            tick_sell(&client, &mut state, since);
+            open_empty_sell_menu(&client, &mut state);
+            let mut slots = vec![ItemStack::Empty; 63];
+            for slot in &mut slots[27..27 + stacks] {
+                *slot = ItemStack::new(ItemKind::Beef, 64);
+            }
+            receive_content(&client, &mut state, 7, slots);
+            tick_sell(&client, &mut state, since + Duration::from_millis(50));
+            assert_eq!(clicks.lock().len(), 1);
+            // Same ID and title, but a new actual screen. The bot's OpenScreen
+            // callback has not run yet; the synchronous session is authoritative.
+            client
+                .ecs
+                .write()
+                .entity_mut(client.entity)
+                .insert(azalea::inventory::MenuSession(2));
+            tick_sell(&client, &mut state, since + Duration::from_millis(150));
+            assert_eq!(clicks.lock().len(), 1);
+            assert_eq!(
+                client.get_inventory().unwrap().id(),
+                7,
+                "do not close the replacement screen"
+            );
+            assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
+        }
     }
 
     #[test]
@@ -2747,9 +2983,15 @@ mod tests {
             &pickup,
         );
         assert!(client.menu().unwrap().slot(27).unwrap().is_empty());
-        assert!(client.menu().unwrap().slot(28).unwrap().is_empty());
+        assert_eq!(client.menu().unwrap().slot(28).unwrap().count(), 64);
         assert_eq!(client.menu().unwrap().slot(29).unwrap().count(), 32);
         tick_sell(&client, &mut state, now + Duration::from_millis(100));
+        assert_eq!(client.menu().unwrap().slot(28).unwrap().count(), 64);
+        tick_sell(&client, &mut state, now + Duration::from_millis(150));
+        assert!(client.menu().unwrap().slot(27).unwrap().is_empty());
+        assert!(client.menu().unwrap().slot(28).unwrap().is_empty());
+        state.close_sell_menu(&client);
+        client.ecs.write().flush();
         assert!(client.menu().unwrap().slot(9).unwrap().is_empty());
         assert!(client.menu().unwrap().slot(10).unwrap().is_empty());
         assert_eq!(client.menu().unwrap().slot(11).unwrap().count(), 32);
@@ -2811,6 +3053,11 @@ mod tests {
             slots[62] = ItemStack::new(ItemKind::Beef, 32);
             receive_content(&client, &mut state, 7, slots);
             tick_sell(&client, &mut state, since + Duration::from_millis(500));
+            assert!(matches!(state.autosell_phase, AutoSellPhase::Selling { .. }));
+            assert_eq!(*clicks.lock(), vec![(7, 27, 18)]);
+            tick_sell(&client, &mut state, since + Duration::from_millis(599));
+            assert_eq!(clicks.lock().len(), 1);
+            tick_sell(&client, &mut state, since + Duration::from_millis(600));
             assert!(matches!(
                 state.autosell_phase,
                 AutoSellPhase::Closing { .. }
@@ -2821,7 +3068,7 @@ mod tests {
             assert_eq!(menu.slot(1).unwrap().count(), 32);
             assert!(menu.slot(27).unwrap().is_empty());
             assert!(menu.slot(62).unwrap().is_empty());
-            tick_sell(&client, &mut state, since + Duration::from_millis(550));
+            tick_sell(&client, &mut state, since + Duration::from_millis(650));
             assert_eq!(client.get_inventory().unwrap().id(), 0);
             assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
             tick_sell(&client, &mut state, since + Duration::from_millis(2200));

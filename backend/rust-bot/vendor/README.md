@@ -93,6 +93,19 @@ rewinding click revisions. Mirroring one changed slot preserves other predicted
 clicks until the server acknowledges them. Slot packets no longer require a
 second bot callback; their synchronous ECS updates are sufficient.
 
+`set_player_inventory` is also applied synchronously. Its player-inventory
+indices map to screen slots (hotbar 0–8 → 36–44, main inventory 9–35 unchanged,
+armor 36–39 → 8–5, offhand 40 → 45), and shared player slots are mirrored into
+the open container without changing its state ID. Body/saddle equipment has no
+slot in the supported player menu. Each `MenuOpenedEvent` resets the menu state
+ID and carried stack and advances `MenuSession`, including reused container
+IDs. Automation checks that session before subsequent clicks or delayed closes;
+it cannot apply an old slot cursor to a replacement screen while its bot callback
+is still queued. Reference methods and regression coverage are recorded in the
+Java protocol audit below.
+The shared `set_cursor_item` handler also applies the server's carried stack
+before the next click hash is constructed, without changing the menu state ID.
+
 Login and respawn handlers clear both `HasClientLoaded` and `InLoadedChunk`.
 A proxy can send another game login without a respawn; retaining the old
 client-loaded marker then suppresses `ServerboundPlayerLoaded` for the new

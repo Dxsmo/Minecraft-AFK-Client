@@ -397,6 +397,11 @@ impl GamePacketHandler<'_> {
 
     pub fn set_cursor_item(&mut self, p: &ClientboundSetCursorItem) {
         debug!("Got set cursor item packet {p:?}");
+        as_system::<Query<&mut Inventory>>(self.ecs, |mut query| {
+            if let Ok(mut inventory) = query.get_mut(self.player) {
+                inventory.carried = p.contents.clone();
+            }
+        });
     }
 
     pub fn update_tags(&mut self, _p: &ClientboundUpdateTags) {
@@ -1574,7 +1579,13 @@ impl GamePacketHandler<'_> {
             }
         });
     }
-    pub fn set_player_inventory(&mut self, _p: &ClientboundSetPlayerInventory) {}
+    pub fn set_player_inventory(&mut self, p: &ClientboundSetPlayerInventory) {
+        as_system::<Query<&mut Inventory>>(self.ecs, |mut query| {
+            if let Ok(mut inventory) = query.get_mut(self.player) {
+                crate::inventory::apply_player_inventory_slot(&mut inventory, p.slot, &p.contents);
+            }
+        });
+    }
     pub fn projectile_power(&mut self, _p: &ClientboundProjectilePower) {}
     pub fn custom_report_details(&mut self, _p: &ClientboundCustomReportDetails) {}
     pub fn server_links(&mut self, _p: &ClientboundServerLinks) {}

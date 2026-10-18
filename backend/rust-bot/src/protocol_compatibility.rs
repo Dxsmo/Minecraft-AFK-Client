@@ -34,6 +34,154 @@ fn rotation_fixture(yaw: f32) -> Vec<u8> {
 }
 
 #[test]
+fn both_readers_apply_direct_player_inventory_updates_to_the_open_menu() {
+    use azalea::entity::inventory::Inventory;
+    use azalea::registry::builtin::{ItemKind, MenuKind};
+    use azalea_inventory::ItemStack;
+    for mode in [JavaNetworkMode::Optimized, JavaNetworkMode::Standard] {
+        let (mut sim, _) = simulation(mode);
+        sim.receive_packet(ClientboundOpenScreen {
+            container_id: 7,
+            menu_type: MenuKind::Generic9x3,
+            title: "Items verkaufen".into(),
+        });
+        sim.receive_packet(ClientboundContainerSetContent {
+            container_id: 7,
+            state_id: 18,
+            items: vec![ItemStack::Empty; 63],
+            carried_item: ItemStack::Empty,
+        });
+        sim.update();
+        for (slot, player_slot, container_slot) in [
+            (0, 36, Some(54)),
+            (8, 44, Some(62)),
+            (9, 9, Some(27)),
+            (35, 35, Some(53)),
+            (36, 8, None),
+            (39, 5, None),
+            (40, 45, None),
+        ] {
+            sim.receive_packet(ClientboundSetPlayerInventory {
+                slot,
+                contents: ItemStack::new(ItemKind::Beef, 32),
+            });
+            sim.update();
+            let inventory = sim.component::<Inventory>();
+            assert_eq!(
+                inventory.inventory_menu.slot(player_slot).unwrap().count(),
+                32,
+                "{mode:?}: direct inventory slot {slot}"
+            );
+            if let Some(slot) = container_slot {
+                assert_eq!(inventory.menu().slot(slot).unwrap().count(), 32);
+            }
+            assert_eq!(
+                inventory.state_id, 18,
+                "direct player updates do not change the container revision"
+            );
+        }
+        sim.receive_packet(ClientboundSetPlayerInventory {
+            slot: 9,
+            contents: ItemStack::Empty,
+        });
+        sim.update();
+        assert!(sim
+            .component::<Inventory>()
+            .menu()
+            .slot(27)
+            .unwrap()
+            .is_empty());
+    }
+}
+
+#[test]
+fn opening_a_new_menu_resets_the_old_menus_revision_and_carried_stack() {
+    use azalea::entity::inventory::Inventory;
+    use azalea::registry::builtin::{ItemKind, MenuKind};
+    use azalea_inventory::ItemStack;
+    for mode in [JavaNetworkMode::Optimized, JavaNetworkMode::Standard] {
+        let (mut sim, _) = simulation(mode);
+        sim.receive_packet(ClientboundContainerSetContent {
+            container_id: 0,
+            state_id: 77,
+            items: vec![ItemStack::Empty; 46],
+            carried_item: ItemStack::new(ItemKind::Beef, 32),
+        });
+        sim.update();
+        assert_eq!(sim.component::<Inventory>().state_id, 77);
+        for (session, id) in [7, 8, 8].into_iter().enumerate() {
+            sim.receive_packet(ClientboundOpenScreen {
+                container_id: id,
+                menu_type: MenuKind::Generic9x3,
+                title: "Items verkaufen".into(),
+            });
+            sim.update();
+            assert_eq!(
+                sim.component::<azalea::inventory::MenuSession>().0,
+                session as u64 + 1
+            );
+            assert_eq!(sim.component::<Inventory>().state_id, 0);
+            assert!(sim.component::<Inventory>().carried.is_empty());
+            sim.receive_packet(ClientboundContainerSetContent {
+                container_id: id,
+                state_id: 18,
+                items: vec![ItemStack::Empty; 63],
+                carried_item: ItemStack::new(ItemKind::Beef, 1),
+            });
+            sim.update();
+        }
+    }
+}
+
+#[test]
+fn direct_cursor_updates_are_used_by_the_next_actual_click_packet() {
+    use azalea::entity::inventory::Inventory;
+    use azalea::registry::builtin::{ItemKind, MenuKind};
+    use azalea_inventory::{operations::QuickMoveClick, ItemStack};
+    for mode in [JavaNetworkMode::Optimized, JavaNetworkMode::Standard] {
+        let (mut sim, sent) = simulation(mode);
+        sim.receive_packet(ClientboundOpenScreen {
+            container_id: 7,
+            menu_type: MenuKind::Generic9x3,
+            title: "Items verkaufen".into(),
+        });
+        let mut items = vec![ItemStack::Empty; 63];
+        items[27] = ItemStack::new(ItemKind::Cobblestone, 64);
+        sim.receive_packet(ClientboundContainerSetContent {
+            container_id: 7,
+            state_id: 18,
+            items,
+            carried_item: ItemStack::Empty,
+        });
+        sim.receive_packet(ClientboundSetCursorItem {
+            contents: ItemStack::new(ItemKind::Beef, 3),
+        });
+        sim.update();
+        assert_eq!(sim.component::<Inventory>().carried.count(), 3);
+        sim.app
+            .world_mut()
+            .trigger(azalea::inventory::ContainerClickEvent {
+                entity: sim.entity,
+                window_id: 7,
+                operation: QuickMoveClick::Left { slot: 27 }.into(),
+            });
+        sim.app.world_mut().flush();
+        let Some(ServerboundGamePacket::ContainerClick(click)) = sent.next() else {
+            panic!("expected a real click packet");
+        };
+        assert_eq!(click.state_id, 18);
+        assert_eq!(click.carried_item.0.as_ref().unwrap().count, 3);
+        assert_eq!(click.carried_item.0.as_ref().unwrap().kind, ItemKind::Beef);
+        sim.receive_packet(ClientboundSetCursorItem {
+            contents: ItemStack::Empty,
+        });
+        sim.update();
+        assert!(sim.component::<Inventory>().carried.is_empty());
+        assert_eq!(sim.component::<Inventory>().state_id, 18);
+    }
+}
+
+#[test]
 fn both_readers_apply_split_bundles_only_after_the_closing_delimiter() {
     for mode in [JavaNetworkMode::Optimized, JavaNetworkMode::Standard] {
         let (mut sim, sent) = simulation(mode);

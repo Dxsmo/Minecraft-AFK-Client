@@ -248,11 +248,20 @@ additional users access afterwards in the account's **Settings** panel):
   password is ever entered or stored.
 - Continuous crouching and auto-reconnect
 - Auto-sell: send the sell command, wait up to 500ms for the Java menu and
-  its inventory data, shift occupied player slots, and close on the following
-  tick. Ready menus proceed immediately, even if a tick was delayed. Full
+  its inventory data, shift occupied player slots one at a time with at least
+  100ms between clicks, and close on the tick after the final click. Delayed
+  ticks never send a burst to catch up missed clicks. Large inventories therefore
+  take longer than the configured command interval; sell cycles never overlap.
+  Each click reads the current slots and revision again, and replaced/reopened
+  screens cancel the old click sequence even if the numeric menu ID is reused.
+  Ready menus proceed immediately, even if a tick was delayed. Full
   content packets distinguish genuinely empty menus from unloaded shells and
   keep the inventory revision used by clicks synchronized. Initially empty
   inventories get the same loading window, so a slow response is not discarded.
+  Direct `set_player_inventory` updates also synchronize player/container slots
+  without overwriting the open menu's revision. Direct cursor updates are applied
+  before the next click packet is built. New menus start with a fresh revision
+  and cursor, matching the normal Java client.
   Missing/partial menus time out and retry silently. Bedrock also waits up to
   500ms for a sell menu to open and retries without a menu-timeout console line.
   Teleports/world changes cancel stale cycles.

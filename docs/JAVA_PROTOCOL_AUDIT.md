@@ -155,3 +155,48 @@ remain atomic and do not cause busy-polling while awaiting more socket data.
 This removes a reproduced client-side source of queueing. The supplied log
 does not prove it caused this fallback. A live comparison after rebuilding is
 still necessary to establish whether the reported disconnects are resolved.
+
+## AutoSell packet correctness and pacing, 2026-10-18
+
+The follow-up report supplies an explicit backend kick reason:
+`You are sending suspicious packets.` Its snapshot has 27/27 keepalive and
+4759/4759 pong writes, no unread bytes or read errors, and a maximum completed
+bundle/control wait of 256 ms. This identifies a server rejection rather than
+establishing a keepalive timeout. The report associates kicks with AutoSell;
+the message alone does not identify the server plugin/check or its thresholds.
+
+Three client behaviors were reproduced before correction:
+
+- AutoSell sent all 36 occupied player-slot clicks in one tick. It now sends
+  one click at least 100 ms apart, including across cycle boundaries, without
+  replaying missed intervals after a stall. It reads slots/revisions anew before
+  each click, visits each slot once, and closes after the final click. Commands,
+  disabling automation and world transitions can still interrupt the sequence.
+- The shared `set_player_inventory` and `set_cursor_item` handlers were empty.
+  Direct cursor changes now update the carried-stack hash used by clicks.
+  Direct player updates now use
+  the actual player-inventory index mapping and synchronize the open menu's
+  player slots, without changing its container revision.
+- Opening a screen retained the previous menu's state ID and carried stack.
+  New menus now start at state ID zero with an empty cursor. A synchronous
+  `MenuSession` counter also invalidates pending automation clicks/closes when
+  a screen is replaced, including reuse of the same numeric container ID.
+
+The reference is the same official 26.2 JAR/SHA-1 above, downloaded and verified
+again. `javap -c -p` confirms `ClientPacketListener.handleSetPlayerInventory`
+calls `Inventory.setItem`, its equipment index map, and the fresh menu state in
+`AbstractContainerMenu`'s constructor. `handleSetCursorItem` updates the current
+menu's carried stack. `MultiPlayerGameMode.handleContainerInput`
+predicts the clicked slots, compares before/after snapshots, and sends the
+current container state ID, changed-slot hashes and carried-stack hash. The
+packet codec was also inspected. The 100 ms automation interval is a client
+rate bound, not a claim about vanilla timing or the server's protection limits.
+
+Regression coverage includes both production readers for direct inventory
+updates, cursor updates in real outgoing click packets, and fresh/reused screens;
+full-inventory click spacing, stalled ticks,
+live slot removals/revisions, and replacement screens before delayed callbacks;
+and real TCP AutoSell packets using a newer server revision between clicks,
+followed by manual commands cancelling the unsent remainder. These tests remove
+reproduced client errors; resolving the live server rejection still requires
+checking the rebuilt client against that server.

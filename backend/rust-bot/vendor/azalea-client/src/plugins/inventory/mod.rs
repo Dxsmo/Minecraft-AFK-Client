@@ -68,9 +68,26 @@ pub struct MenuOpenedEvent {
     pub menu_type: MenuKind,
     pub title: FormattedText,
 }
-fn handle_menu_opened_trigger(event: On<MenuOpenedEvent>, mut query: Query<&mut Inv>) {
-    let mut inventory = query.get_mut(event.entity).unwrap();
+/// Distinguishes screen instances even when a server reuses a container ID.
+#[derive(Component, Clone, Copy, Default)]
+pub struct MenuSession(pub u64);
+
+fn handle_menu_opened_trigger(
+    event: On<MenuOpenedEvent>,
+    mut commands: Commands,
+    mut query: Query<(&mut Inv, Option<&mut MenuSession>)>,
+) {
+    let (mut inventory, session) = query.get_mut(event.entity).unwrap();
+    if let Some(mut session) = session {
+        session.0 = session.0.wrapping_add(1);
+    } else {
+        commands.entity(event.entity).insert(MenuSession(1));
+    }
     inventory.id = event.window_id;
+    // Each newly constructed vanilla menu starts with its own state ID and
+    // empty cursor, rather than inheriting them from the previous screen.
+    inventory.state_id = 0;
+    inventory.carried = ItemStack::Empty;
     inventory.container_menu = Some(Menu::from_kind(event.menu_type));
     inventory.container_menu_title = Some(event.title.clone());
 }
@@ -274,6 +291,24 @@ pub fn apply_container_slot(
         inventory.state_id = p.state_id;
         sync_player_slot(inventory, p.slot as usize, false);
     }
+}
+
+/// `set_player_inventory` uses Inventory indices, not screen/menu slot indices.
+/// Keep the open container's shared player slots in sync without changing its
+/// state ID (this packet carries no container revision).
+pub fn apply_player_inventory_slot(inventory: &mut Inv, slot: u32, stack: &ItemStack) {
+    let menu_slot = match slot {
+        0..=8 => slot as usize + 36,
+        9..=35 => slot as usize,
+        36..=39 => 44 - slot as usize,
+        40 => 45,
+        // Body/saddle equipment has no slot in the supported player menus.
+        _ => return,
+    };
+    if let Some(target) = inventory.inventory_menu.slot_mut(menu_slot) {
+        *target = stack.clone();
+    }
+    sync_player_slot(inventory, menu_slot, true);
 }
 
 fn sync_player_slot(inventory: &mut Inv, slot: usize, from_player: bool) {
