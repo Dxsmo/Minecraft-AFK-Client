@@ -42,6 +42,13 @@ use super::packet::{
 use crate::packet::{config, game, login};
 
 pub struct ConnectionPlugin;
+
+/// A bounded packet reader exhausted its budget and needs another update.
+/// The runner yields to async tasks before continuing, rather than imposing
+/// the normal frame delay on every batch of an incoming packet flood.
+#[derive(Resource, Default)]
+pub struct PacketReadBacklog(pub bool);
+
 impl Plugin for ConnectionPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreUpdate, (read_packets, poll_all_writer_tasks).chain());

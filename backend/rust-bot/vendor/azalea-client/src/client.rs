@@ -26,7 +26,7 @@ use crate::{
     attack,
     block_update::QueuedServerBlockUpdates,
     chunks::ChunkBatchInfo,
-    connection::RawConnection,
+    connection::{PacketReadBacklog, RawConnection},
     cookies::ServerCookies,
     interact::BlockStatePredictionHandler,
     local_player::{Experience, Hunger, PermissionLevel, TabList, TabListResource, WorldHolder},
@@ -157,8 +157,8 @@ pub fn start_ecs_runner(
     (ecs, start_running_systems, appexit_rx)
 }
 
-/// Runs the `Update` schedule 60 times per second and the `GameTick` schedule
-/// 20 times per second.
+/// Runs `Update` at 60 Hz when idle, and continues bounded packet batches
+/// without frame sleeps under load. `GameTick` remains at 20 Hz.
 ///
 /// Exits when we receive an `AppExit` event.
 async fn run_schedule_loop(
@@ -168,22 +168,31 @@ async fn run_schedule_loop(
     let mut last_update: Option<Instant> = None;
     let mut last_tick: Option<Instant> = None;
 
-    // azalea runs the Update schedule at most 60 times per second to simulate
-    // framerate. unlike vanilla though, we also only handle packets during Updates
-    // due to everything running in ecs systems.
+    // Unlike rendered frames, pending network work must not be throttled to
+    // 60 Hz: repeatedly sleeping between bounded reads can build a TCP backlog
+    // and delay an otherwise healthy keepalive/pong behind ordinary traffic.
     const UPDATE_DURATION_TARGET: Duration = Duration::from_micros(1_000_000 / 60);
     // minecraft runs at 20 tps
     const GAME_TICK_DURATION_TARGET: Duration = Duration::from_micros(1_000_000 / 20);
 
     loop {
-        // sleep until the next update if necessary
-        let now = Instant::now();
-        if let Some(last_update) = last_update {
-            let elapsed = now.duration_since(last_update);
+        let resume_reading = ecs
+            .write()
+            .get_resource_mut::<PacketReadBacklog>()
+            .is_some_and(|mut backlog| mem::take(&mut backlog.0));
+        if resume_reading {
+            // Release the ECS lock and give the command handler, Tokio I/O,
+            // and other async tasks a turn between every bounded read batch.
+            tokio::task::yield_now().await;
+        } else if let Some(last_update) = last_update {
+            let elapsed = last_update.elapsed();
             if elapsed < UPDATE_DURATION_TARGET {
                 time::sleep(UPDATE_DURATION_TARGET - elapsed).await;
             }
         }
+        // Timestamp the actual update, after sleeping. A pre-sleep timestamp
+        // otherwise alternates sleeping frames with unintended immediate ones.
+        let now = Instant::now();
         last_update = Some(now);
 
         let mut ecs = ecs.write();

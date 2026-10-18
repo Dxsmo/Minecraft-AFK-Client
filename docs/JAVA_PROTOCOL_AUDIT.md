@@ -131,3 +131,27 @@ same official 26.2 JAR with `javap -c -p`.
 The user's reset log does not show whether the internal marker was absent or
 any response deadline was exceeded. The sender correction and timing metrics
 therefore do not establish that the live disconnect cause has been resolved.
+
+## Bounded-reader scheduling, 2026-10-18
+
+Spontaner's report shows 37/37 keepalive and 7462/7462 pong replies handed to
+TCP, no read errors, and a maximum completed bundle/control wait of 3379 ms.
+Those maxima span the connection; they do not locate that delay immediately
+before the fallback or prove a server-side timeout. A completed write measures
+time after enqueueing and does not include incoming queueing or bundle assembly.
+
+The AFK reader previously yielded after its four-millisecond/packet budget,
+then waited for the next fixed frame even if incoming traffic remained. The
+standard reader does not impose those per-batch frame waits. Under sustained
+traffic this can limit drain throughput and delay later control packets even
+with prompt outgoing TCP writes. A production-runner regression reproduces
+the extra frame sleeps between saturated four-millisecond batches before the
+fix. The bounded reader now requests another update; the runner yields to async
+tasks and continues without the frame sleep. Game ticks keep their independent
+20 Hz schedule, and all normal update systems run between batches. An empty
+reader clears the request and restores 60 Hz idle pacing. Incomplete bundles
+remain atomic and do not cause busy-polling while awaiting more socket data.
+
+This removes a reproduced client-side source of queueing. The supplied log
+does not prove it caused this fallback. A live comparison after rebuilding is
+still necessary to establish whether the reported disconnects are resolved.

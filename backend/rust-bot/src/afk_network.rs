@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use azalea::app::{App, Plugin, PreUpdate};
 use azalea::buf::AzBufVar;
 use azalea::client_chat::ChatPacket;
-use azalea::connection::{IncomingPacketBatch, NetworkDiagnostics, RawConnection};
+use azalea::connection::{IncomingPacketBatch, NetworkDiagnostics, PacketReadBacklog, RawConnection};
 use azalea::core::entity_id::MinecraftEntityId;
 use azalea::disconnect::DisconnectEvent;
 use azalea::ecs as bevy_ecs;
@@ -110,7 +110,8 @@ pub struct AfkNetworkPlugin;
 
 impl Plugin for AfkNetworkPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreUpdate, read_packets.after(azalea::events::init_listener));
+        app.init_resource::<PacketReadBacklog>()
+            .add_systems(PreUpdate, read_packets.after(azalea::events::init_listener));
     }
 }
 
@@ -491,6 +492,7 @@ fn disconnect(ecs: &mut World, entity: Entity, filter: &mut ItemFilter, reason: 
 }
 
 fn read_packets(ecs: &mut World) {
+    let mut resume_reading = false;
     let entities: Vec<_> = ecs
         .query_filtered::<Entity, With<RawConnection>>()
         .iter(ecs)
@@ -514,11 +516,14 @@ fn read_packets(ecs: &mut World) {
         filter.max_network_gap_ms = filter.max_network_gap_ms.max(filter.last_network_gap_ms);
         filter.last_network_update_at = Some(started);
         let mut applied = 0;
-        for _ in 0..MAX_SCANNED_PACKETS_PER_UPDATE {
+        let mut scanned = 0;
+        let mut budget_exhausted = false;
+        while !filter.server_disconnect_received {
             if applied >= MAX_PACKETS_PER_UPDATE
+                || scanned >= MAX_SCANNED_PACKETS_PER_UPDATE
                 || started.elapsed() >= READ_BUDGET
-                || filter.server_disconnect_received
             {
+                budget_exhausted = true;
                 break;
             }
             let Some(mut connection) = ecs.get_mut::<RawConnection>(entity) else {
@@ -532,6 +537,7 @@ fn read_packets(ecs: &mut World) {
                 break;
             };
             drop(connection);
+            scanned += 1;
             match read {
                 Ok(Some(raw)) => match process_packet(ecs, entity, &raw, &mut filter) {
                     Ok(true) => applied += 1,
@@ -596,8 +602,15 @@ fn read_packets(ecs: &mut World) {
                 }
             }
         }
+        resume_reading |= budget_exhausted
+            && !filter.server_disconnect_received
+            && ecs.get::<RawConnection>(entity).is_some();
         ecs.entity_mut(entity).insert(filter);
     }
+    // Let commands, packet callbacks and due game ticks run between bounded
+    // batches, then continue draining without another fixed frame delay. An
+    // empty socket clears the request on the next update, even mid-bundle.
+    ecs.resource_mut::<PacketReadBacklog>().0 = resume_reading;
 }
 
 #[cfg(test)]
@@ -1486,6 +1499,209 @@ mod tests {
                 .unwrap()
                 .count(),
             32
+        );
+    }
+
+    #[test]
+    fn packet_budget_requests_catchup_and_an_empty_reader_clears_it() {
+        let mut sim = simulation();
+        let sent = SentPackets::new(&mut sim);
+        for id in 0..(MAX_PACKETS_PER_UPDATE * 3) as u64 {
+            sim.receive_packet(ClientboundKeepAlive { id });
+        }
+        sim.update();
+        assert!(sim.app.world().resource::<PacketReadBacklog>().0);
+        assert!(!sim
+            .app
+            .world()
+            .get::<RawConnection>(sim.entity)
+            .unwrap()
+            .injected_clientbound_packets
+            .is_empty());
+        let mut ids = Vec::new();
+        for _ in 0..100 {
+            while let Some(packet) = sent.next() {
+                if let ServerboundGamePacket::KeepAlive(packet) = packet {
+                    ids.push(packet.id);
+                }
+            }
+            if !sim.app.world().resource::<PacketReadBacklog>().0 {
+                break;
+            }
+            sim.update();
+        }
+        assert_eq!(
+            ids,
+            (0..(MAX_PACKETS_PER_UPDATE * 3) as u64).collect::<Vec<_>>()
+        );
+        assert!(!sim.app.world().resource::<PacketReadBacklog>().0);
+
+        // Waiting for the server's closing delimiter must not busy-poll.
+        sim.receive_packet(ClientboundBundleDelimiter);
+        sim.receive_packet(ClientboundPing { id: 123 });
+        sim.update();
+        assert!(!sim.app.world().resource::<PacketReadBacklog>().0);
+        sent.expect_empty();
+        sim.receive_packet(ClientboundBundleDelimiter);
+        sim.update();
+        assert!(matches!(sent.next(), Some(ServerboundGamePacket::Pong(p)) if p.id == 123));
+        sent.expect_empty();
+    }
+
+    #[test]
+    fn production_runner_drains_inventory_and_controls_across_bounded_batches() {
+        use azalea::app::{AppExit, Last};
+
+        let mut sim = simulation();
+        let sent = SentPackets::new(&mut sim);
+        for id in 0..4096_u32 {
+            sim.receive_packet(ClientboundPing {
+                id: 0x8000_0000 | id,
+            });
+            if id % 64 == 63 {
+                sim.receive_packet(ClientboundContainerSetSlot {
+                    container_id: 0,
+                    state_id: id,
+                    slot: 9,
+                    item_stack: ItemStack::new(ItemKind::Beef, 64),
+                });
+            }
+        }
+        sim.receive_packet(ClientboundKeepAlive { id: u64::MAX });
+        let mut updates = 0;
+        sim.app.add_systems(
+            Last,
+            move |filters: Query<&ItemFilter>,
+                  inventories: Query<&Inventory>,
+                  mut exit: MessageWriter<AppExit>| {
+                updates += 1;
+                if filters.iter().any(|filter| filter.keepalives_received == 1) {
+                    assert!(
+                        updates > 1,
+                        "the production reader must retain its batch limits"
+                    );
+                    assert_eq!(
+                        inventories
+                            .single()
+                            .unwrap()
+                            .inventory_menu
+                            .slot(9)
+                            .unwrap()
+                            .count(),
+                        64
+                    );
+                    exit.write(AppExit::Success);
+                }
+            },
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        tokio::task::LocalSet::new().block_on(&runtime, async {
+            let (_, start, exit) = azalea::start_ecs_runner(sim.app.main_mut());
+            start();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(5), exit)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                AppExit::Success
+            );
+        });
+        let mut pongs = Vec::new();
+        let mut keepalives = Vec::new();
+        while let Some(packet) = sent.next() {
+            match packet {
+                ServerboundGamePacket::Pong(p) => pongs.push(p.id),
+                ServerboundGamePacket::KeepAlive(p) => keepalives.push(p.id),
+                _ => {}
+            }
+        }
+        assert_eq!(
+            pongs,
+            (0..4096_u32).map(|id| 0x8000_0000 | id).collect::<Vec<_>>()
+        );
+        assert_eq!(keepalives, [u64::MAX]);
+    }
+
+    #[test]
+    fn runner_resumes_bounded_reads_without_frame_sleeps_and_restores_idle_pacing() {
+        use azalea::app::{App, AppExit, Last, Update};
+        use azalea::core::tick::GameTick;
+
+        // Run the production scheduler, with deterministic four-millisecond
+        // batches standing in for a saturated bounded reader. Measure the gap
+        // after each batch, not its processing time.
+        let mut app = App::new();
+        app.init_resource::<PacketReadBacklog>();
+        let gaps = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let ticks = Arc::new(parking_lot::Mutex::new(0_usize));
+        let recorded_gaps = gaps.clone();
+        let recorded_ticks = ticks.clone();
+        let mut last_finished = None::<Instant>;
+        let mut updates = 0;
+        app.add_systems(
+            Update,
+            move |mut backlog: ResMut<PacketReadBacklog>, mut exit: MessageWriter<AppExit>| {
+                if let Some(at) = last_finished {
+                    recorded_gaps.lock().push(at.elapsed());
+                }
+                updates += 1;
+                if updates <= 24 {
+                    std::thread::sleep(READ_BUDGET);
+                    backlog.0 = true;
+                }
+                if updates == 28 {
+                    exit.write(AppExit::Success);
+                }
+                last_finished = Some(Instant::now());
+            },
+        );
+        app.add_systems(GameTick, move || *recorded_ticks.lock() += 1);
+        // Ensure the usual tail of an update runs before the next batch.
+        let tail_updates = Arc::new(parking_lot::Mutex::new(0_usize));
+        let recorded_tail = tail_updates.clone();
+        app.add_systems(Last, move || *recorded_tail.lock() += 1);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let local = tokio::task::LocalSet::new();
+        local.block_on(&runtime, async {
+            let (_, start, exit) = azalea::start_ecs_runner(app.main_mut());
+            start();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(5), exit)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                AppExit::Success
+            );
+        });
+        let gaps = gaps.lock();
+        assert!(
+            gaps[..24]
+                .iter()
+                .filter(|gap| **gap < Duration::from_millis(8))
+                .count()
+                >= 20,
+            "budget-limited reads still sleep between batches: {gaps:?}"
+        );
+        assert!(
+            gaps[24..]
+                .iter()
+                .all(|gap| *gap >= Duration::from_millis(15)),
+            "an empty reader must return to normal frame pacing: {gaps:?}"
+        );
+        assert_eq!(*tail_updates.lock(), 28);
+        assert!(
+            *ticks.lock() >= 2,
+            "game ticks must continue during packet catchup"
+        );
+        assert!(
+            *ticks.lock() < 10,
+            "packet catchup must not accelerate game ticks"
         );
     }
 

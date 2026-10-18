@@ -17,6 +17,17 @@ bound incoming work without replacing compression, encryption or protocol
 handlers. Upstream's private reader otherwise cannot be used by a custom
 connection plugin. Cargo's patch applies to the client used by `azalea`.
 
+The bounded reader signals `PacketReadBacklog` when it exhausts its packet or
+time budget. The shared ECS runner consumes that signal and yields to async
+tasks before its next update, without an additional frame sleep. Commands,
+packet callbacks and due 20 Hz game ticks still run between batches. An empty
+socket clears the request, including while waiting for a bundle delimiter, so
+idle sessions retain 60 Hz pacing. Update timestamps are recorded after sleeping
+to avoid alternating delayed and immediate idle updates. The standard reader
+does not request catchup and retains its read-until-empty behavior. Regression
+tests exercise the actual scheduler, idle pacing, due ticks, ordered control
+replies and clearing the request while an incomplete bundle waits for data.
+
 `RawConnection::network_diagnostics` also exposes a nonblocking snapshot of
 unread and total stored buffer bytes and outgoing packet/keepalive counts. The
 writer records a completed packet only after `write_all` succeeds; the counters distinguish queueing from

@@ -302,6 +302,15 @@ additional users access afterwards in the account's **Settings** panel):
   forwarded to the bot handler. Player physics, other entities, authentication,
   keepalives, compression and encryption remain handled by Azalea. The startup
   console line `AFK-Netzwerk aktiv` confirms that this reader is enabled.
+  When a read batch exhausts its packet/time budget, the scheduler yields to
+  async tasks and immediately continues with another bounded update. It no
+  longer imposes a frame sleep between every batch while packets are waiting,
+  which could accumulate incoming traffic and delay bundled control replies.
+  Due game ticks and commands still run between batches; game ticks remain at
+  20 Hz. Once the socket is empty, updates return to their normal 60 Hz pacing.
+  An incomplete bundle alone does not request more updates, and its packets
+  still take effect only after the closing delimiter. The startup suffix
+  `direkte Fortsetzung bei Paket-Rückstau` identifies this scheduler fix.
   Empty framed/decompressed payloads have no packet ID and are silently skipped.
   Valid one-byte bundle delimiters remain intact.
   Consumed TCP buffer prefixes are reclaimed after 64 KiB even if a fragmented

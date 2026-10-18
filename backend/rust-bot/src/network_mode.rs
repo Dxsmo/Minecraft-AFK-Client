@@ -16,7 +16,7 @@ pub(crate) fn client_plugins(mode: JavaNetworkMode) -> PluginGroupBuilder {
 
 pub(crate) fn startup_message(mode: JavaNetworkMode) -> &'static str {
     match mode {
-        JavaNetworkMode::Optimized => "AFK-Netzwerk aktiv: Item-Pakete vor Dekodierung gefiltert, separate Limits für Item-Fluten und Spielaktionen",
+        JavaNetworkMode::Optimized => "AFK-Netzwerk aktiv: Item-Pakete vor Dekodierung gefiltert, separate Limits für Item-Fluten und Spielaktionen, direkte Fortsetzung bei Paket-Rückstau",
         JavaNetworkMode::Standard => "Java-Netzwerk: Standardmodus (Azalea), AFK-Paketfilter deaktiviert",
     }
 }
