@@ -18,7 +18,7 @@ import { emit, type Command, type Config } from "./protocol.js";
 import { BotSender } from "./send.js";
 import { BehaviorState } from "./behaviors.js";
 import { BedrockConnectionProgress, bedrockLoginFailure } from "./connection.js";
-import { bedrockVersion } from "./version.js";
+import { selectBedrockVersion, type BedrockVersionSelection } from "./version.js";
 import { discoverBedrockServer } from "./discovery.js";
 import { BedrockPacketRecovery, installBedrockFrameValidation, type BedrockDecodeClient } from "./packetRecovery.js";
 import { installBedrockNetworkNbtArrays } from "./networkNbt.js";
@@ -65,12 +65,19 @@ async function main(): Promise<void> {
   emit({ type: "behavior_log", message: `Bedrock: Connecting to ${config.host}:${config.port || 19132} (version ${version || "auto"})` });
 
   let client: ReturnType<typeof createClient>;
+  let selected: BedrockVersionSelection | undefined;
+  let spawned = false;
+  const versionFailure = (message: string) => selected?.negotiating && !spawned
+    ? `${message}; server advertised protocol ${selected.advertisedProtocol}, client offered ${selected.version} (protocol ${selected.protocol}). The advertised newer protocol is not implemented; the server must accept this stable client version.`
+    : message;
   try {
-    // The library's auto mode compares the display version literally ("26.51")
-    // and otherwise silently falls back to an older protocol ("1.26.40").
-    // Resolve the advertised wire protocol first, then pass a concrete version.
+    // The advertised protocol can be the newest of several accepted versions.
+    // Always pass an explicit version whose codec and handshake match; a newer
+    // advertisement can only be tried using our actual stable client protocol.
     const advertised = await discoverBedrockServer(config.host, config.port || 19132, Math.min(CONNECT_TIMEOUT_MS, 5000));
-    const selectedVersion = bedrockVersion(advertised, version);
+    selected = selectBedrockVersion(advertised, version);
+    const selectedVersion = selected.version;
+    if (selected.negotiating) emit({ type: "warning", message: `Bedrock: Server meldet ${advertised.version} (Protokoll ${advertised.protocol}); dafür fehlen noch Protokolldaten. Versuche die unterstützte Version ${selectedVersion} (Protokoll ${selected.protocol}). Der Server muss diese Version akzeptieren.` });
     emit({ type: "behavior_log", message: `Bedrock: Server protocol ${advertised.protocol}; using client version ${selectedVersion}${version ? " (configured)" : " (auto)"}` });
     progress.advance("authentication");
     emit({ type: "behavior_log", message: "Bedrock: Server discovered; authenticating Microsoft/Xbox session" });
@@ -124,11 +131,10 @@ async function main(): Promise<void> {
   const behavior = new BehaviorState(config, sender);
 
   // Connect watchdog: if we never spawn, exit so Node can reschedule.
-  let spawned = false;
   const watchdog = setInterval(() => {
     if (progress.timedOut) {
       const options = (client as unknown as { options?: { version?: string } }).options;
-      emit({ type: "connection_failed", error: progress.timeoutMessage(config.host, config.port || 19132, options?.version ?? version) });
+      emit({ type: "connection_failed", error: versionFailure(progress.timeoutMessage(config.host, config.port || 19132, options?.version ?? version)) });
       shutdown(1);
     }
   }, 1000);
@@ -174,7 +180,7 @@ async function main(): Promise<void> {
   c.on("play_status", (packet: unknown) => {
     const failure = bedrockLoginFailure(packet);
     if (failure && !exiting) {
-      emit({ type: "connection_failed", error: failure });
+      emit({ type: "connection_failed", error: versionFailure(failure) });
       shutdown(1);
     }
   });
@@ -194,7 +200,7 @@ async function main(): Promise<void> {
 
   const onGone = (reason: string) => {
     if (exiting) return;
-    emit({ type: "disconnect", reason: reason || null });
+    emit({ type: "disconnect", reason: spawned ? reason || null : versionFailure(reason || "Connection closed") });
     shutdown(0);
   };
   c.on("disconnect", (packet: unknown) => onGone(reasonOf(packet)));
@@ -206,7 +212,7 @@ async function main(): Promise<void> {
     if (exiting) return;
     if (packetRecovery.recover(err)) return;
     const options = (client as unknown as { options?: { version?: string } }).options;
-    emit({ type: "connection_failed", error: progress.failureMessage(errMsg(err), config.host, config.port || 19132, options?.version ?? version) });
+    emit({ type: "connection_failed", error: versionFailure(progress.failureMessage(errMsg(err), config.host, config.port || 19132, options?.version ?? version)) });
     shutdown(1);
   });
 

@@ -475,6 +475,21 @@ and shares a burst budget with manual commands to avoid server spam kicks.
 The comparison with the official Minecraft client and shared movement fixes
 are documented in [the Java protocol audit](docs/JAVA_PROTOCOL_AUDIT.md).
 
+Bedrock dropdowns load the installed version catalogue from the backend. They
+only list codecs actually available in `bedrock-protocol`; a Java selection is
+reset when switching edition during account creation. With auto-detect, a newer
+server advertisement (for example 26.60 preview/protocol 2225) triggers an
+explicit offer of the supported stable client, currently 1.26.51/protocol 2193.
+Both network settings and login advertise that real client protocol. This works
+only if the server accepts it; it does not add a 2225 codec. A refusal is shown
+with both server and client protocol numbers. Explicit version selections are
+never replaced automatically.
+
+For Bedrock/website-only updates without recompiling Java, use
+[`scripts/update-bedrock.sh`](scripts/update-bedrock.sh) after pulling the source.
+It retains the Java executable from the running Node-24 backend image; use the
+normal build below when Java code has changed.
+
 **To update** (e.g. for a newly released Minecraft version): pick a commit
 from [azalea-rs/azalea](https://github.com/azalea-rs/azalea) that supports
 it, update the `rev` in `Cargo.toml`, then rebuild

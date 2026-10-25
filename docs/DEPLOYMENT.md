@@ -233,9 +233,29 @@ first).
 
 ## 10. Updates
 
+For a Bedrock or website change that does not modify the Java bot, reuse the
+Java executable from the running Node-24 backend:
+
+```bash
+cd /opt/afk-service &&
+git pull --ff-only origin master &&
+./scripts/update-bedrock.sh
+```
+
+This builds the updated Node backend and website, then replaces both containers.
+It never invokes Cargo or downloads a Rust toolchain, even when Docker's Rust
+build cache is missing. The existing services remain running during the build;
+replacing the backend briefly disconnects its accounts, and normal auto-start
+restores running clients. The data volumes and `.env` remain in place. The
+script requires an already running backend using Node 24. The quick Dockerfile
+inherits the installed Java executable, runtime startup command and healthcheck.
+
+Use the normal build below whenever changes under `backend/rust-bot` must also
+be installed. It updates the Java executable as well:
+
 ```bash
 cd /opt/afk-service
-git pull
+git pull --ff-only origin master
 docker compose build
 docker compose up -d
 docker compose logs -f backend   # confirm prisma migrate deploy applied cleanly

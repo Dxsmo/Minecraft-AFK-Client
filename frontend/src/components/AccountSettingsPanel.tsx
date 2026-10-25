@@ -4,7 +4,8 @@ import type { MinecraftAccount } from "../lib/types";
 import { useAuth } from "../lib/auth";
 import { useCompactLayout } from "../lib/useCompactLayout";
 import { AccessUsernameInput, type AccessUser } from "./AccessUsernameInput";
-import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
+import { AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
+import { MinecraftVersionSelect } from "./MinecraftVersionSelect";
 import { SPAWNER_TYPES, getSpawnerType, spawnerItemTexture, type SpawnerAction } from "../lib/spawners";
 
 export function AccountSettingsPanel({
@@ -220,22 +221,12 @@ export function AccountSettingsPanel({
             {active.id === "connection" && (
               <>
                 <Field label="Minecraft version" hint={versionMessage ?? undefined}>
-                  <select
+                  <MinecraftVersionSelect
+                    edition={account.edition}
                     value={version}
                     disabled={versionSaving}
-                    onChange={(e) => void applyVersion(e.target.value)}
-                    className="input w-44"
-                  >
-                    <option value={AUTO_DETECT_VERSION}>Auto-detect</option>
-                    {!MINECRAFT_VERSIONS.includes(version) && version !== AUTO_DETECT_VERSION && (
-                      <option value={version}>{version}</option>
-                    )}
-                    {MINECRAFT_VERSIONS.map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(value) => void applyVersion(value)}
+                  />
                 </Field>
                 <div>
                   <label className="label">Server host</label>

@@ -82,6 +82,19 @@ it("rejects anonymous requests and ordinary users accessing administration",asyn
   expect((await prisma.user.findUniqueOrThrow({where:{id:users[0].id}})).role).toBe("USER");
 });
 
+it("provides authenticated users with the installed Bedrock version catalogue", async () => {
+  expect((await app.inject({ url: "/api/minecraft/versions" })).statusCode).toBe(401);
+  const response = await app.inject({ url: "/api/minecraft/versions", headers: headers() });
+  expect(response.statusCode).toBe(200);
+  const { bedrock } = response.json();
+  expect(bedrock.defaultVersion).toBe("1.26.51");
+  expect(bedrock.versions[0]).toBe("1.26.51");
+  expect(bedrock.versions).toContain("1.21.130");
+  expect(bedrock.versions).not.toContain("26.2");
+  expect(bedrock.versions).not.toContain("1.26.60");
+  expect(new Set(bedrock.versions).size).toBe(bedrock.versions.length);
+});
+
 it("serves user-category skin heads only to admins, including users with no uploads", async () => {
   const path = `/api/users/${users[1].id}/avatar`;
   expect((await app.inject({ url: path })).statusCode).toBe(401);

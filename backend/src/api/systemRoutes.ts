@@ -1,6 +1,7 @@
 import os from "node:os";
 import type { FastifyInstance } from "fastify";
 import { clientManager } from "../minecraft/ClientManager.js";
+import { bedrockVersionCatalog } from "../bedrock-bot/version.js";
 
 const startedAt = Date.now();
 
@@ -10,6 +11,10 @@ const startedAt = Date.now();
  * Raspberry Pi. CPU load is a 1-minute average snapshot, not a live sampler.
  */
 export default async function systemRoutes(app: FastifyInstance) {
+  app.get("/api/minecraft/versions", { preHandler: app.requireAuth }, async () => ({
+    bedrock: bedrockVersionCatalog(),
+  }));
+
   app.get("/api/system/status", { preHandler: app.requireAuth }, async (req, reply) => {
     const statuses = clientManager.getAllStatuses();
     const visible =

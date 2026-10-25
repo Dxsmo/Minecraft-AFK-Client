@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
-import { MINECRAFT_VERSIONS, AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
+import { AUTO_DETECT_VERSION } from "../lib/minecraftVersions";
+import { MinecraftVersionSelect } from "./MinecraftVersionSelect";
 import { useAccountConsole } from "../lib/sockets";
 import type { MinecraftAccount } from "../lib/types";
 
@@ -29,6 +30,7 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
 
   // Switch the default port with the edition unless the user set one explicitly.
   function changeEdition(next: Edition) {
+    if (next !== edition) setMinecraftVersion(AUTO_DETECT_VERSION);
     setEdition(next);
     if (!portTouched) setServerPort(next === "BEDROCK" ? 19132 : 25565);
   }
@@ -157,19 +159,12 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
               </div>
 
               <Field label="Minecraft version">
-                <select
+                <MinecraftVersionSelect
+                  edition={edition}
                   value={minecraftVersion}
-                  onChange={(e) => setMinecraftVersion(e.target.value)}
-                  className="input"
-                >
-                  <option value={AUTO_DETECT_VERSION}>Auto-detect (recommended)</option>
-                  {edition === "JAVA" &&
-                    MINECRAFT_VERSIONS.map((v) => (
-                      <option key={v} value={v}>
-                        {v}
-                      </option>
-                    ))}
-                </select>
+                  onChange={setMinecraftVersion}
+                  recommended
+                />
               </Field>
 
               <div className="flex flex-wrap gap-x-5 gap-y-2 pt-0.5 text-sm" style={{ color: "var(--text-muted)" }}>
