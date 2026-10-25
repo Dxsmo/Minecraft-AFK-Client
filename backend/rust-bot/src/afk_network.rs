@@ -116,7 +116,7 @@ impl Plugin for AfkNetworkPlugin {
 }
 
 #[derive(Component, Default)]
-struct ItemFilter {
+pub(crate) struct ItemFilter {
     ignored: HashSet<MinecraftEntityId>,
     last_warning_at: Option<Instant>,
     empty_payloads: u64,
@@ -353,7 +353,7 @@ fn process_packet(
     }
 }
 
-fn process_single_packet(
+pub(crate) fn process_single_packet(
     ecs: &mut World,
     entity: Entity,
     raw: &[u8],
@@ -377,7 +377,7 @@ fn process_single_packet(
     let stream = &mut Cursor::new(raw);
     match state {
         ConnectionProtocol::Game => {
-            if filter.skip_raw(raw) {
+            if azalea::connection::is_server_data(raw) || filter.skip_raw(raw) {
                 return Ok(false);
             }
             let mut packet = deserialize_packet::<ClientboundGamePacket>(stream)?;

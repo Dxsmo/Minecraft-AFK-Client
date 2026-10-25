@@ -6,7 +6,7 @@
   "description": "Minecraft AFK Client Management Service - backend",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
@@ -23,7 +23,7 @@
     "@fastify/websocket": "^11.0.2",
     "@prisma/client": "^6.2.1",
     "argon2": "^0.41.1",
-    "bedrock-protocol": "3.58.2",
+    "bedrock-protocol": "3.60.1",
     "dotenv": "^16.4.7",
     "fastify": "^5.12.5",
     "fastify-plugin": "^5.0.1",
@@ -62,5 +62,8 @@
     "@prisma/config": {
       "deepmerge-ts": "^8.0.2"
     }
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

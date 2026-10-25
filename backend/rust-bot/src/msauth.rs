@@ -1,11 +1,4 @@
-//! Shared Microsoft (online-mode) authentication.
-//!
-//! Used by both `azalea-bot` (which then joins a Minecraft server) and
-//! `namesniper-bot` (which only ever needs a valid Minecraft access token and
-//! never joins a server). Extracted here so both binaries authenticate
-//! identically and share the exact same on-disk token cache format/behavior
-//! instead of duplicating this logic.
-
+//! Microsoft authentication for the Java client.
 use std::path::PathBuf;
 
 use azalea::account::microsoft::MicrosoftAccountOpts;

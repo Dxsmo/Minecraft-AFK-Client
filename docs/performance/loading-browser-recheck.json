@@ -32,11 +32,8 @@
     }
   ],
   "backgroundRequests": 0,
-  "slowDashboardRequests": 1,
   "pageChecks": [
     "account-settings",
-    "/item-worth",
-    "/namesniper",
     "/users",
     "/logs",
     "/settings",

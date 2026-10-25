@@ -61,9 +61,7 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const { MinecraftClient } = await import("../../src/minecraft/MinecraftClient.js");
-const { SniperClient } = await import("../../src/namesniper/SniperClient.js");
 import type { ClientRuntimeConfig } from "../../src/minecraft/types.js";
-import type { SniperRuntimeConfig } from "../../src/namesniper/types.js";
 
 /** Let readline process any pending stdout lines. */
 const tick = () => new Promise((r) => setImmediate(r));
@@ -99,14 +97,6 @@ function makeClient(overrides: Partial<ClientRuntimeConfig> = {}) {
 }
 function lastChild(): FakeChild {
   return children[children.length - 1];
-}
-function makeSniper(overrides: Partial<SniperRuntimeConfig> = {}) {
-  const client = new SniperClient({
-    id: "sniper-1", email: "sniper@example.com", desiredName: "Steve",
-    cooldownSeconds: 60, rateLimitProtection: true, proxies: [], ...overrides,
-  });
-  active.push({ disconnect: () => client.stop(), dispose: () => client.dispose() });
-  return client;
 }
 
 describe("MinecraftClient (Azalea subprocess) state machine", () => {
@@ -195,7 +185,6 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     child.stdin.write.mockClear();
     for (const text of ["hello", "/", " /home", "/say hi\nplain chat", "/\u0000"]) {
       expect(client.sendCommand(text)).toBe(false);
-      expect(client.sendBackgroundCommand(text)).toBe(false);
     }
     expect(child.stdin.write).not.toHaveBeenCalled();
     expect(client.sendCommand("/home farm")).toBe(true);
@@ -347,23 +336,6 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it("force-kills a stuck Name Sniper subprocess when it is stopped", () => {
-    vi.useFakeTimers();
-    try {
-      const sniper = makeSniper();
-      sniper.start();
-      const child = lastChild();
-      child.kill.mockImplementation(() => { child.killed = true; return true; });
-      sniper.stop();
-      vi.advanceTimersByTime(2000);
-      expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
-      expect(sniper.getStatus().status).toBe("OFFLINE");
-      child.signalCode = "SIGKILL";
-      child.emit("exit", null, "SIGKILL");
-      child.emit("close", null, "SIGKILL");
-      sniper.dispose();
-    } finally { vi.useRealTimers(); }
-  });
 
   it("never automatically queries /homes on joins or /sethome", async () => {
     const client = makeClient();
@@ -776,7 +748,7 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(events.some((event) => event.type === "USER_COMMAND")).toBe(false);
   });
 
-  it("accepts queued pipe backpressure and distinguishes background commands", async () => {
+  it("accepts queued pipe backpressure", async () => {
     const client = makeClient();
     client.connect();
     lastChild().send({ type: "spawn" });
@@ -784,10 +756,8 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     lastChild().stdin.write.mockClear();
     lastChild().stdin.write.mockReturnValue(false);
     expect(client.sendCommand("/home")).toBe(true);
-    expect(client.sendBackgroundCommand("/worth dirt")).toBe(true);
     expect(lastChild().stdin.write.mock.calls.map(([line]) => JSON.parse(line))).toEqual([
       { type: "chat", text: "/home" },
-      { type: "background_chat", text: "/worth dirt" },
     ]);
   });
 
@@ -968,66 +938,4 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     }
   });
 
-  describe("Name Sniper subprocess pipe isolation", () => {
-    it("handles asynchronous EPIPE during teardown and preserves the original fatal error", async () => {
-      const sniper = makeSniper();
-      const achieved = vi.fn();
-      sniper.on("achieved", achieved);
-      sniper.start();
-      const child = lastChild();
-      child.stdin._write = (_chunk, _encoding, callback) => {
-        queueMicrotask(() => callback(Object.assign(new Error("write EPIPE"), { code: "EPIPE" })));
-      };
-      child.stdin.write.mockImplementation(Writable.prototype.write.bind(child.stdin));
-      child.send({ type: "fatal_error", error: "Authentication failed" });
-      await tick();
-
-      expect(child.stdin.destroyed).toBe(true);
-      expect(sniper.getStatus().status).toBe("ERROR");
-      expect(sniper.getStatus().lastError).toBe("Authentication failed");
-      expect(achieved).not.toHaveBeenCalled();
-    });
-
-    it("handles failure of the current input pipe without automatically restarting", () => {
-      const sniper = makeSniper();
-      sniper.start();
-      expect(() => lastChild().stdin.emit("error", new Error("write EPIPE"))).not.toThrow();
-      expect(sniper.getStatus().status).toBe("ERROR");
-      expect(sniper.getStatus().lastError).toContain("EPIPE");
-      expect(children).toHaveLength(1);
-    });
-
-    it("ignores errors from a stopped process after a proxy change starts a replacement", () => {
-      const sniper = makeSniper();
-      sniper.start();
-      const oldChild = lastChild();
-      sniper.updateConfig({
-        id: "sniper-1", email: "sniper@example.com", desiredName: "Steve",
-        cooldownSeconds: 60, rateLimitProtection: true, proxies: ["http://localhost:8080"],
-      });
-      expect(children).toHaveLength(2);
-      expect(() => oldChild.stdin.emit("error", new Error("write EPIPE"))).not.toThrow();
-      expect(sniper.getStatus().status).toBe("CONNECTING");
-      expect(sniper.getStatus().lastError).toBeUndefined();
-    });
-
-    it("handles late pipe errors after a manual stop without changing the stopped state", () => {
-      const sniper = makeSniper();
-      sniper.start();
-      const child = lastChild();
-      sniper.stop();
-      expect(() => child.stdin.emit("error", new Error("write EPIPE"))).not.toThrow();
-      expect(sniper.getStatus().status).toBe("OFFLINE");
-    });
-
-    it("does not write a stop message to an ended input stream", () => {
-      const sniper = makeSniper();
-      sniper.start();
-      const child = lastChild();
-      child.stdin.end();
-      child.stdin.write.mockClear();
-      sniper.stop();
-      expect(child.stdin.write).not.toHaveBeenCalled();
-    });
-  });
 });

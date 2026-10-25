@@ -246,10 +246,6 @@ earnings once, resetting the 5-minute, 1-hour and 24-hour counters for every
 account. New confirmed sales then accumulate normally. Prisma records the
 migration, so subsequent updates and backend restarts do not reset the counters.
 
-V4.2.0 also applies `20261008180000_redact_proxy_audit_secrets`, which removes
-proxy settings from historical Name Sniper update audit records. It preserves
-accounts, notes and settings. Existing backups/exported logs are not rewritten.
-
 The Dockerfiles use persistent BuildKit caches for Cargo's registry/git data,
 compiled Rust dependencies and npm downloads. The first backend build on each
 Pi is still a cold build, but later source changes should only rebuild the
@@ -276,12 +272,12 @@ case a schema migration needs to be rolled back.
 |---|---|
 | `docker compose up` fails building `backend` (argon2) | Native module build tools missing — the provided `Dockerfile` installs `python3 make g++` in the build stage; if building outside Docker, install those manually. |
 | The first backend build is slow | The image compiles Azalea natively for the Pi. This cold build is expected once per Docker builder. Later builds reuse persistent Cargo caches. Do not use `--no-cache` or routinely run `docker builder prune`. |
-| Web build fails at `npm ci` with `Missing: @floating-ui/dom` | Pull the corrected frontend lockfile and rebuild. The lockfile must include optional/peer dependencies required by npm 10 in the Node 20 image. Maintainers should verify a clean `npm ci` and frontend build under Node 20/npm 10, not only a build using existing local dependencies. |
+| Web build fails at `npm ci` with `Missing: @floating-ui/dom` | Pull the corrected frontend lockfile and rebuild. The lockfile must include optional/peer dependencies required by npm in the Node 24 image. Maintainers should verify a clean `npm ci` and frontend build under Node 24, not only a build using existing local dependencies. |
 | Every backend build recompiles Azalea | Confirm BuildKit is enabled (`docker buildx version`) and that the builder cache was not pruned. `docker compose --progress=plain build backend` shows whether Cargo dependencies are `Fresh`. |
 | Login always returns 401 | Check `SESSION_COOKIE_SECURE` — if `true` but you're testing over plain HTTP, the cookie won't be sent back. Use `false` only for local HTTP dev. |
 | `403 Invalid or missing CSRF token` | The frontend must read the non-HttpOnly `afk_csrf` cookie and send it as `x-csrf-token` on mutating requests — this is already handled by `frontend/src/lib/api.ts`; if calling the API directly (e.g. via curl), you must do the same. |
 | Bot immediately disconnects with `RECONNECTING` looping | Check `serverHost`/`serverPort`/`minecraftVersion` match the target server; view the account's console for the exact kick/error reason. |
-| `azalea-bot binary not found` in the console | The compiled Rust binary is missing. In Docker it's built and bundled automatically; for local `npm run dev`, build it once with `cd backend/rust-bot && cargo +nightly build --release`. |
+| `azalea-bot binary not found` in the console | The compiled Rust binary is missing. In Docker it's built and bundled automatically; for local `npm run dev`, build it once with `cd backend/rust-bot && cargo build --release`. |
 | Bot doesn't join a newer Minecraft version | Update the pinned Azalea commit in `backend/rust-bot/Cargo.toml` to one that supports it and rebuild (see the README's "Azalea version pin" section). |
 | Bot can run `/gamemode` etc. but not other commands | Expected — the Minecraft server's own permission system still applies; grant the bot account OP or the relevant permission-plugin node on the server side. |
 | Caddy won't issue a certificate | Ports 80/443 must be reachable from the internet for HTTP-01 challenge, or use Cloudflare DNS-01/Origin Certificate instead (see section 5). |

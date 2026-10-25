@@ -146,7 +146,6 @@ describe("Bedrock crouch after world transitions", () => {
   it("gives manual commands priority and bypasses automation guards in FIFO order", () => {
     const { sender, behavior } = setup();
     behavior.updateConfig({ crouch_enabled: true, autosell_enabled: true, autosell_interval_seconds: 0.25 });
-    behavior.enqueueBackgroundChat("/background");
     for (const text of ["/tpahere Steve", "/home", "/homes"]) behavior.enqueueChat(text);
     behavior.onTick();
     expect(sender.send).not.toHaveBeenCalled();
@@ -159,7 +158,7 @@ describe("Bedrock crouch after world transitions", () => {
     expect(sender.send).toHaveBeenCalledTimes(3);
     vi.advanceTimersByTime(4200);
     behavior.onTick();
-    expect(sender.send).toHaveBeenLastCalledWith("/background");
+    expect(sender.send).toHaveBeenCalledTimes(3);
     expect(sender.setSneak).toHaveBeenCalledWith(true, true);
   });
 

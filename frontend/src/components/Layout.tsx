@@ -3,7 +3,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { useAuth } from "../lib/auth";
 import { Suspense, useEffect } from "react";
 
-type IconName = "notes" | "minigames" | "dashboard" | "sniper" | "worth" | "users" | "logs" | "settings";
+type IconName = "notes" | "dashboard" | "users" | "logs" | "settings";
 
 function Icon({ name }: { name: IconName }) {
   const common = {
@@ -19,8 +19,6 @@ function Icon({ name }: { name: IconName }) {
   switch (name) {
     case "notes":
       return <svg {...common}><path d="M14 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V10zM14 3v7h7M7 14h10M7 17h7" /></svg>;
-    case "minigames":
-      return <svg {...common}><rect x="2" y="6" width="20" height="12" rx="4"/><path d="M7 10v4M5 12h4M16 10h.01M19 14h.01"/></svg>;
     case "dashboard":
       return (
         <svg {...common}>
@@ -28,21 +26,6 @@ function Icon({ name }: { name: IconName }) {
           <rect x="14" y="3" width="7" height="5" rx="1.5" />
           <rect x="14" y="12" width="7" height="9" rx="1.5" />
           <rect x="3" y="16" width="7" height="5" rx="1.5" />
-        </svg>
-      );
-    case "sniper":
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="8" />
-          <circle cx="12" cy="12" r="2.5" />
-          <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
-        </svg>
-      );
-    case "worth":
-      return (
-        <svg {...common}>
-          <polyline points="3 16 9 10 13 14 21 6" />
-          <polyline points="15 6 21 6 21 12" />
         </svg>
       );
     case "users":
@@ -76,9 +59,6 @@ function Icon({ name }: { name: IconName }) {
 const navItems: { to: string; label: string; icon: IconName; adminOnly: boolean }[] = [
   { to: "/dashboard", label: "Dashboard", icon: "dashboard", adminOnly: false },
   { to: "/notes", label: "Notizen", icon: "notes", adminOnly: false },
-  { to: "/namesniper", label: "Name Sniper", icon: "sniper", adminOnly: true },
-  { to: "/minigames", label: "Minigames", icon: "minigames", adminOnly: true },
-  { to: "/item-worth", label: "Item Wert", icon: "worth", adminOnly: true },
   { to: "/users", label: "Admin Panel", icon: "users", adminOnly: true },
   { to: "/logs", label: "Audit Logs", icon: "logs", adminOnly: true },
   { to: "/settings", label: "Settings", icon: "settings", adminOnly: false },

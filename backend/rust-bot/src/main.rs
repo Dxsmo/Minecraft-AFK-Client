@@ -230,9 +230,6 @@ fn process_pending_commands(bot: &Client) {
     for cmd in pending {
         match cmd {
             Command::Chat { text } => shared().lock().behavior.enqueue_chat(bot, text),
-            Command::BackgroundChat { text } => {
-                shared().lock().behavior.enqueue_background_chat(text)
-            }
             Command::Configure(cfg) => shared().lock().behavior.update_config(cfg),
             Command::CheckCrouch => shared().lock().behavior.check_crouch(&bot),
             Command::CleanSpawner => shared().lock().behavior.enqueue_clean_spawner(),

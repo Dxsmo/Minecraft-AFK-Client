@@ -24,11 +24,6 @@ const envSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
 
-  // Optional dedicated key for encrypting sensitive data at rest (proxy
-  // credentials). Falls back to SESSION_SECRET when unset so the feature works
-  // without extra configuration; set a distinct value in production.
-  ENCRYPTION_KEY: z.string().min(16).optional(),
-
   INITIAL_ADMIN_USERNAME: z.string().default("Desmo"),
   INITIAL_ADMIN_PASSWORD: z.string().default(""),
 
@@ -59,9 +54,6 @@ export const config = {
   trustedProxies: env.TRUSTED_PROXIES.split(",").map((value) => value.trim()).filter(Boolean),
 
   databaseUrl: env.DATABASE_URL,
-
-  // Key material for AES-256-GCM encryption of sensitive at-rest data.
-  encryptionKey: env.ENCRYPTION_KEY ?? env.SESSION_SECRET,
 
   // Directory for persisted runtime data: SQLite DB lives here (see
   // DATABASE_URL) and so does the per-account Microsoft auth token cache

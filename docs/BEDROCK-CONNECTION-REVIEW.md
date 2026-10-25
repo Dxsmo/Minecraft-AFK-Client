@@ -12,7 +12,7 @@ Commit ist nicht bekannt; Git-Zeitpunkte sind keine Deployment-Nachweise.
 
 ## Bestätigter Fehler und Korrektur
 
-Beim Beenden von Minecraft- und Name-Sniper-Prozessen wurde `child.killed`
+Beim Beenden von Minecraft-Prozessen wurde `child.killed`
 als Bestätigung des Prozessendes verwendet. Node setzt dieses Flag bereits,
 wenn ein Signal erfolgreich gesendet wurde. Ignoriert ein Prozess `SIGTERM`
 oder hängt er im nativen Transport fest, wurde die nachfolgende
@@ -41,8 +41,7 @@ Der ausdrücklich gewünschte Reconnect-Abstand bleibt bei 15 Sekunden.
   Die betreffenden Sicherheitseinstellungen wurden heute nicht geändert.
 - **Zugangsdaten:** Das Entfernen alter gespeicherter Minecraft-Passwörter
   löscht weder den pro Account getrennten Microsoft-Token-Cache noch Accounts.
-  Die Website-Verschlüsselung für Name-Sniper-Proxies wird im Bedrock-Verbindungsweg
-  nicht verwendet. Die gemeldeten Sessions authentifizieren bereits erfolgreich.
+  Die gemeldeten Sessions authentifizieren bereits erfolgreich.
 - **Abhängigkeiten und Docker:** Heute wurden weder die Produktionsabhängigkeiten
   beziehungsweise Lockfiles noch die Dockerfiles oder Compose-Netzwerke geändert.
   `bedrock-protocol` bleibt auf 3.58.2; auch der native RakNet-Backendwechsel

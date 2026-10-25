@@ -2,8 +2,6 @@ import type { FastifyInstance } from "fastify";
 import { clientManager } from "../minecraft/ClientManager.js";
 import { getConsoleLogs } from "../logging/consoleLogService.js";
 import { executeCommand } from "../commands/service.js";
-import { sniperManager } from "../namesniper/SniperManager.js";
-import { getSniperLogs } from "../logging/sniperLogService.js";
 import { onAccountImageUpdated } from "../accounts/images.js";
 import { commandSchema } from "../accounts/schemas.js";
 import { recordAuditLog } from "../logging/auditLog.js";
@@ -123,30 +121,4 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
     }));
   });
 
-  app.get("/ws/namesniper/:id", { websocket: true }, (socket, req) => {
-    const { id: accountId } = req.params as { id: string };
-    const connection = authorizeSocket(socket, req, { adminOnly: true });
-    if (!connection) return;
-    const { run, send, subscribe } = connection;
-    const publish = batchLiveEvents(socket, connection);
-    run(async () => {
-      send({ type: "history", logs: await getSniperLogs(accountId, 200) });
-      const status = sniperManager.get(accountId)?.getStatus();
-      if (status) send({ type: "status", status });
-    });
-    subscribe(sniperManager.onConsoleEvent((event) => {
-      if (event.sniperAccountId === accountId) publish({ type: "console", event });
-    }));
-    subscribe(sniperManager.onStatusEvent((status) => {
-      if (status.id === accountId) publish({ type: "status", status }, "status");
-    }));
-  });
-
-  app.get("/ws/namesniper-dashboard", { websocket: true }, (socket, req) => {
-    const connection = authorizeSocket(socket, req, { adminOnly: true });
-    if (!connection) return;
-    const { run, send, subscribe } = connection;
-    run(() => send({ type: "statuses", statuses: sniperManager.getAllStatuses() }));
-    subscribe(sniperManager.onStatusEvent((status) => run(() => send({ type: "status", status }))));
-  });
 }

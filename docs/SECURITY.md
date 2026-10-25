@@ -31,8 +31,6 @@ deployed server or the absence of all bugs.
   case-sensitive. User creation rejects case-only duplicates transactionally.
   Legacy ambiguous usernames fail login/lookup rather than selecting an arbitrary
   account. Display spelling and existing user IDs/permissions are preserved.
-- Minigame players use a separate Minecraft-identity challenge and bearer
-  authentication; website admin routes still require an admin session.
 
 ## Data and browser protections
 
@@ -45,19 +43,14 @@ password copy or decryptable local password blob is persisted.
 
 Public response selectors exclude password hashes and legacy Minecraft
 credential fields. React escapes user text. Notes validate document structure,
-link protocols and alignment server-side. Account icons and minigame photos
+link protocols and alignment server-side. Account icons
 accept bounded PNG uploads that are checked and re-encoded, excluding SVG/HTML.
 Prisma parameterizes application queries; deployment migrations use static SQL.
 
-Name Sniper proxy settings use AES-256-GCM encryption in the database. Set a
-dedicated `ENCRYPTION_KEY`; rotating it requires re-entering proxy settings.
-Audit details recursively redact secret-bearing fields. Migration
-`20261008180000_redact_proxy_audit_secrets` scrubs proxy values from old affected
-audit records. It does not rewrite backups or exported logs.
+Audit details recursively redact secret-bearing fields.
 
 Microsoft token caches and server sessions live in the backend data volume.
-Host/volume administrators can access these files. Proxy encryption does not
-encrypt the whole database or Microsoft token cache. Restrict and protect host
+Host/volume administrators can access these files. Restrict and protect host
 access and backups accordingly.
 
 The frontend image contains only its static build. Environment files and local
@@ -87,13 +80,9 @@ Only grant operator access to trusted users or restrict egress separately.
 
 ## Dependencies and verification
 
-On 2026-10-08, `npm audit` reports zero known advisories in both lockfiles,
-including development dependencies. Re-run it regularly. Backend overrides
-patch transitive packages while retaining Bedrock `3.58.2` for Node 20;
-newer Bedrock releases require Node 24. Node 20 checks cover archive extraction,
-MSAL cache serialization and native transport loading.
+The backend requires Node 24 or newer with Bedrock `3.60.1`. Re-run
+`npm audit` regularly; dependency scans describe their execution date.
 
 `backend/test/security/website.test.ts` exercises real local sockets, account
 isolation, session/permission revocation, CSRF/Origin validation, login limits,
-payload rejection and audit redaction. Additional tests cover notes, uploads
-and minigame authorization.
+payload rejection and audit redaction. Additional tests cover notes and uploads.

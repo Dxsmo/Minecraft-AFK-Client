@@ -139,8 +139,8 @@ pub fn start_ecs_runner(
         app.cleanup();
     }
 
-    // all resources should have been added by now so we can take the ecs from the
-    // app
+    // all resources should have been added by now so we can take the ecs from
+    // the app
     let ecs = Arc::new(RwLock::new(mem::take(app.world_mut())));
 
     let ecs_clone = ecs.clone();
@@ -207,7 +207,8 @@ async fn run_schedule_loop(
                 *last_tick += GAME_TICK_DURATION_TARGET;
 
                 // if we're more than 10 ticks behind, set last_tick to now.
-                // vanilla doesn't do it in exactly the same way but it shouldn't really matter
+                // vanilla doesn't do it in exactly the same way but it
+                // shouldn't really matter
                 if (now - *last_tick) > GAME_TICK_DURATION_TARGET * 10 {
                     warn!(
                         "GameTick is more than 10 ticks behind, skipping ticks so we don't have to burst too much"
@@ -222,10 +223,12 @@ async fn run_schedule_loop(
 
         ecs.clear_trackers();
         if let Some(exit) = should_exit(&mut ecs) {
-            // it's possible for references to the World to stay around, so we clear the ecs
+            // it's possible for references to the World to stay around, so we
+            // clear the ecs
             ecs.clear_all();
-            // ^ note that this also forcefully disconnects all of our bots without sending
-            // a disconnect packet (which is fine because we want to disconnect immediately)
+            // ^ note that this also forcefully disconnects all of our bots
+            // without sending a disconnect packet (which is fine
+            // because we want to disconnect immediately)
 
             return exit;
         }

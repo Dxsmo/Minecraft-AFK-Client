@@ -785,3 +785,32 @@ fn world_changes_reset_periodic_flag_history() {
         }
     }
 }
+
+#[test]
+fn malformed_cosmetic_server_data_does_not_interrupt_controls_in_either_reader() {
+    for mode in [JavaNetworkMode::Optimized, JavaNetworkMode::Standard] {
+        let (mut sim, sent) = simulation(mode);
+        // Packet 0x56 from the reported log, including an incomplete packet and
+        // a valid NBT compound with no supported text component.
+        for bytes in [vec![0x56], vec![0x56, 10, 0, 0]] {
+            match mode {
+                JavaNetworkMode::Optimized => {
+                    let mut filter = crate::afk_network::ItemFilter::default();
+                    assert!(crate::afk_network::process_single_packet(
+                        sim.app.world_mut(), sim.entity, &bytes, &mut filter,
+                    ).is_ok(), "cosmetic NBT must not become a read error");
+                }
+                JavaNetworkMode::Standard => {
+                    assert!(azalea::connection::handle_raw_packet(
+                        sim.app.world_mut(), &bytes, sim.entity, ConnectionProtocol::Game,
+                        &mut Default::default(),
+                    ).is_ok(), "cosmetic NBT must not become a read error");
+                }
+            }
+            receive_wire(&mut sim, bytes);
+            receive_wire(&mut sim, vec![0x2c, 0, 0, 0, 0, 0, 0, 0, 42]);
+            assert_eq!(wire(&sent.next().unwrap()), [0x1c, 0, 0, 0, 0, 0, 0, 0, 42]);
+            sent.expect_empty();
+        }
+    }
+}

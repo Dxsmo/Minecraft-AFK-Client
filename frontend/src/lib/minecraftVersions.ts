@@ -9,9 +9,8 @@
 export const AUTO_DETECT_VERSION = "";
 
 /**
- * Curated list of Minecraft Java Edition release versions supported by the
- * Mineflayer/minecraft-protocol stack (sourced from the `minecraft-data`
- * package bundled with the backend). Newest first for a convenient dropdown.
+ * Minecraft Java Edition server versions selectable in account settings. The Java bot itself uses
+ * Azalea 26.2 (protocol 776); other servers require compatible translation.
  */
 export const MINECRAFT_VERSIONS = [
   "26.2",

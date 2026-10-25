@@ -133,10 +133,6 @@ export class BehaviorState {
     if (!trimmed) return;
     this.manualQueue.push({ kind: "command", text: trimmed });
   }
-  enqueueBackgroundChat(text: string): void {
-    const trimmed = text.trim();
-    if (trimmed) this.queue.push({ kind: "command", text: trimmed });
-  }
   enqueueCleanSpawner(): void {
     this.queue.push({ kind: "clean_spawner" });
   }

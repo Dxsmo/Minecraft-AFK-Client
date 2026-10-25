@@ -3,14 +3,12 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import { buildApp } from "../../src/app.js";
 import { prisma } from "../../src/database/prisma.js";
 import { createSession, destroySession, destroyAllUserSessions } from "../../src/auth/session.js";
 import { hashPassword } from "../../src/auth/password.js";
 import { config } from "../../src/config/config.js";
 import { clientManager } from "../../src/minecraft/ClientManager.js";
-import { sniperManager } from "../../src/namesniper/SniperManager.js";
 import { recordAuditLog } from "../../src/logging/auditLog.js";
 import { PNG } from "pngjs";
 
@@ -18,7 +16,7 @@ let app: Awaited<ReturnType<typeof buildApp>>, url: string, passwordHash: string
 let users: {id:string;username:string}[] = [], accounts: {id:string;name:string}[] = [];
 let sessions: {sessionId:string;csrfToken:string}[] = [];
 const sockets: WebSocket[] = [];
-const statusListeners = new Set<(status:any) => void>(), consoleListeners = new Set<(event:any) => void>(), sniperListeners = new Set<(status:any) => void>();
+const statusListeners = new Set<(status:any) => void>(), consoleListeners = new Set<(event:any) => void>();
 const sellListeners = new Set<(event: { id: string; lastSellAt: string }) => void>();
 const sendCommand = vi.fn(() => true);
 const headers = (index = 0, csrf = true) => ({ cookie: `${config.session.cookieName}=${sessions[index].sessionId}`, ...(csrf ? {"x-csrf-token": sessions[index].csrfToken} : {}) });
@@ -45,8 +43,6 @@ beforeAll(async()=>{
   vi.spyOn(clientManager,"onStatusEvent").mockImplementation(cb=>{statusListeners.add(cb);return()=>{statusListeners.delete(cb);};});
   vi.spyOn(clientManager,"onConsoleEvent").mockImplementation(cb=>{consoleListeners.add(cb);return()=>{consoleListeners.delete(cb);};});
   vi.spyOn(clientManager,"onSellEvent").mockImplementation(cb=>{sellListeners.add(cb);return()=>{sellListeners.delete(cb);};});
-  vi.spyOn(sniperManager,"getAllStatuses").mockReturnValue([{id:"sniper-secret",msaSignIn:{userCode:"SNIPER-SECRET"}}] as any);
-  vi.spyOn(sniperManager,"onStatusEvent").mockImplementation(cb=>{sniperListeners.add(cb);return()=>{sniperListeners.delete(cb);};});
   app = await buildApp();
   await app.listen({host:"127.0.0.1",port:0});
   url = `ws://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
@@ -76,7 +72,7 @@ afterAll(async()=>{
 });
 
 it("rejects anonymous requests and ordinary users accessing administration",async()=>{
-  const paths=["/api/users",`/api/users/${users[2].id}`,"/api/audit-logs","/api/security/ip-bans","/api/namesniper/accounts","/api/minigames/admin/dashboard"];
+  const paths=["/api/users",`/api/users/${users[2].id}`,"/api/audit-logs","/api/security/ip-bans"];
   for(const path of [...paths,"/api/minecraft/accounts","/api/notes","/api/system/status"]) {
     expect((await app.inject({url:path})).statusCode).toBe(401);
   }
@@ -282,17 +278,17 @@ it("exposes last-sale times only to authorized viewers and rechecks dashboard ac
 });
 
 it("rejects missing, null and foreign origins for cookie-authenticated sockets",async()=>{
-  for(const path of ["/ws/dashboard","/ws/%64ashboard",`/ws/%61ccounts/${accounts[0].id}`,"/ws/%6eamesniper-dashboard"])
+  for(const path of ["/ws/dashboard","/ws/%64ashboard",`/ws/%61ccounts/${accounts[0].id}`])
   for(const origin of [undefined,"null","https://evil.example",config.publicOrigin+".evil.example"]) {
     const ws=new WebSocket(url+path,{headers:{...headers(),...(origin?{origin}:{})}});sockets.push(ws);
     const error=await once(ws,"error");expect(String(error[0])).toContain("403");
   }
 });
 
-it("rejects unauthenticated, foreign account and non-admin sniper sockets",async()=>{
+it("rejects unauthenticated, foreign account sockets",async()=>{
   const anonymous=new WebSocket(url+"/ws/dashboard",{headers:{origin:config.publicOrigin}});sockets.push(anonymous);
   expect((await once(anonymous,"close"))[0]).toBe(4401);
-  for(const path of [`/ws/accounts/${accounts[1].id}`,"/ws/namesniper-dashboard","/ws/namesniper/secret-account"]) {
+  for(const path of [`/ws/accounts/${accounts[1].id}`]) {
     const connection=await socket(path);expect((await connection.closed)[0]).toBe(4401);expect(connection.messages).toEqual([]);
   }
 });
@@ -324,21 +320,24 @@ it("closes idle connections immediately on logout and password/session reset",as
   const account=await socket(`/ws/accounts/${accounts[0].id}`),dashboard=await socket("/ws/dashboard");
   await destroySession(sessions[0].sessionId);
   expect((await account.closed)[0]).toBe(4401);expect((await dashboard.closed)[0]).toBe(4401);
-  const admin=await socket("/ws/namesniper-dashboard",2);
+  const admin=await socket("/ws/dashboard",2);
   await destroyAllUserSessions(users[2].id);expect((await admin.closed)[0]).toBe(4401);
 });
 
-it("rechecks expiration and role downgrades before sending subsequent data",async()=>{
+it("rechecks expiration and account access after role downgrades",async()=>{
   const account=await socket(`/ws/accounts/${accounts[0].id}`);
   await waitFor(()=>account.messages.some(m=>m.type==="history"));
   await prisma.session.update({where:{id:sessions[0].sessionId},data:{expiresAt:new Date(Date.now()-1000)}});
   for(const listener of consoleListeners) listener({minecraftAccountId:accounts[0].id,message:"EXPIRED-SECRET"});
   expect((await account.closed)[0]).toBe(4401);expect(JSON.stringify(account.messages)).not.toContain("EXPIRED-SECRET");
-  const admin=await socket("/ws/namesniper-dashboard",2);
+  const admin=await socket("/ws/dashboard",2);
   await waitFor(()=>admin.messages.some(m=>m.type==="statuses"));
   await prisma.user.update({where:{id:users[2].id},data:{role:"USER"}});
-  for(const listener of sniperListeners) listener({id:"sniper-secret",message:"AFTER-DEMOTION"});
-  expect((await admin.closed)[0]).toBe(4401);expect(JSON.stringify(admin.messages)).not.toContain("AFTER-DEMOTION");
+  await prisma.userMinecraftAccount.create({data:{userId:users[2].id,minecraftAccountId:accounts[1].id}});
+  for(const listener of statusListeners) listener({...snapshot(accounts[0]),name:"FOREIGN-AFTER-DEMOTION"});
+  for(const listener of statusListeners) listener({...snapshot(accounts[1]),name:"OWN-AFTER-DEMOTION"});
+  await waitFor(()=>admin.messages.some(m=>m.status?.name==="OWN-AFTER-DEMOTION"));
+  expect(JSON.stringify(admin.messages)).not.toContain("FOREIGN-AFTER-DEMOTION");
 });
 
 it("bounds incoming WebSocket payloads without dispatching a command",async()=>{
@@ -354,9 +353,17 @@ it("redacts proxy credentials and nested passwords/tokens from stored audit logs
   const entry=await prisma.auditLog.findFirstOrThrow({where:{userId:users[2].id,action:"SECURITY_REDACTION_TEST"}});
   for(const secret of ["proxy-secret","website-secret","oauth-secret"]) expect(entry.details).not.toContain(secret);
   expect(JSON.parse(entry.details!).safe).toBe("kept");
-  const legacy=await prisma.auditLog.create({data:{userId:users[2].id,action:"SNIPER_ACCOUNT_UPDATE",details:JSON.stringify({proxies:"legacy-secret",desiredName:"keep-name"})}});
-  const migration=await readFile(new URL("../../prisma/migrations/20261008180000_redact_proxy_audit_secrets/migration.sql",import.meta.url),"utf8");
-  await prisma.$executeRawUnsafe(migration);
-  const redacted=await prisma.auditLog.findUniqueOrThrow({where:{id:legacy.id}});
-  expect(JSON.parse(redacted.details!)).toEqual({proxies:"[REDACTED]",desiredName:"keep-name"});
+
+});
+
+
+it("returns 404 for retired HTTP and WebSocket endpoints even for admins", async () => {
+  for (const url of ["/api/item-worth", "/api/item-worth/runs", "/api/namesniper/accounts",
+    "/api/minigames/admin/dashboard", "/api/minigames/content", "/ws/namesniper-dashboard",
+    "/ws/namesniper/old-account", "/ws/minigames"]) {
+    expect((await app.inject({ url, headers: headers(2) })).statusCode).toBe(404);
+  }
+  for (const url of ["/api/item-worth/start", "/api/namesniper/accounts", "/api/minigames/auth/challenge"]) {
+    expect((await app.inject({ method: "POST", url, headers: headers(2), payload: {} })).statusCode).toBe(404);
+  }
 });

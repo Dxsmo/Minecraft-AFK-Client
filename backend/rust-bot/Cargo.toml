@@ -7,13 +7,9 @@ edition = "2021"
 name = "azalea-bot"
 path = "src/main.rs"
 
-[[bin]]
-name = "namesniper-bot"
-path = "src/bin/namesniper.rs"
-
 [dependencies]
-azalea = { git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
-azalea-inventory = { git = "https://github.com/azalea-rs/azalea", rev = "6249c295" }
+azalea = { git = "https://github.com/azalea-rs/azalea", rev = "0d38e0dcf47eb258c41b1b09ebc2bcde7253e185" }
+azalea-inventory = { git = "https://github.com/azalea-rs/azalea", rev = "0d38e0dcf47eb258c41b1b09ebc2bcde7253e185" }
 tokio = { version = "1", features = ["full"] }
 eyre = "0.6"
 serde = { version = "1", features = ["derive"] }

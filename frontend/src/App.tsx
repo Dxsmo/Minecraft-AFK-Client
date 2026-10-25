@@ -10,12 +10,7 @@ const AccountDetailPage = lazy(() => import("./pages/AccountDetailPage").then((m
 const UsersPage = lazy(() => import("./pages/UsersPage").then((module) => ({ default: module.UsersPage })));
 const LogsPage = lazy(() => import("./pages/LogsPage").then((module) => ({ default: module.LogsPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
-const NameSniperPage = lazy(() => import("./pages/NameSniperPage").then((module) => ({ default: module.NameSniperPage })));
-const SniperAccountDetailPage = lazy(() => import("./pages/SniperAccountDetailPage").then((module) => ({ default: module.SniperAccountDetailPage })));
-const ItemWorthPage = lazy(() => import("./pages/ItemWorthPage").then((module) => ({ default: module.ItemWorthPage })));
 const NotesPage = lazy(() => import("./pages/NotesPage").then((module) => ({ default: module.NotesPage })));
-
-const MinigamesModule = lazy(() => import("./modules/minigames/MinigamesModule").then(module => ({ default: module.MinigamesModule })));
 
 export default function App() {
   return (
@@ -34,10 +29,6 @@ export default function App() {
                 <Route path="/notes/:id" element={<NotesPage />} />
 
                 <Route element={<RequireAdmin />}>
-                  <Route path="/minigames/*" element={<MinigamesModule />} />
-                  <Route path="/namesniper" element={<NameSniperPage />} />
-                  <Route path="/namesniper/:id" element={<SniperAccountDetailPage />} />
-                  <Route path="/item-worth" element={<ItemWorthPage />} />
                   <Route path="/users" element={<UsersPage />} />
                   <Route path="/logs" element={<LogsPage />} />
                 </Route>

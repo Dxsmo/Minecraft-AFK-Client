@@ -5,7 +5,7 @@
 # Must match the runtime image's Debian release (bookworm) so the compiled
 # binary links against a compatible glibc — the default trixie-based
 # rustlang/rust:nightly produces a binary that needs a newer glibc than
-# node:20-bookworm-slim provides.
+# node:24-bookworm-slim provides.
 #
 # Pinned to an EXACT nightly date (via rustup) rather than the floating
 # "nightly"/"nightly-bookworm" tag. Azalea relies on the unstable
@@ -15,7 +15,7 @@
 # reproducible; bump RUST_NIGHTLY_DATE deliberately (and re-verify the build)
 # rather than silently riding whatever nightly happens to be current.
 FROM debian:bookworm-slim AS rust-builder
-ARG RUST_NIGHTLY_DATE=2026-08-11
+ARG RUST_NIGHTLY_DATE=2026-10-16
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
@@ -35,11 +35,10 @@ RUN --mount=type=cache,id=afk-cargo-registry,target=/root/.cargo/registry,sharin
     --mount=type=cache,id=afk-cargo-target,target=/rust-bot/target,sharing=locked \
     cargo build --release \
     && mkdir -p /rust-out \
-    && cp /rust-bot/target/release/azalea-bot /rust-out/azalea-bot \
-    && cp /rust-bot/target/release/namesniper-bot /rust-out/namesniper-bot
+    && cp /rust-bot/target/release/azalea-bot /rust-out/azalea-bot
 
 # ---- Build stage: compile TypeScript + generate the Prisma client ----
-FROM node:20-bookworm-slim AS builder
+FROM node:24-bookworm-slim AS builder
 WORKDIR /app
 
 # Native deps (argon2, raknet-native) need a toolchain to build from source on
@@ -62,7 +61,7 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 # ---- Runtime stage: slim image with only production deps + azalea-bot binary ----
-FROM node:20-bookworm-slim AS runtime
+FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
@@ -82,8 +81,7 @@ COPY prisma ./prisma
 
 # Compiled Azalea bot binary from the Rust build stage.
 COPY --from=rust-builder /rust-out/azalea-bot /app/azalea-bot
-COPY --from=rust-builder /rust-out/namesniper-bot /app/namesniper-bot
-RUN chmod +x /app/azalea-bot /app/namesniper-bot
+RUN chmod +x /app/azalea-bot
 
 RUN mkdir -p /app/data
 VOLUME ["/app/data"]

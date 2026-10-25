@@ -1,3 +1,5 @@
+#![allow(clippy::redundant_field_names, reason = "Triggered by `Error` derive")]
+
 mod bundle;
 
 pub use bundle::{
@@ -70,7 +72,8 @@ pub fn read_packets(ecs: &mut World) {
         }
 
         if raw_conn.network.is_none() {
-            // no network connection, don't bother with the normal packet handling
+            // no network connection, don't bother with the normal packet
+            // handling
             continue;
         }
 
@@ -153,8 +156,8 @@ pub fn read_packets(ecs: &mut World) {
 pub fn poll_all_writer_tasks(mut conn_query: Query<&mut RawConnection>) {
     for mut conn in conn_query.iter_mut() {
         if let Some(net_conn) = &mut conn.network {
-            // this needs to be done at some point every update to make sure packets are
-            // actually sent to the network
+            // this needs to be done at some point every update to make sure
+            // packets are actually sent to the network
 
             if net_conn.poll_writer().is_some() {
                 // means the writer task ended
@@ -353,6 +356,17 @@ pub fn handle_raw_packet(
     handle_single_raw_packet(ecs, raw_packet, entity, state, queued_packet_events)
 }
 
+/// The headless client never displays the server-list MOTD or favicon. Some
+/// proxies send nonstandard chat NBT here; it must not enter gameplay decoding.
+pub fn is_server_data(raw: &[u8]) -> bool {
+    use azalea_buf::AzBufVar;
+    use azalea_protocol::packets::game::ClientboundServerData;
+    static ID: std::sync::LazyLock<u32> = std::sync::LazyLock::new(|| {
+        ClientboundServerData { motd: Default::default(), icon_bytes: None }.into_variant().id()
+    });
+    u32::azalea_read_var(&mut Cursor::new(raw)).is_ok_and(|id| id == *ID)
+}
+
 fn handle_single_raw_packet(
     ecs: &mut World,
     raw_packet: &[u8],
@@ -366,6 +380,7 @@ fn handle_single_raw_packet(
             unreachable!()
         }
         ConnectionProtocol::Game => {
+            if is_server_data(raw_packet) { return Ok(()); }
             let packet = Arc::new(deserialize_packet::<ClientboundGamePacket>(stream)?);
             trace!("Packet: {packet:?}");
             game::process_packet(ecs, entity, packet.as_ref());

@@ -1,20 +1,19 @@
+import { purgeRetiredData } from "./database/retiredData.js";
 import { buildApp } from "./app.js";
 import { config } from "./config/config.js";
 import { logger } from "./logging/logger.js";
 import { bootstrapAdmin } from "./auth/bootstrapAdmin.js";
 import { pruneExpiredSessions, clearAllSessions } from "./auth/session.js";
 import { clientManager } from "./minecraft/ClientManager.js";
-import { itemWorthScanner } from "./minecraft/ItemWorthScanner.js";
-import { sniperManager } from "./namesniper/SniperManager.js";
 import { disconnectDatabase } from "./database/prisma.js";
 import { pruneOldEarnings, purgeStoredPasswords } from "./accounts/service.js";
 import { loadBannedIps } from "./security/ipBans.js";
 import { flushConsoleLogs } from "./logging/consoleLogService.js";
-import { flushSniperLogs } from "./logging/sniperLogService.js";
 
 const SESSION_PRUNE_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
 async function main() {
+  await purgeRetiredData();
   await bootstrapAdmin();
   // Strip any Minecraft passwords still stored on legacy accounts. Accounts are
   // preserved; only the stored password is removed (device-code sign-in only).
@@ -25,8 +24,6 @@ async function main() {
   await clearAllSessions();
   await pruneOldEarnings();
   await clientManager.loadAll();
-  await itemWorthScanner.init();
-  await sniperManager.loadAll();
   await loadBannedIps();
 
   const app = await buildApp();
@@ -45,11 +42,9 @@ async function main() {
     shuttingDown = true;
     logger.info({ signal }, "Shutting down gracefully...");
     clearInterval(pruneInterval);
-    itemWorthScanner.dispose();
     clientManager.shutdownAll();
-    sniperManager.shutdownAll();
     await app.close();
-    await Promise.all([flushConsoleLogs(), flushSniperLogs()]);
+    await flushConsoleLogs();
     await disconnectDatabase();
     process.exit(0);
   };

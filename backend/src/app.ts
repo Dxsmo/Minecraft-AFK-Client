@@ -1,5 +1,4 @@
 import Fastify from "fastify";
-import minigameRoutes from "./minigames/routes.js";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
@@ -11,8 +10,6 @@ import authPlugin from "./auth/plugin.js";
 import authRoutes from "./auth/routes.js";
 import usersRoutes from "./users/routes.js";
 import accountsRoutes from "./accounts/routes.js";
-import namesniperRoutes from "./namesniper/routes.js";
-import itemWorthRoutes from "./itemworth/routes.js";
 import systemRoutes from "./api/systemRoutes.js";
 import auditLogRoutes from "./api/auditLogRoutes.js";
 import securityRoutes from "./security/routes.js";
@@ -96,20 +93,17 @@ export async function buildApp() {
   await app.register(usersRoutes);
   await app.register(accountsRoutes);
   await app.register(notesRoutes);
-  await app.register(namesniperRoutes);
-  await app.register(itemWorthRoutes);
   await app.register(systemRoutes);
   await app.register(auditLogRoutes);
   await app.register(securityRoutes);
   await app.register(registerWebsocketRoutes);
-  await app.register(minigameRoutes);
 
   app.get("/api/health", async () => ({ status: "ok" }));
 
   // Public item/block texture endpoint (no auth — textures aren't sensitive).
   // Served from the minecraft-assets package so item lists can show real
   // Minecraft icons instead of raw ids. 404 lets the frontend fall back.
-  // A price list may load hundreds of immutable icons. They must not consume
+  // Spawner settings may load many immutable icons. They must not consume
   // the API budget and cause unrelated login/account/earnings requests to 429.
   app.get("/api/assets/item/:name", { config: { rateLimit: false } }, async (req, reply) => {
     const raw = String((req.params as { name: string }).name).replace(/\.png$/i, "");

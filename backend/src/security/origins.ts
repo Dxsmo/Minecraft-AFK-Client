@@ -12,6 +12,5 @@ export function isTrustedOrigin(origin: unknown): boolean {
 }
 
 export function isWebsiteSocketPath(path: string): boolean {
-  return path === "/ws/dashboard" || path === "/ws/namesniper-dashboard" ||
-    path.startsWith("/ws/accounts/") || path.startsWith("/ws/namesniper/");
+  return path === "/ws/dashboard" || path.startsWith("/ws/accounts/");
 }

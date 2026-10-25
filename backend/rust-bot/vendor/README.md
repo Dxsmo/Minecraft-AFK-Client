@@ -1,7 +1,7 @@
 # Azalea client network and inventory patches
 
 `azalea-client` is copied from the same upstream revision as the other Azalea
-dependencies: `6249c295` in https://github.com/azalea-rs/azalea. Its license is
+dependencies: `0d38e0dcf47eb258c41b1b09ebc2bcde7253e185` in https://github.com/azalea-rs/azalea. Its license is
 included. The manifest resolves inherited workspace dependencies explicitly;
 all Azalea dependencies still use that same pinned Git revision.
 
@@ -122,3 +122,13 @@ flags separately from intermediate physics state. This matches the official
 stationary. Flag history resets on login/respawn. The independent wire fixtures
 and reference provenance are documented in
 [`docs/JAVA_PROTOCOL_AUDIT.md`](../../../docs/JAVA_PROTOCOL_AUDIT.md).
+
+The 2026-10-25 update rebases the client patch onto upstream `0d38e0dc`
+(2026-10-16), including Bevy 0.20 and its updated dependency graph. Both readers
+skip `server_data` before decoding: the headless client does not display its
+MOTD/favicon, and proxy-specific invalid chat NBT must not count as a gameplay
+read failure. Bundle collection still happens before the cosmetic filter.
+Automation now shares a command budget with manual commands and `/sellmulti`.
+It allows three immediate commands and refills one credit every 1.5 seconds;
+auto-sell also has a minimum interval of 1.5 seconds. Credits survive settings
+and world changes. Control replies are never subject to this chat budget.

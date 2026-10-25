@@ -1,7 +1,7 @@
 # Known technical limitations
 
 This project drives Minecraft bots with the [Azalea](https://github.com/azalea-rs/azalea)
-Rust library (pinned to revision `6249c295`). Two requested features cannot be
+Rust library (pinned to revision `0d38e0dc`). Two requested features cannot be
 implemented on top of Azalea as it exists today. Rather than shipping a
 half-working or faked implementation, they are documented here together with
 what *would* be required to add them later.

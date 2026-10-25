@@ -270,7 +270,8 @@ impl GamePacketHandler<'_> {
                         return;
                     };
 
-                    // add this world to the `worlds` (or don't, if it's already there)
+                    // add this world to the `worlds` (or don't, if it's already
+                    // there)
                     weak_world = worlds.get_or_insert(
                         new_world_name.clone(),
                         dimension_data.height,
@@ -284,8 +285,8 @@ impl GamePacketHandler<'_> {
                     });
                 }
 
-                // set the partial world to an empty world (when we add chunks or entities those
-                // will be in the `worlds`)
+                // set the partial world to an empty world (when we add chunks
+                // or entities those will be in the `worlds`)
 
                 *world_holder.partial.write() = PartialWorld::new(
                     azalea_world::chunk::calculate_chunk_storage_range(
@@ -351,8 +352,8 @@ impl GamePacketHandler<'_> {
     }
 
     pub fn chunk_batch_start(&mut self, _p: &ClientboundChunkBatchStart) {
-        // the packet is empty, it's just a marker to tell us when the batch starts and
-        // ends
+        // the packet is empty, it's just a marker to tell us when the batch
+        // starts and ends
         debug!("Got chunk batch start");
 
         as_system::<MessageWriter<_>>(self.ecs, |mut events| {
@@ -604,13 +605,14 @@ impl GamePacketHandler<'_> {
                     return;
                 };
 
-                // check if the entity already exists, and if it does then only add to LoadedBy
+                // check if the entity already exists, and if it does then only
+                // add to LoadedBy
                 let world = worlds.get(world_name).unwrap();
                 if let Some(&ecs_entity) = world.read().entity_by_id.get(&entity_id) {
                     // entity already exists
                     let Ok(mut loaded_by) = loaded_by_query.get_mut(ecs_entity) else {
-                        // LoadedBy for this entity isn't in the ecs! figure out what went wrong
-                        // and print an error
+                        // LoadedBy for this entity isn't in the ecs! figure out
+                        // what went wrong and print an error
 
                         let entity_in_ecs = entity_query.get(ecs_entity).is_ok();
 
@@ -656,16 +658,16 @@ impl GamePacketHandler<'_> {
 
                 // add the GameProfileComponent if the uuid is in the tab list
                 if let Some(tab_list) = tab_list {
-                    // (technically this makes it possible for non-player entities to have
-                    // GameProfileComponents but the server would have to be doing something
-                    // really weird)
+                    // (technically this makes it possible for non-player
+                    // entities to have GameProfileComponents but the server
+                    // would have to be doing something really weird)
                     if let Some(player_info) = tab_list.get(&p.uuid) {
                         spawned.insert(GameProfileComponent(player_info.profile.clone()));
                     }
                 }
 
-                // the bundle doesn't include the default entity metadata so we add that
-                // separately
+                // the bundle doesn't include the default entity metadata so we
+                // add that separately
                 p.apply_metadata(&mut spawned);
             },
         );
@@ -705,8 +707,8 @@ impl GamePacketHandler<'_> {
 
             let packed_items = p.packed_items.clone().to_vec();
 
-            // we use RelativeEntityUpdate because it makes sure changes aren't made
-            // multiple times
+            // we use RelativeEntityUpdate because it makes sure changes aren't
+            // made multiple times
             commands.entity(entity).queue(RelativeEntityUpdate::new(
                 world_holder.partial.clone(),
                 move |entity| {
@@ -731,8 +733,8 @@ impl GamePacketHandler<'_> {
     }
 
     pub fn set_entity_motion(&mut self, p: &ClientboundSetEntityMotion) {
-        // vanilla servers use this packet for knockback, but note that the Explode
-        // packet is also sometimes used by servers for knockback
+        // vanilla servers use this packet for knockback, but note that the
+        // Explode packet is also sometimes used by servers for knockback
 
         as_system::<(
             Commands,
@@ -742,9 +744,10 @@ impl GamePacketHandler<'_> {
             let (entity_id_index, world_holder) = query.get(self.player).unwrap();
 
             let Some(entity) = entity_id_index.get_by_minecraft_entity(p.id) else {
-                // note that this log (and some other ones like the one in RemoveEntities)
-                // sometimes happens when killing mobs. it seems to be a vanilla bug, which is
-                // why it's a debug log instead of a warning
+                // note that this log (and some other ones like the one in
+                // RemoveEntities) sometimes happens when killing mobs. it seems
+                // to be a vanilla bug, which is why it's a debug log instead of
+                // a warning
                 debug!(
                     "Got set entity motion packet for unknown entity id {}",
                     p.id
@@ -754,8 +757,8 @@ impl GamePacketHandler<'_> {
 
             let data = KnockbackData::Set(p.delta.to_vec3());
 
-            // this is to make sure the same entity velocity update doesn't get sent
-            // multiple times when in swarms
+            // this is to make sure the same entity velocity update doesn't get
+            // sent multiple times when in swarms
             if should_apply_entity_update(
                 &mut commands,
                 &mut world_holder.partial.write(),
@@ -841,7 +844,8 @@ impl GamePacketHandler<'_> {
                                 &mut look_direction,
                                 &mut physics,
                             );
-                            // old_pos is set to the current position when we're teleported
+                            // old_pos is set to the current position when we're
+                            // teleported
                             physics.set_old_pos(old_position);
                         });
                     },
@@ -972,11 +976,12 @@ impl GamePacketHandler<'_> {
                         continue;
                     };
 
-                    // the `remove_despawned_entities_from_indexes` system will despawn the entity
-                    // if it's not loaded by anything anymore
+                    // the `remove_despawned_entities_from_indexes` system will
+                    // despawn the entity if it's not loaded by anything anymore
 
-                    // also we can't just ecs.despawn because if we're in a swarm then the entity
-                    // might still be loaded by another client
+                    // also we can't just ecs.despawn because if we're in a
+                    // swarm then the entity might still be loaded by another
+                    // client
 
                     loaded_by.remove(&self.player);
                 }
@@ -1172,8 +1177,8 @@ impl GamePacketHandler<'_> {
     }
 
     pub fn container_close(&mut self, p: &ClientboundContainerClose) {
-        // there's a container_id field in the packet, but minecraft doesn't actually
-        // check it
+        // there's a container_id field in the packet, but minecraft doesn't
+        // actually check it
 
         debug!("Got container close packet {p:?}");
 
@@ -1374,7 +1379,8 @@ impl GamePacketHandler<'_> {
                         return;
                     };
 
-                    // add this world to the `worlds` (or don't if it's already there)
+                    // add this world to the `worlds` (or don't if it's already
+                    // there)
                     weak_world = worlds.get_or_insert(
                         new_world_name.clone(),
                         dimension_data.height,
@@ -1388,8 +1394,8 @@ impl GamePacketHandler<'_> {
                     });
                 }
 
-                // set the partial world to an empty world (when we add chunks or entities,
-                // those will be in the `worlds`)
+                // set the partial world to an empty world (when we add chunks
+                // or entities, those will be in the `worlds`)
 
                 *world_holder.partial.write() = PartialWorld::new(
                     azalea_world::chunk::calculate_chunk_storage_range(

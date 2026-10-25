@@ -41,9 +41,36 @@ struct MultiplierProgress {
     menu_id: Option<i32>,
     next_check: Instant,
 }
-/// Never overlap sell commands, and cap even very short configured intervals
-/// at four commands per second.
-const AUTOSELL_MIN_COMMAND_INTERVAL: Duration = Duration::from_millis(250);
+/// The server's spam counter decays by one point per tick, but each chat or
+/// command costs twenty points. Four commands/s eventually kick even a bot
+/// whose keepalive/pong replies are healthy. Leave room for delayed server ticks.
+const AUTOSELL_MIN_COMMAND_INTERVAL: Duration = Duration::from_millis(1500);
+const CHAT_BURST: f64 = 3.0;
+
+struct CommandBudget {
+    tokens: f64,
+    updated_at: Instant,
+}
+
+impl CommandBudget {
+    fn new(now: Instant) -> Self {
+        Self {
+            tokens: CHAT_BURST,
+            updated_at: now,
+        }
+    }
+
+    fn ready(&mut self, now: Instant) -> bool {
+        let elapsed = now.saturating_duration_since(self.updated_at).as_secs_f64();
+        self.tokens = (self.tokens + elapsed / 1.5).min(CHAT_BURST);
+        self.updated_at = now;
+        self.tokens >= 1.0
+    }
+
+    fn record(&mut self) {
+        self.tokens -= 1.0;
+    }
+}
 /// Send at most one automatic inventory click per interval, across sell cycles.
 /// Never catch up missed intervals with a burst after a delayed tick.
 const AUTOSELL_CLICK_INTERVAL: Duration = Duration::from_millis(100);
@@ -70,7 +97,6 @@ const TELEPORT_COMMAND_GUARD: Duration = Duration::from_millis(750);
 /// Small serialization gap after a normal chat command. Commands can open a
 /// GUI asynchronously, so auto-sell must not start on the following tick.
 const CHAT_COMMAND_GUARD: Duration = Duration::from_millis(100);
-const COMMAND_MENU_CLOSE_DELAY: Duration = Duration::from_millis(750);
 /// Accept delayed replies only while the sell request still owns the channel.
 const AUTOSELL_LATE_MENU_WINDOW: Duration = Duration::from_secs(10);
 /// Retry delay when the server explicitly says the inventory is still being
@@ -145,8 +171,6 @@ enum AutoSellPhase {
 /// (pause/resume) system. Scheduling/timing lives in Node; this just ensures
 /// safe, non-overlapping execution.
 enum ForegroundTask {
-    /// Send a single chat line requested by the user.
-    Chat { text: String, teleporting: bool },
     /// Right-click a nearby spawner and drop the items in its container.
     CleanSpawner,
 }
@@ -208,6 +232,7 @@ pub struct BehaviorState {
     /// Independent of spawn/teleport/config guards, which may be reset at any time.
     restart_sell_pause: Option<(Instant, Instant)>,
     manual_chat_queue: VecDeque<ManualTask>,
+    command_budget: CommandBudget,
     autosell_phase: AutoSellPhase,
     last_autosell_failure_log: Option<Instant>,
     /// Automation is disabled before the first Spawn and during Login/Respawn
@@ -220,9 +245,6 @@ pub struct BehaviorState {
     transition_recovery_at: Option<Instant>,
     /// Shared quiescence gate for spawn, teleports and asynchronous commands.
     automation_ready_at: Instant,
-    /// Background scan commands may open a temporary menu. Manual command
-    /// menus have separate ownership and are never closed by this timer.
-    command_menu_close_at: Option<Instant>,
     /// A manual command can open a GUI even when it looks like a teleport.
     manual_menu_guard_until: Option<Instant>,
     manual_menu_id: Option<i32>,
@@ -263,13 +285,13 @@ impl BehaviorState {
                 )
             }),
             manual_chat_queue: VecDeque::new(),
+            command_budget: CommandBudget::new(now),
             autosell_phase: AutoSellPhase::Idle,
             last_autosell_failure_log: None,
             spawned: false,
             awaiting_respawn_position: false,
             transition_recovery_at: None,
             automation_ready_at: now,
-            command_menu_close_at: None,
             manual_menu_guard_until: None,
             manual_menu_id: None,
             manual_priority_until: None,
@@ -311,22 +333,13 @@ impl BehaviorState {
             .push_back(ManualTask::SellMultipliers);
     }
 
-    /// Background scans retain the serialized foreground queue and yield to
-    /// manual commands. They must not repeatedly cancel a sell/spawner cycle.
-    pub fn enqueue_background_chat(&mut self, text: String) {
-        let text = text.trim();
-        if !text.is_empty() {
-            self.task_queue.push_back(ForegroundTask::Chat {
-                text: text.to_string(),
-                teleporting: is_teleport_command(text),
-            });
-        }
-    }
-
     fn tick_manual_chat(&mut self, bot: &Client, now: Instant) -> bool {
         // Spawn may still describe the previous world while a proxy has moved
         // the connection into configuration. Azalea discards game packets then.
         if bot.component::<InGameState>().is_err() {
+            return false;
+        }
+        if !self.command_budget.ready(now) {
             return false;
         }
         let Some(task) = self.manual_chat_queue.pop_front() else {
@@ -357,10 +370,10 @@ impl BehaviorState {
             self.manual_chat_queue.push_front(task);
             return false;
         }
+        self.command_budget.record();
         self.guard_after_chat(now, is_teleport_command(&text));
         // Manual GUIs stay open until the server closes them, a teleport
         // completes, or the user issues another command. /home may open a GUI.
-        self.command_menu_close_at = None;
         self.manual_menu_guard_until = text
             .starts_with('/')
             .then_some(now + MANUAL_MENU_GUARD_TIMEOUT);
@@ -485,7 +498,7 @@ impl BehaviorState {
     /// Tear down interactions whose container/world identity becomes invalid
     /// across a teleport, respawn or proxy server transfer.
     fn interrupt_for_transition(&mut self, bot: &Client) {
-        if self.active_task.is_some() || self.command_menu_close_at.is_some() {
+        if self.active_task.is_some() {
             self.close_open_menu(bot);
         } else {
             self.close_sell_menu(bot);
@@ -501,7 +514,6 @@ impl BehaviorState {
         }
         self.autosell_phase = AutoSellPhase::Idle;
         self.active_task = None;
-        self.command_menu_close_at = None;
         self.manual_menu_guard_until = None;
         self.manual_menu_id = None;
         self.last_sell_request_at = None;
@@ -515,7 +527,6 @@ impl BehaviorState {
             CHAT_COMMAND_GUARD
         };
         self.postpone_automation_until(now + delay);
-        self.command_menu_close_at = (!teleporting).then_some(now + COMMAND_MENU_CLOSE_DELAY);
     }
 
     /// Called for Login, including proxy server and dimension/world changes.
@@ -643,11 +654,6 @@ impl BehaviorState {
         self.close_cancelled_sell_menu(bot, now);
         let manual_ran = self.tick_manual_chat(bot, now);
 
-        if self.command_menu_close_at.is_some_and(|at| now >= at) {
-            self.close_open_menu(bot);
-            self.command_menu_close_at = None;
-        }
-
         // Before Spawn, and for a short stabilization period after a spawn or
         // teleport, automatic actions wait for inventory loading. Explicit
         // manual commands above remain responsive once the client has spawned.
@@ -718,14 +724,13 @@ impl BehaviorState {
             return;
         }
         if self.active_task.is_none()
-            && self.command_menu_close_at.is_none()
             && (is_sell_menu_title(&title)
                 || self.last_sell_request_at.is_some_and(|at| {
                     now.saturating_duration_since(at) <= AUTOSELL_LATE_MENU_WINDOW
                 }))
         {
             self.sell_menu = Some((id, title));
-        } else if self.active_task.is_none() && self.command_menu_close_at.is_none() {
+        } else if self.active_task.is_none() {
             emit(&OutEvent::BehaviorLog {
                 message: format!("AutoSell wartet: fremdes Menü geöffnet ({title}); manuelle Commands bleiben verfügbar"),
             });
@@ -800,26 +805,11 @@ impl BehaviorState {
         // auto-sell isn't mid-cycle — this is what enforces mutual exclusion.
         if self.active_task.is_none()
             && matches!(self.autosell_phase, AutoSellPhase::Idle)
-            && self.command_menu_close_at.is_none()
+
         {
             if let Some(task) = self.task_queue.pop_front() {
                 ran = true;
                 match task {
-                    ForegroundTask::Chat { text, teleporting } => {
-                        if !teleporting && !inventory_is_mutable(bot) {
-                            self.task_queue
-                                .push_front(ForegroundTask::Chat { text, teleporting });
-                            return true;
-                        }
-                        if teleporting {
-                            self.close_open_menu(bot);
-                        }
-                        bot.chat(text.clone());
-                        self.guard_after_chat(now, teleporting);
-                        emit(&OutEvent::BehaviorLog {
-                            message: format!("Command sent: {text}"),
-                        });
-                    }
                     ForegroundTask::CleanSpawner
                         if self.sell_paused(now) || !inventory_is_mutable(bot) =>
                     {
@@ -1193,13 +1183,12 @@ impl BehaviorState {
                 // queued or running - this is the "pause" half of the interrupt
                 // system. An in-progress cycle below is always allowed to finish.
                 if self.foreground_busy()
-                    || self.command_menu_close_at.is_some()
-                    || self.manual_menu_pending(bot, now)
+                           || self.manual_menu_pending(bot, now)
                 {
                     return;
                 }
 
-                if now < self.next_autosell_at {
+                if now < self.next_autosell_at || !self.command_budget.ready(now) {
                     return;
                 }
 
@@ -1223,6 +1212,7 @@ impl BehaviorState {
                 // must not be closed under the previous cancellation guard.
                 self.cancelled_sell_until = None;
                 bot.chat(command.to_string());
+                self.command_budget.record();
                 self.autosell_phase = AutoSellPhase::WaitingForMenu {
                     since: now,
                     started_empty,
@@ -1385,7 +1375,7 @@ impl BehaviorState {
         if !self.config.autosell_enabled
             || !matches!(self.autosell_phase, AutoSellPhase::Idle)
             || self.active_task.is_some()
-            || self.command_menu_close_at.is_some()
+
             || self.manual_menu_pending(bot, now)
             || !self.owns_sell_menu(bot)
         {
@@ -2254,7 +2244,6 @@ mod tests {
     #[test]
     fn manual_commands_interrupt_sell_and_bypass_guards_in_fifo_order() {
         let (client, mut state) = sell_client();
-        state.enqueue_background_chat("/background".into());
         for command in ["/tpahere Steve", "/home", "/homes"] {
             state.enqueue_chat(&client, command.into());
         }
@@ -2286,7 +2275,7 @@ mod tests {
             assert_eq!(client.get_inventory().unwrap().id(), 0);
             assert!(matches!(state.autosell_phase, AutoSellPhase::Idle));
         }
-        assert_eq!(state.task_queue.len(), 1);
+        assert_eq!(state.task_queue.len(), 0);
     }
 
     #[test]
@@ -2910,7 +2899,9 @@ mod tests {
             .unwrap()
             .is_empty());
         tick_sell(&client, &mut state, now + Duration::from_millis(300));
-        assert_eq!(take_commands(&client), vec!["/sell", "/sell"]);
+        assert_eq!(take_commands(&client), vec!["/sell"]);
+        tick_sell(&client, &mut state, now + Duration::from_millis(1500));
+        assert_eq!(take_commands(&client), vec!["/sell"]);
     }
 
     #[test]
@@ -3262,6 +3253,8 @@ mod tests {
                 &mut state,
                 since + AUTOSELL_MENU_TIMEOUT + Duration::from_millis(100),
             );
+            assert!(take_commands(&client).is_empty());
+            tick_sell(&client, &mut state, since + AUTOSELL_MENU_TIMEOUT + super::AUTOSELL_MIN_COMMAND_INTERVAL);
             assert_eq!(take_commands(&client), vec!["/sell"]);
         }
     }
@@ -3269,10 +3262,12 @@ mod tests {
     #[test]
     fn teleports_clear_stale_menu_and_resume_selling_without_spawn() {
         let (client, mut state) = sell_client();
-        for command in ["/home farm", "/tpa Steve"] {
+        let start = Instant::now();
+        for (index, command) in ["/home farm", "/tpa Steve"].into_iter().enumerate() {
+            let now = start + Duration::from_secs(index as u64 * 5);
             state.enqueue_chat(&client, command.to_string());
             state.automation_ready_at = Instant::now();
-            state.on_tick(&client);
+            assert!(state.tick_manual_chat(&client, now));
             assert_eq!(take_commands(&client), vec![command]);
             open_empty_sell_menu(&client, &mut state);
             state.autosell_phase = AutoSellPhase::WaitingForMenu {
@@ -3289,7 +3284,7 @@ mod tests {
             state.manual_menu_guard_until = None;
             state.manual_priority_until = None;
             state.next_autosell_at = Instant::now();
-            state.on_tick(&client);
+            tick_sell(&client, &mut state, now + super::AUTOSELL_MIN_COMMAND_INTERVAL);
             let commands = take_commands(&client);
             assert!(commands.iter().any(|text| text == "/sell"));
         }
@@ -3492,4 +3487,43 @@ mod tests {
         ));
         assert!(!is_inventory_busy_message("Dein Inventar ist leer"));
     }
+    #[test]
+    fn command_budget_keeps_sustained_traffic_below_vanilla_spam_limit() {
+        let start = Instant::now();
+        let mut budget = super::CommandBudget::new(start);
+        let mut spam_counter = 0_u32;
+        let mut sent = 0;
+        // Aggressive clients request one command on every server tick for an hour.
+        for tick in 0..72_000 {
+            spam_counter = spam_counter.saturating_sub(1);
+            if budget.ready(start + Duration::from_millis(tick * 50)) {
+                budget.record();
+                spam_counter += 20;
+                sent += 1;
+            }
+            assert!(spam_counter <= 60, "spam counter {spam_counter} at tick {tick}");
+        }
+        assert!(sent > 2000, "a limiter must continue sending after its initial burst");
+        assert!(sent < 2500);
+    }
+
+    #[test]
+    fn manual_commands_wait_in_fifo_and_configuration_does_not_refill_budget() {
+        let (client, mut state) = sell_client();
+        let now = Instant::now();
+        for command in ["/home a", "/home b", "/home c", "/home d"] {
+            state.enqueue_chat(&client, command.into());
+        }
+        for _ in 0..3 {
+            assert!(state.tick_manual_chat(&client, now));
+        }
+        assert_eq!(take_commands(&client), ["/home a", "/home b", "/home c"]);
+        state.update_config(state.config.clone());
+        assert!(!state.tick_manual_chat(&client, now + Duration::from_millis(1499)));
+        assert!(take_commands(&client).is_empty());
+        assert_eq!(state.manual_chat_queue.len(), 1);
+        assert!(state.tick_manual_chat(&client, now + Duration::from_millis(1500)));
+        assert_eq!(take_commands(&client), ["/home d"]);
+    }
+
 }

@@ -13,7 +13,6 @@ Regressionstests abgesichert.
 | Veraltete Socket-Berechtigungen | Offene Verbindungen konnten trotz abgelaufener/widerrufener Session oder entzogener Rechte weiter Daten liefern bzw. Commands annehmen. | Session und Rechte vor jeder Aktion erneut prüfen; Logout/Session-Reset schließen bestehende Sockets sofort. |
 | Ersteller konnte Zugriff wiederherstellen | Frühere Account-Ersteller konnten sich nach einem Rechteentzug wieder selbst zuweisen. | Auch Ersteller brauchen eine aktuelle Account-Zuweisung zur Freigabeverwaltung. |
 | Fehlende Origin-/CSRF-Prüfung für Website-Sockets | Zusätzliche Absicherung gegen fremde Webseiten und unberechtigte Socket-Commands fehlte. | Origin-Allowlist, Session-CSRF für Socket-Commands, Eingabevalidierung; Logout ebenfalls mit CSRF. |
-| Proxy-Geheimnisse im Audit-Log | Name-Sniper-Proxy-Einstellungen wurden zusätzlich unverschlüsselt protokolliert. | Rekursive Bereinigung neuer Einträge; Migration entfernt Proxy-Werte aus alten betroffenen Einträgen. |
 | Unbegrenztes Vertrauen in Forwarding-Header | Bei direkt erreichbarem Backend konnten öffentliche Clients ihre IP für Login-Limits und Sperren fälschen. | Vertrauen auf konfigurierte Proxy-Netze begrenzt; Spoofing-Regressionstest besteht. |
 | Unterschiedlicher Login-Rechenaufwand | Unbekannte Nutzernamen wurden ohne Passwortprüfung abgewiesen, was gültige Namen leichter erkennbar machte. | Argon2-Prüfung auch für unbekannte Nutzer; einheitliche Fehlermeldung. |
 | Verwundbare Node-Abhängigkeiten | Der erste Scan meldete 14 betroffene Backend-Laufzeit-Pakete, darunter hohe/kritische Advisories; dies beweist keine Ausnutzbarkeit in der App. | Kompatible Updates und gezielte Overrides; abschließende Scans beider Lockfiles ohne bekannte Advisories. |
@@ -49,8 +48,7 @@ und React-Text-Escaping.
 ## Nachweise
 
 - **283 Backend-Tests in 22 Dateien bestanden unter Node 20.20.2**, einschließlich
-  15 neuer Website-Sicherheitstests und bestehender Notiz-, Upload- und
-  Minigame-Berechtigungstests.
+  15 neuer Website-Sicherheitstests sowie bestehender Notiz- und Uploadtests.
 - Backend-TypeScript-Build und Prisma-Generierung erfolgreich.
 - Frontend-Produktionsbuild und ESLint erfolgreich; vier bereits bestehende
   Warnungen, keine Fehler.

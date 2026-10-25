@@ -5,14 +5,18 @@ use azalea_core::{
     tick::GameTick,
 };
 use azalea_entity::{
-    Attributes, Crouching, EntityGeometryUpdateSystems, HasClientLoaded, Jumping, LastSentPosition,
-    LocalEntity, LookDirection, OnClimbable, Physics, PlayerAbilities, Pose, Position,
+    ActiveEffects, Attributes, Crouching, EntityGeometryUpdateSystems, HasClientLoaded, Jumping,
+    LastSentPosition, LocalEntity, LookDirection, OnClimbable, Physics, PlayerAbilities, Pose,
+    Position,
     dimensions::calculate_dimensions,
     inventory::Inventory,
     metadata::{self, FallFlying, Sprinting},
     update_bounding_box,
 };
-use azalea_inventory::components::{self, EquipmentSlot};
+use azalea_inventory::{
+    ItemStack,
+    components::{self, EquipmentSlot},
+};
 use azalea_physics::{
     PhysicsSystems, ai_step,
     client_movement::{ClientMovementState, SprintDirection, WalkDirection},
@@ -32,7 +36,7 @@ use azalea_protocol::{
         },
     },
 };
-use azalea_registry::builtin::EntityKind;
+use azalea_registry::builtin::{EntityKind, MobEffect};
 use azalea_world::World;
 use bevy_app::{App, Plugin, Update};
 use bevy_ecs::prelude::*;
@@ -127,8 +131,10 @@ pub fn send_position(
     ) in query.iter_mut()
     {
         let packet = {
-            // TODO: the camera being able to be controlled by other entities isn't
-            // implemented yet if !self.is_controlled_camera() { return };
+            // TODO: the camera being able to be controlled by other entities
+            // isn't implemented yet
+
+            // if !self.is_controlled_camera() { return };
 
             let x_delta = position.x - last_sent_position.x;
             let y_delta = position.y - last_sent_position.y;
@@ -138,8 +144,9 @@ pub fn send_position(
 
             physics_state.position_remainder += 1;
 
-            // boolean sendingPosition = Mth.lengthSquared(xDelta, yDelta, zDelta) >
-            // Mth.square(2.0E-4D) || this.positionReminder >= 20;
+            // ```
+            // boolean sendingPosition = Mth.lengthSquared(xDelta, yDelta, zDelta) > Mth.square(2.0E-4D) || this.positionReminder >= 20;
+            // ```
             let is_delta_large_enough =
                 (x_delta.powi(2) + y_delta.powi(2) + z_delta.powi(2)) > 2.0e-4f64.powi(2);
             let sending_position = is_delta_large_enough || physics_state.position_remainder >= 20;
@@ -232,8 +239,8 @@ pub fn send_player_input_packet(
             sprint: physics_state.trying_to_sprint,
         };
 
-        // if LastSentInput isn't present, we default to assuming we're not pressing any
-        // keys and insert it anyways every time it changes
+        // if LastSentInput isn't present, we default to assuming we're not
+        // pressing any keys and insert it anyways every time it changes
         let last_sent_input = last_sent_input.cloned().unwrap_or_default();
 
         if input != last_sent_input.0 {
@@ -428,8 +435,8 @@ pub fn local_player_ai_step(
             }
         }
 
-        // TODO: replace those booleans when using items and passengers are properly
-        // implemented
+        // TODO: replace those booleans when using items and passengers are
+        // properly implemented
         let move_vector = modify_input(
             physics_state.move_vector,
             false,
@@ -456,6 +463,7 @@ pub fn process_fall_flying_activation(
             &Jumping,
             &Inventory,
             &Physics,
+            &ActiveEffects,
             &OnClimbable,
             &mut FallFlying,
         ),
@@ -471,6 +479,7 @@ pub fn process_fall_flying_activation(
         jumping,
         inv,
         physics,
+        active_effects,
         onclimbable,
         mut fall_flying,
     ) in query.iter_mut()
@@ -482,7 +491,7 @@ pub fn process_fall_flying_activation(
             && !creative_flight_toggled
             && last_sent_input.is_some_and(|input| !input.0.jump)
             && !**onclimbable
-            && can_start_fall_flying(&fall_flying, abilities, inv, physics)
+            && can_start_fall_flying(&fall_flying, abilities, inv, physics, active_effects)
         {
             // split `tryToStartFallFlying` into condition check
             **fall_flying = true; // Player.startFallFlying()
@@ -504,25 +513,42 @@ fn can_start_fall_flying(
     abilities: &PlayerAbilities,
     inv: &Inventory,
     physics: &Physics,
+    active_effects: &ActiveEffects,
 ) -> bool {
     (!**already_fall_flying)
         && (!abilities.flying)
 
         // LivingEntity.canGlide()
         && !physics.on_ground()
-        // TODO: && isPassenger()
-        // TODO: slow falling status effect
+        // TODO: && !isPassenger()
+        && !active_effects.0.contains_key(&MobEffect::Levitation)
         && EquipmentSlot::values().iter().any(|slot| {
             inv.get_equipment(*slot).is_some_and(|stack| {
+                // LivingEntity.canGlideUsing()
                 stack.get_component::<components::Glider>().is_some()
                     && stack.get_component::<components::Equippable>().is_some_and(
-                        // TODO: check eltra durability
-                        |equippable| equippable.slot == *slot/* && stack.nextDamageWillBreak() */
+                        |equippable| equippable.slot == *slot
                     )
+                    && !next_damage_will_break(stack)
             })
         })
 
         && !physics.is_in_water()
+}
+
+// ItemStack.nextDamageWillBreak()
+fn next_damage_will_break(stack: &ItemStack) -> bool {
+    let Some(max_damage) = stack.get_component::<components::MaxDamage>() else {
+        return false;
+    };
+    let Some(damage) = stack.get_component::<components::Damage>() else {
+        return false;
+    };
+    // ItemStack.isDamageableItem()
+    if stack.get_component::<components::Unbreakable>().is_some() {
+        return false;
+    }
+    damage.amount >= max_damage.amount - 1
 }
 
 // LocalPlayer.isMovingSlowly
@@ -747,8 +773,8 @@ pub fn update_pose(
             continue;
         }
 
-        // TODO: implement everything else from getDesiredPose: sleeping, swimming,
-        // fallFlying, spinAttack
+        // TODO: implement everything else from getDesiredPose: sleeping,
+        // swimming, fallFlying, spinAttack
         let desired_pose = if physics_state.trying_to_crouch {
             Pose::Crouching
         } else if **fall_flying {

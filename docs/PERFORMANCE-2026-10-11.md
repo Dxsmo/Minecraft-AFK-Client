@@ -35,9 +35,9 @@ und `loading-*-after.json`.
   Änderungen haben einen Timeout von 20 Sekunden (Logout: drei Sekunden).
   Reguläre Account-, Benutzer- und Einstellungsdaten
   werden nicht als fertige GET-Antworten gecacht.
-- **Polling:** Verdienst, ausgeklappte Detailgraphen, Item-Werte und Minigame-Daten
+- **Polling:** Verdienst und ausgeklappte Detailgraphen
   pausieren im Hintergrund und aktualisieren sich beim Zurückkehren. Der nächste
-  Timer beginnt nach Abschluss des vorherigen Abrufs. Langsame Minigame-Antworten
+  Timer beginnt nach Abschluss des vorherigen Abrufs. Langsame Antworten
   werden damit nicht mehr alle fünf Sekunden abgebrochen und neu gestartet.
 - **Live-Dashboard:** Meldungen innerhalb von 25 ms werden pro Account gebündelt.
   Der Batch prüft Sitzung und aktuelle Zuweisungen einmal. Es gibt keinen Cache
@@ -47,14 +47,14 @@ und `loading-*-after.json`.
 - **Schreiblast:** Lebens-/Hungerwertänderungen schreiben keinen unveränderten
   Lifecycle-Status in SQLite. Tatsächliche Statuswechsel werden in Reihenfolge
   gespeichert; ein fehlgeschlagener Schreibvorgang kann erneut versucht werden.
-  Konsolen- und Sniper-Logs werden innerhalb von 25 ms gesammelt, in Paketen von
+  Konsolenlogs werden innerhalb von 25 ms gesammelt, in Paketen von
   maximal 200 Zeilen gespeichert und einmal pro betroffenem Account bereinigt.
   Pro Writer läuft nur eine Transaktion; zwischen Paketen erhalten interaktive
   Abfragen Gelegenheit, die Datenbank zu nutzen. Die Persistenz-Promise erfüllt
   sich erst nach dem Commit. Fehler einzelner gelöschter Accounts verlieren keine
   Zeilen anderer Accounts. Beim geordneten Shutdown werden Restpakete geschrieben.
 - **SQLite:** Neue Indizes unterstützen Account-Sortierung, case-insensitive
-  Benutzersuche, Sitzungs- und Verkaufsaufbewahrung und Sniper-Logs. Der Index für
+  Benutzersuche, Sitzungs- und Verkaufsaufbewahrung. Der Index für
   Verkaufsabfragen enthält den Betrag, sodass SQLite die Aggregation aus dem
   Index lesen kann. Kleine Berechtigungsprüfungen laden keine vollständigen
   Account-Beziehungen mehr. Öffentliche Texturen prüfen keine unnötige Sitzung.

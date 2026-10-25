@@ -101,8 +101,6 @@ pub enum Command {
     /// Send a raw chat message or slash command (Node.js normalizes the `/`
     /// prefix before sending here).
     Chat { text: String },
-    /// Low-priority background scan command.
-    BackgroundChat { text: String },
     /// Update account automation settings live.
     Configure(BehaviorConfig),
     /// Clean a nearby spawner as a foreground one-shot task: right-click a
@@ -166,24 +164,7 @@ pub enum OutEvent {
     /// Periodic liveness signal so the Node supervisor can distinguish a hung
     /// bot from a healthy but idle one.
     Heartbeat,
-    /// Emitted by `namesniper-bot` right before each rename request.
-    RenameAttempt {
-        desired_name: String,
-        /// Which worker/proxy strand issued this attempt (e.g. "Direkt",
-        /// "Proxy 1"); `None` for single-strand mode.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        source: Option<String>,
-    },
-    /// Emitted by `namesniper-bot` after a rename request completes.
-    RenameResult {
-        success: bool,
-        message: String,
-        /// The account's current in-game name, when known (set on success).
-        current_name: Option<String>,
-        /// Which worker/proxy strand produced this result.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        source: Option<String>,
-    },
+
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -191,49 +172,4 @@ pub struct SellMultiplier {
     pub name: String,
     pub multiplier: String,
     pub progress: String,
-}
-
-/// The first stdin line for the `namesniper-bot` binary (see `bin/namesniper.rs`).
-/// Deliberately separate from [`Config`]: the name sniper never joins a
-/// server, so none of the server/behavior fields apply.
-#[derive(Debug, Clone, Deserialize)]
-pub struct SniperConfig {
-    /// Microsoft account email used to authenticate (and as the on-disk
-    /// token cache key).
-    pub email: String,
-    /// Directory used to persist the Microsoft auth token cache for this
-    /// specific sniper account, so re-authentication is only needed once.
-    pub cache_dir: String,
-    /// The Minecraft username to repeatedly try to claim.
-    pub desired_name: String,
-    /// Seconds to wait between two rename attempts (1-60, enforced by the
-    /// Node.js backend's validation but clamped here too as a safety net).
-    pub cooldown_seconds: u64,
-    /// When true, HTTP 429 responses trigger a Retry-After-aware backoff
-    /// instead of the normal cooldown (see `bin/namesniper.rs`).
-    #[serde(default)]
-    pub rate_limit_protection: bool,
-    /// Optional list of proxy URLs (http/https/socks5). When non-empty, one
-    /// independent rename-attempt worker is spawned per proxy so requests are
-    /// distributed across multiple outbound IPs — the per-IP rate limit then
-    /// applies separately to each, genuinely increasing coverage. Empty means
-    /// a single direct (no-proxy) worker.
-    #[serde(default)]
-    pub proxies: Vec<String>,
-}
-
-/// Live-updatable settings for a running `namesniper-bot`, sent as
-/// subsequent stdin lines so the desired name / cooldown can change without
-/// restarting the (potentially long-lived, mid-device-code-auth) process.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SniperCommand {
-    Configure {
-        desired_name: String,
-        cooldown_seconds: u64,
-        #[serde(default)]
-        rate_limit_protection: bool,
-    },
-    /// Gracefully stop the attempt loop and exit.
-    Stop,
 }

@@ -32,8 +32,6 @@ const accounts = Array.from({ length: 100 }, (_, i) => ({
   lastSellAt: null, imageUrl: null,
   createdBy: { id: 'admin', username: 'Performance', minecraftUsername: null }, assignments: [],
 }));
-let releaseSlowDashboard;
-let blockDashboard = false;
 page.on('pageerror', e => errors.push(e.message));
 await page.route('**/api/**', async route => {
   const url = new URL(route.request().url());
@@ -44,7 +42,6 @@ await page.route('**/api/**', async route => {
   if (url.pathname.endsWith('/auth/login')) data = user;
   else if (url.pathname.endsWith('/profile/dashboard')) data = { initialized: true, preferences: { accountOrder: [], blurredAccountIds: [], uploaderOrder: [], collapsedUploaderIds: [] } };
   else if (url.pathname.endsWith('/auth/me')) data = { user };
-  else if (url.pathname.endsWith('/namesniper/accounts')) data = [];
   else if (url.pathname.endsWith('/notes/note')) data = note;
   else if (url.pathname.endsWith('/notes')) data = [note];
   else if (url.pathname.endsWith('/accounts')) data = accounts;
@@ -56,15 +53,7 @@ await page.route('**/api/**', async route => {
     const end = Math.floor(Date.now() / 300_000) * 300_000;
     data = { range, bucketMs: 300_000, start: new Date(end - count * 300_000).toISOString(), end: new Date(end).toISOString(),
       total: count * 42, points: Array.from({ length: count }, (_, i) => ({ at: new Date(end - (count - i) * 300_000).toISOString(), amount: 42 })) };
-  } else if (url.pathname.endsWith('/minigames/admin/dashboard')) {
-    if (blockDashboard) await new Promise(resolve => { releaseSlowDashboard = resolve; });
-    data = { serviceStatus: 'ok', databaseStatus: 'ok', uptimeSeconds: 5, connectedClients: 0,
-      activeLobbies: 0, runningGames: 0, gamesToday: 0, websocketConnections: 0,
-      versionDistribution: {}, protocolDistribution: {}, recentErrors: [] };
   } else if (url.pathname.endsWith('/logs') || url.pathname.endsWith('/audit-logs') || url.pathname.endsWith('/notes') || url.pathname.endsWith('/users') || url.pathname.endsWith('/ip-bans')) data = [];
-  else if (url.pathname.endsWith('/item-worth')) data = { status: 'IDLE', cursor: 0, total: 0, scanNumber: 0,
-    changedCount: 0, missedCount: 0, delaySeconds: 5, accountIds: [], accounts: [], values: [], recent: [], suspicious: [],
-    registryTotal: 0, minDelaySeconds: 1, maxDelaySeconds: 3600, etaSeconds: null };
   await route.fulfill({ contentType: 'application/json', body: JSON.stringify(data) }).catch(() => {});
 });
 await page.addInitScript(({ accounts }) => {
@@ -205,7 +194,6 @@ try {
   await page.getByRole('img', { name: /Verkaufsgraph der letzten Stunde/ }).waitFor();
   const graphRequests = requests.get('/api/minecraft/accounts/bench-0/earnings/history?range=1h');
   let backgroundRequests = null;
-  let slowDashboardRequests = null;
   const pageChecks = [];
   if (verify) {
     ensure(initialAccountRequests === 1, 'Dashboard made duplicate account-list requests');
@@ -234,18 +222,7 @@ try {
     await page.evaluate(() => { Object.defineProperty(document, 'hidden', { configurable: true, value: false }); document.dispatchEvent(new Event('visibilitychange')); });
     await page.waitForTimeout(200);
     ensure(requests.get(earningsKey) > before, 'Visible tab did not refresh earnings');
-    blockDashboard = true;
-    await page.locator('a[href="/minigames"]').click();
-    await page.waitForTimeout(200);
-    ensure(releaseSlowDashboard, 'Minigames request was not started');
-    await page.clock.fastForward(11_000);
-    await page.waitForTimeout(200);
-    slowDashboardRequests = requests.get('/api/minigames/admin/dashboard');
-    ensure(slowDashboardRequests === 1, 'Slow request was repeatedly restarted by polling');
-    blockDashboard = false;
-    releaseSlowDashboard();
-    await page.getByText('Datenbank: ok', { exact: true }).waitFor();
-    for (const [path, heading] of [['/item-worth', 'Item Wert'], ['/namesniper', 'Name Sniper'], ['/users', 'Admin Panel'], ['/logs', 'Audit Logs'], ['/settings', 'Settings'], ['/notes', 'Notizen']]) {
+    for (const [path, heading] of [['/users', 'Admin Panel'], ['/logs', 'Audit Logs'], ['/settings', 'Settings'], ['/notes', 'Notizen']]) {
       await page.locator(`aside a[href="${path}"]`).click();
       await page.getByRole('heading', { name: heading, exact: true }).waitFor();
       await page.waitForTimeout(150);
@@ -266,5 +243,5 @@ try {
   console.log(JSON.stringify({ browser: await browser.version(), fixture: { accounts: 100, apiDelayMs: 100, startupLogoutDelayMs: 800 },
     loginFormMs, dashboardMs, initialAccountRequests, graphRequests, interactions,
     animation: { reducedMotion, accountMidHeight, accountOpenHeight, graphProgress, consoleProgress, consoleHeight, expandedConsoleHeight },
-    backgroundRequests, slowDashboardRequests, pageChecks, errors }, null, 2));
+    backgroundRequests, pageChecks, errors }, null, 2));
 } finally { await browser.close(); }

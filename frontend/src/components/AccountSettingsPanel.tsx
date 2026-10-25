@@ -287,7 +287,10 @@ export function AccountSettingsPanel({
                   />
                 </div>
                 <Field label="Interval">
-                  <NumberInput value={autoSellIntervalSeconds} onChange={setAutoSellIntervalSeconds} min={0.25} max={3600} step={0.05} suffix="s" />
+                  <NumberInput value={autoSellIntervalSeconds} onChange={setAutoSellIntervalSeconds} min={account.edition === "JAVA" ? 1.5 : 0.25} max={3600} step={0.05} suffix="s" />
+                  {account.edition === "JAVA" && <p className="mt-1 text-xs" style={{ color: "var(--text-subtle)" }}>
+                    Java sendet zum Schutz vor Spam-Kicks höchstens alle 1,5 Sekunden einen automatischen Verkaufsbefehl.
+                  </p>}
                 </Field>
               </>
             )}
