@@ -102,11 +102,7 @@ export function CreateAccountDialog({ onClose, onCreated }: { onClose: () => voi
                     Bedrock
                   </SegButton>
                 </div>
-                {edition === "BEDROCK" && (
-                  <p className="mt-1.5 text-xs" style={{ color: "var(--text-subtle)" }}>
-                    Bedrock support is experimental. Container features (auto-sell menus, clean-spawner) are limited — see the docs.
-                  </p>
-                )}
+
               </div>
 
               <Field label="Account name">

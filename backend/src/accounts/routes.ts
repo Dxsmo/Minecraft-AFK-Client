@@ -17,9 +17,12 @@ import { z } from "zod";
 import { decodeAccountImage, MAX_ACCOUNT_IMAGE_BASE64, replaceAccountImage } from "./images.js";
 import { accessLookupSchema, accessLookupRateLimit, findAccessUser } from "../users/accessLookup.js";
 import { getMinecraftAvatar } from "../users/minecraftAvatar.js";
+import { accountItems, getAccountItem } from "../assets/accountItems.js";
 
 export default async function accountsRoutes(app: FastifyInstance) {
   app.addHook("preHandler", app.requireAuth);
+
+  app.get("/api/minecraft/account-items", async (_req, reply) => reply.send(accountItems));
 
   /**
    * Guard for admin-only account features (spawner/behavior tuning). Normal users work with a reduced feature set,
@@ -82,9 +85,12 @@ export default async function accountsRoutes(app: FastifyInstance) {
     if (!(await accountsService.hasAccountAccess(req.session!, id))) {
       return reply.code(404).send({ error: "Account not found" });
     }
-    const body = parseOrReject(z.object({ image: z.string().max(MAX_ACCOUNT_IMAGE_BASE64) }).strict(), req.body, reply);
+    const body = parseOrReject(z.union([
+      z.object({ image: z.string().max(MAX_ACCOUNT_IMAGE_BASE64) }).strict(),
+      z.object({ itemId: z.string().min(1).max(128) }).strict(),
+    ]), req.body, reply);
     if (!body) return;
-    const data = decodeAccountImage(body.image);
+    const data = "itemId" in body ? await getAccountItem(body.itemId) : decodeAccountImage(body.image);
     if (!data) return reply.code(400).send({ error: "Invalid account image (PNG, up to 256 × 256 pixels)" });
     const update = await replaceAccountImage(id, data);
     await recordAuditLog({ userId: req.session!.user.id, action: "ACCOUNT_IMAGE_UPDATE", targetType: "MinecraftAccount", targetId: id });

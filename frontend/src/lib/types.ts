@@ -82,6 +82,7 @@ export interface MinecraftAccount {
   edition: Edition;
   authType: AuthType;
   crouchEnabled: boolean;
+  autoButton: "OFF" | "LEFT" | "RIGHT";
   autoReconnect: boolean;
   notes: string;
   autoSellEnabled: boolean;

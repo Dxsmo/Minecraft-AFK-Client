@@ -12,7 +12,7 @@ function item(index: number): BedrockItem {
   } } } } };
 }
 function setup(autosell = true) {
-  const sender = { setSneak: vi.fn(), tickInput: vi.fn(), packet: vi.fn(() => true), command: vi.fn(), send: vi.fn() };
+  const sender = { setSneak: vi.fn(), tickInput: vi.fn(), clearMouseActions: vi.fn(), packet: vi.fn(() => true), command: vi.fn(), send: vi.fn() };
   const behavior = new BehaviorState({ host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "",
     autosell_enabled: autosell, autosell_interval_seconds: 0.25 }, sender as unknown as BotSender);
   behavior.markSpawned(); vi.advanceTimersByTime(300);

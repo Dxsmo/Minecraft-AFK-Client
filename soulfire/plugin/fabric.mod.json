@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "afk-service-controls",
+  "version": "1.0.0",
+  "name": "AFK Service Controls",
+  "description": "Persistent native mouse and sneak input for the AFK website.",
+  "environment": "client",
+  "license": "AGPL-3.0-or-later",
+  "entrypoints": {
+    "main": [
+      "de.afkservice.SoulFireControls"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "26.3",
+    "soulfire": "2.10.6"
+  },
+  "mixins": [
+    "afk-service.mixins.json"
+  ]
+}

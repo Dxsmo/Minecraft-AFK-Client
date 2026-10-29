@@ -1,0 +1,204 @@
+# Historical client implementation notes
+
+This document describes the retired Azalea/Prismarine clients. It is retained
+as reference; active behavior is described in ../SOULFIRE-MIGRATION.md.
+
+# Known technical limitations
+
+This project drives Minecraft bots with the [Azalea](https://github.com/azalea-rs/azalea)
+Rust library (pinned to revision `0d38e0dc`). Two requested features cannot be
+implemented on top of Azalea as it exists today. Rather than shipping a
+half-working or faked implementation, they are documented here together with
+what *would* be required to add them later.
+
+## 1. Minecraft Bedrock accounts (partially supported)
+
+**Status: implemented via a separate Node bot, but not yet verified against a
+live Bedrock server.**
+
+Azalea implements the **Java Edition** network protocol only (RakNet/UDP Bedrock
+is a different transport it does not speak). Rather than force Bedrock into
+Azalea, Bedrock accounts run through a **second, independent bot subprocess**
+built on the [`bedrock-protocol`](https://github.com/PrismarineJS/bedrock-protocol)
+Node library. It speaks the **same NDJSON contract** as the Rust Java bot, so the
+entire rest of the app (auth, accounts, console, WebSocket, behaviors config,
+dashboard) is edition-agnostic.
+
+### How it is wired
+
+- **Data model** — `MinecraftAccount.edition` (`JAVA` default) is now exposed on
+  account creation. It is write-once (not editable afterwards).
+- **Connection layer** — `MinecraftClient` picks the bot launcher by edition:
+  Java → the compiled `azalea-bot` binary; Bedrock → `node dist/bedrock-bot/index.js`.
+  `ClientManager` sets `edition` in the runtime config.
+- **Bedrock bot** — `backend/src/bedrock-bot/` (protocol/send/behaviors/index)
+  mirrors the Rust bot: lifecycle, reconnect handoff, chat,
+  auto-sell (owned container + acknowledged stack transfers), held crouch
+  input, and centralized sell chat parsing.
+
+### What works vs. what is limited on Bedrock
+
+- **Implemented:** connect/login (offline + Microsoft device-code), chat/console,
+  commands, interval auto-sell, crouch, persistent mouse input, sell chat parsing.
+- **Connection:** always uses the configured public port instead of following
+  a proxy's advertised internal port. Discovery, Microsoft authentication,
+  transport, login and world initialization have separate bounded deadlines;
+  cached-token refresh has at least 120 seconds, and device-code sign-in uses
+  the supplied code expiry. After authentication the normal connect deadline
+  resumes. Console messages identify each connection stage and explicit
+  Bedrock login refusals (including incompatible protocol versions).
+- **Network NBT array decoding:** network `IntArray`/`LongArray` elements use
+  ZigZag VarInts, just like scalar network Int/Long tags. `prismarine-nbt` 2.8.0
+  read them as fixed-width little-endian values, which consumed bytes belonging
+  to the following tag and could report `Invalid tag: 115 > 20` on valid data.
+  `networkNbt.ts` corrects reading, writing and sizing in the existing network
+  codec contexts before connecting. Little-endian item/file NBT and big-endian
+  Java NBT codecs keep their original array encodings. The reference behavior is
+  defined by Cloudburst's [NBT array reader](https://github.com/CloudburstMC/NBT/blob/master/src/main/java/org/cloudburstmc/nbt/NBTInputStream.java)
+  and [network integer stream](https://github.com/CloudburstMC/NBT/blob/master/src/main/java/org/cloudburstmc/nbt/util/stream/NetworkDataInputStream.java).
+  An independently encoded, valid 125-byte block-entity fixture reproduces the
+  exact tag-115 error before the correction and decodes/re-encodes fully after
+  it, including the following `CustomName`. It matches the reported packet
+  type, size and error; the user's original payload was not available, so it
+  does not prove that every observed warning had this cause.
+- **NBT recovery:** after spawn, an `Invalid tag: ... > 20` decode error in an
+  explicitly allowed game packet no longer terminates the client. The entire
+  failed packet is discarded; following packets in the batch still run, including
+  latency replies. World-initialization errors, item-registry errors, decoder
+  errors in unrecognized packets and other failures remain terminal.
+  Warnings report the packet name/ID, size,
+  client version and wire protocol, with no raw packet or authentication dumps.
+  Repeated warnings are limited to one per 30 seconds in each of the cosmetic
+  and inventory groups. This is recovery from unreadable server data, not a new
+  interpretation of invalid NBT tags; it does not establish which packet caused
+  a historical log that only said `undefined`.
+  The batch splitter also rejects incomplete lengths/payloads before decoding,
+  preventing the pinned library from passing an uninitialized buffer tail to NBT.
+- **Crouch:** emits `player_auth_input` at 20 Hz with held sneak flags and the
+  server's own player position; acknowledges teleport input and reasserts sneak
+  after transfers and HugoSMP home/TPA confirmations. Only the local player's
+  server metadata confirms crouch. Transfers/negative feedback and explicit
+  restart checks reassert sneak without sending a release. Home/TPA and
+  position teleports also schedule a silent extra check after three seconds.
+  Packet failures keep the resync pending for retry.
+- **Auto button:** mutually exclusive Off/Left/Right account setting, restored
+  on reconnect. Right holds item use and repeats block interactions using the
+  game's use delay, without synthetic release cycles. Left mines the targeted
+  block and attacks targeted entities; game/server cooldowns still apply.
+  Container screens consume gameplay input until they close. Bedrock uses
+  current inventory stacks, nearby network subchunks/full level chunks and
+  entity positions; unknown world data is not treated as transparent air.
+  Unsupported/custom chunk layouts remain unavailable for mouse interaction.
+  Java uses Azalea's mining, targeting and item-use plugins. Neither edition's
+  new mouse input has yet been verified against a live Minecraft server.
+- **Auto-sell:** associates a chest-style container with its own `/sell` request,
+  waits for container/inventory content, and moves occupied inventory/hotbar
+  slots into empty container slots. Geyser chest titles also identify late or
+  startup sell menus; manual GUIs remain excluded. Authoritative servers use `item_stack_request`
+  with current stack IDs and matching response acknowledgements; legacy servers
+  use `inventory_transaction` and inventory updates. Armor/offhand and foreign
+  GUIs are excluded. Each cycle handles a bounded initial slot list; subsequent
+  pickups are handled by the next cycle. Missing data/rejected requests time out,
+  and manual commands can interrupt immediately. Manual commands pause automation
+  for five seconds; named delayed sell replies are closed without touching a
+  subsequently opened home menu. Custom form-based sell menus
+  are not implemented.
+- **Inventory recovery:** a failed inventory NBT packet invalidates cached
+  stacks and pending transfers, closes only an owned sell menu, and suspends
+  automatic sales. Slot deltas, partial contents and late acknowledgements cannot
+  resume sales; a successfully decoded full player-inventory snapshot is required.
+  Commands and input continue normally. If the server never resends a full
+  inventory, AutoSell remains paused rather than transferring stale stacks.
+  Valid Geyser GUI-title NBT now uses the packet's actual `position` field;
+  compatibility with `coordinates` is retained. An unreadable block-entity
+  packet clears cached titles before later menus can use them.
+- **Regression checks:** real installed Bedrock codecs for 1.21.50 and 1.21.130
+  verify sneak, stack transfers, close ordering, timeout recovery, manual command
+  priority, and selling during continuous join-time inventory updates.
+  Recovery tests additionally use the actual client/codec/batch reader for
+  1.21.50, 1.21.130, 1.26.40 and 1.26.51. A raw NBT fixture reproduces tag 115,
+  followed by latency/health packets in compressed plaintext and encrypted
+  batches; the next encrypted batch verifies that cipher/checksum state remains
+  synchronized. Tests cover invalid inventory data, fresh snapshot recovery,
+  manual commands, critical registry errors, warning limits and truncated frames.
+  Network-array tests cover independent expected bytes across all four versions,
+  signed 32/64-bit extremes, empty/nested arrays, later UTF-8 string tags,
+  rejection of malformed lengths/elements, unchanged item/file NBT, and actual
+  menu-title delivery without invoking NBT recovery.
+  `packetRecovery.ts` deliberately patches the pinned library's private Framer
+  API before creating a client; re-run these tests when changing that dependency.
+- **Not available on Bedrock:** `clean_spawner` (emits a warning) and Live View
+  screenshots (headless, same as Java — see §2).
+
+### Build note (arm64)
+
+`bedrock-protocol` pulls in `raknet-native`, which ships prebuilds for x64 only.
+On arm64 (Raspberry Pi 5, Apple-Silicon Docker) it compiles from source, so the
+backend image installs `cmake` + a C++ toolchain in the builder stage. This is
+already handled in `backend/Dockerfile` and verified building on arm64.
+
+### Caveat
+
+The Bedrock bot compiles, boots inside the arm64 production image, loads native
+RakNet, and fails gracefully (`connection_failed`) against an unreachable host —
+but it has **not** been runtime-tested against a real Bedrock server. A live
+connect should be verified before relying on Bedrock accounts in production.
+
+The Bedrock input/GUI implementation follows Geyser's
+[PlayerAuthInput handling and cached Java shift state](https://github.com/GeyserMC/Geyser/blob/master/core/src/main/java/org/geysermc/geyser/session/cache/InputCache.java)
+and [container title transport](https://github.com/GeyserMC/Geyser/blob/master/core/src/main/java/org/geysermc/geyser/inventory/holder/BlockInventoryHolder.java).
+The pinned local packet schemas and codec regression tests define the supported
+wire shapes; these checks do not substitute for a live HugoSMP connection.
+
+## Fixed view distance and server simulation distance
+
+Java and Bedrock accounts always request a view distance of **6 chunks**.
+This is fixed in the bot code, with no per-account or website override.
+Java sends `ClientInformation.view_distance = 6`; Bedrock sets both the
+`viewDistance` option and the client property read by the installed library's
+`request_chunk_radius` handler. The server can impose a lower actual radius.
+
+**Simulation distance cannot be locked to 6 by this client.** Neither the Java
+client settings packet nor Bedrock's chunk-radius request exposes a client
+setting that changes the remote server's simulation radius. Java server
+operators configure `simulation-distance=6`; vanilla Bedrock server operators
+configure `tick-distance=6`. On HugoSMP, this requires the server operator;
+the website does not administer that server. There is no placeholder setting
+claiming a simulation distance that the client cannot enforce.
+
+References: [Java simulation-distance server property](https://feedback.minecraft.net/hc/en-us/articles/4409891990285-Minecraft-Java-Edition-Snapshot-21w38a),
+[Bedrock server properties](https://learn.microsoft.com/en-us/minecraft/creator/documents/bedrockserver/server-properties?view=minecraft-bedrock-experimental),
+[Bedrock chunk-radius packet](https://mojang.github.io/bedrock-protocol-docs/1.26.51/packets/request-chunk-radius-packet/).
+
+## 2. Live View / automatic screenshots (not possible)
+
+**Status: not possible with the current stack.**
+
+Azalea is a **headless** client: it maintains world/entity state and the network
+connection, but has **no renderer, framebuffer, camera, or GPU pipeline**. The
+in-game screenshot keys (`F2`) and perspective toggle (`F5`) are features of the
+*official rendering client* — they do not exist in a headless bot, because there
+is no rendered frame to capture and no third-person camera to switch to.
+
+Consequences:
+
+- There is nothing to capture with `F2`, and no camera to cycle with `F5`.
+- Producing an actual image would require rendering the world ourselves
+  (loading block/entity models and textures and rasterising a scene from the
+  bot's position) — effectively writing a Minecraft renderer. That is far beyond
+  the scope of this service and would not reflect the "real client view" anyway.
+
+### What is provided instead
+
+The live, real bot state that *is* available is already surfaced elsewhere in
+the UI and stays in sync with the server:
+
+- Live console (chat + server messages + events) via WebSocket.
+- Live status: connection state, sign-in prompts and connection errors.
+  Health/food telemetry and reconnect-attempt counters have been removed.
+
+If a rendered Live View is ever required, the realistic path is an **external
+renderer**: run a separate, GPU-capable headless renderer (e.g. a containerised
+official client or a project like `chunky`) fed by the bot's position/world,
+and upload its output. That is a standalone component, not something Azalea can
+do in-process.

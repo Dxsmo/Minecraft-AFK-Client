@@ -261,6 +261,8 @@ pub struct BehaviorState {
     /// Re-send held crouch after a world/position transition has settled.
     crouch_resync_pending: bool,
     next_crouch_check_at: Instant,
+    teleport_crouch_checks: VecDeque<Instant>,
+    auto_button: crate::auto_button::HeldButton,
 }
 
 impl BehaviorState {
@@ -269,6 +271,7 @@ impl BehaviorState {
         Self {
             config: BehaviorConfig {
                 crouch_enabled: config.crouch_enabled,
+                auto_button: config.auto_button,
                 autosell_enabled: config.autosell_enabled,
                 autosell_interval_seconds: config.autosell_interval_seconds,
                 autosell_command: config.autosell_command.clone(),
@@ -303,6 +306,8 @@ impl BehaviorState {
             last_heartbeat_at: now,
             crouch_resync_pending: false,
             next_crouch_check_at: now,
+            teleport_crouch_checks: VecDeque::new(),
+            auto_button: Default::default(),
         }
     }
 
@@ -371,6 +376,9 @@ impl BehaviorState {
             return false;
         }
         self.command_budget.record();
+        if matches!(text.split_whitespace().next(), Some("/tpaccept" | "/tpyes")) {
+            self.schedule_teleport_crouch_check(now);
+        }
         self.guard_after_chat(now, is_teleport_command(&text));
         // Manual GUIs stay open until the server closes them, a teleport
         // completes, or the user issues another command. /home may open a GUI.
@@ -549,6 +557,7 @@ impl BehaviorState {
     /// these packets cover /home, TPA and same-world teleports that do not emit
     /// another Login/Spawn pair.
     pub fn on_position_sync(&mut self, bot: &Client) {
+        self.schedule_teleport_crouch_check(Instant::now());
         if self.awaiting_respawn_position {
             // A position packet alone does not mean the destination chunk or
             // the player inventory has finished loading.
@@ -572,17 +581,22 @@ impl BehaviorState {
         self.crouch_resync_pending = true;
     }
 
-    pub fn check_crouch(&mut self, bot: &Client) {
+    pub fn check_crouch(&mut self, _bot: &Client) {
         if !self.config.crouch_enabled {
             return;
         }
-        let status = bot
-            .component::<azalea::entity::metadata::AbstractEntityShiftKeyDown>()
-            .map(|flag| if **flag { "bestätigt" } else { "nicht aktiv" })
-            .unwrap_or("noch nicht bestätigt");
-        emit(&OutEvent::BehaviorLog { message: format!("Crouch-Check: Serverstatus {status}; Sneak wird erneut angefordert") });
         self.crouch_resync_pending = true;
         self.next_crouch_check_at = Instant::now();
+    }
+
+    fn schedule_teleport_crouch_check(&mut self, now: Instant) {
+        let deadline = now + Duration::from_secs(3);
+        if self.teleport_crouch_checks.back().is_some_and(|previous|
+            deadline.saturating_duration_since(*previous) < Duration::from_millis(50)) {
+            return;
+        }
+        self.teleport_crouch_checks.push_back(deadline);
+        if self.teleport_crouch_checks.len() > 64 { self.teleport_crouch_checks.pop_front(); }
     }
 
     /// Initial join, respawn and proxy/world switches reset the server's input.
@@ -615,6 +629,13 @@ impl BehaviorState {
     pub fn on_tick(&mut self, bot: &Client) {
         let now = Instant::now();
         self.recover_loaded_world(bot, now);
+        self.auto_button.tick(bot, self.config.auto_button,
+            self.spawned && bot.component::<InGameState>().is_ok()
+                && bot.component::<InLoadedChunk>().is_ok());
+        while self.spawned && self.teleport_crouch_checks.front().is_some_and(|deadline| now >= *deadline) {
+            self.teleport_crouch_checks.pop_front();
+            self.check_crouch(bot);
+        }
         // Cancel menu interactions at the pause boundary before any more sell clicks.
         if self.sell_paused(now)
             && (!matches!(self.autosell_phase, AutoSellPhase::Idle) || self.active_task.is_some())
@@ -1451,7 +1472,7 @@ impl BehaviorState {
     pub fn on_chat(&mut self, bot: &Client, message: &str) {
         if is_teleport_success_message(message) {
             self.crouch_resync_pending = true;
-            self.next_crouch_check_at = Instant::now();
+            self.schedule_teleport_crouch_check(Instant::now());
             // The chat can precede the actual position packet. Keep checking
             // held input afterwards even if the local input cache stays true.
         }
@@ -1572,6 +1593,7 @@ fn is_teleport_success_message(message: &str) -> bool {
     (plain.starts_with("Du wurdest zu deinem Home ") && plain.ends_with(" teleportiert!"))
         || (plain.ends_with(" hat deine Teleportations-Anfrage angenommen!")
             && !plain.contains(':'))
+        || (plain.starts_with("Du hast die Teleportations-Anfrage von ") && plain.ends_with(" angenommen!"))
 }
 
 /// Server reply emitted while a proxy is persisting/restoring inventory data.
@@ -1684,6 +1706,7 @@ fn find_spawner_in_reach(bot: &Client) -> Option<BlockPos> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -3010,6 +3033,34 @@ mod tests {
         }
         assert_eq!(*packets.lock(), vec![true, true, true, true]);
         assert!(client.crouching());
+    }
+
+    #[test]
+    fn teleport_check_waits_three_seconds_and_reasserts_without_releasing() {
+        let (client, mut state, packets) = crouch_client(true);
+        state.spawned = true;
+        state.on_chat(&client, "Du hast die Teleportations-Anfrage von Steve angenommen!");
+        let deadline = *state.teleport_crouch_checks.front().unwrap();
+        assert!(deadline.duration_since(Instant::now()) > Duration::from_millis(2990));
+        state.on_tick(&client);
+        send_input(&client);
+        assert_eq!(state.teleport_crouch_checks.front(), Some(&deadline));
+        // Duplicate position notifications cannot postpone the scheduled check.
+        state.on_position_sync(&client);
+        assert_eq!(state.teleport_crouch_checks.front(), Some(&deadline));
+        state.automation_ready_at = Instant::now();
+        state.next_crouch_check_at = Instant::now() + Duration::from_secs(60);
+        state.crouch_resync_pending = false;
+        state.teleport_crouch_checks = VecDeque::from([Instant::now() - Duration::from_millis(1)]);
+        state.on_tick(&client);
+        send_input(&client);
+        assert!(state.teleport_crouch_checks.is_empty());
+        assert_eq!(*packets.lock(), vec![true, true]);
+        let now = Instant::now();
+        state.schedule_teleport_crouch_check(now);
+        state.schedule_teleport_crouch_check(now + Duration::from_secs(1));
+        assert_eq!(state.teleport_crouch_checks.iter().copied().collect::<Vec<_>>(),
+            vec![now + Duration::from_secs(3), now + Duration::from_secs(4)]);
     }
 
     #[test]

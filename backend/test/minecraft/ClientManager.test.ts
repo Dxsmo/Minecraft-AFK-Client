@@ -50,3 +50,15 @@ describe("restart all online Minecraft accounts", () => {
     expect(restart).toHaveBeenCalledOnce();
   });
 });
+
+it("awaits every shared-JVM bot stop before shutdown completes", async () => {
+  const manager = new ClientManager();
+  const one = manager.register(account("stop-one")), two = manager.register(account("stop-two"));
+  let finishOne!: () => void, finishTwo!: () => void, finished = false;
+  const first = vi.spyOn(one, "shutdown").mockImplementation(() => new Promise<void>(resolve => { finishOne = resolve; }));
+  const second = vi.spyOn(two, "shutdown").mockImplementation(() => new Promise<void>(resolve => { finishTwo = resolve; }));
+  const shutdown = manager.shutdownAll().then(() => { finished = true; });
+  expect(first).toHaveBeenCalledOnce(); expect(second).toHaveBeenCalledOnce();
+  finishOne(); await Promise.resolve(); expect(finished).toBe(false);
+  finishTwo(); await shutdown; expect(finished).toBe(true);
+});

@@ -6,4 +6,4 @@ data
 .env
 .env.*
 .git
-rust-bot/target
+rust-bot

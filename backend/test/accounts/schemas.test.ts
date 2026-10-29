@@ -11,6 +11,7 @@ describe("slash-only Minecraft commands", () => {
 });
 
 const removedAutomation = {
+  autoAddOtherEdition: true, linkedAccountId: "retired-link",
   autoCommandEnabled: true, autoCommandText: "/home farm",
   autoCommandIntervalMinutes: 10, autoCommandSpanEnabled: true,
   autoCommandSpanMinSeconds: 300, autoCommandSpanMaxSeconds: 3600,
@@ -18,6 +19,17 @@ const removedAutomation = {
   tpAutoEnabled: true, tpAutoAllowlist: ["Steve"],
   balanceEnabled: true, balanceCommand: "/bal", homes: ["farm"],
 };
+
+describe("persistent mutually exclusive mouse input", () => {
+  it.each(["OFF", "LEFT", "RIGHT"])("accepts %s on creation and live updates", autoButton => {
+    expect(createAccountSchema.parse({ name: "Bot", serverHost: "localhost", credentialsSecret: "bot@example.com", autoButton }).autoButton).toBe(autoButton);
+    expect(updateAccountSchema.parse({ autoButton })).toEqual({ autoButton });
+  });
+  it("defaults off and rejects simultaneous or unknown buttons", () => {
+    expect(createAccountSchema.parse({ name: "Bot", serverHost: "localhost", credentialsSecret: "bot@example.com" }).autoButton).toBe("OFF");
+    for (const autoButton of [["LEFT", "RIGHT"], "BOTH", "left", null]) expect(updateAccountSchema.safeParse({ autoButton }).success).toBe(false);
+  });
+});
 
 describe("removed account automation", () => {
   it("ignores auto-home, auto-TPA, homes and balance fields on updates for all roles", () => {

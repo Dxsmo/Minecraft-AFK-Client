@@ -9,6 +9,7 @@ import { authorizeSocket } from "./authorization.js";
 import { prisma } from "../database/prisma.js";
 import type { SessionContext } from "../auth/session.js";
 import type { ClientStatusSnapshot } from "../minecraft/types.js";
+import { LiveCamStreams } from "../soulfire/liveCam.js";
 
 function batchLiveEvents(socket: import("ws").WebSocket, connection: NonNullable<ReturnType<typeof authorizeSocket>>) {
   let messages: unknown[] = [];
@@ -33,6 +34,42 @@ function batchLiveEvents(socket: import("ws").WebSocket, connection: NonNullable
 
 /** Cookie-authenticated website sockets require a trusted Origin (app.ts). */
 export default async function registerWebsocketRoutes(app: FastifyInstance) {
+  const cameras = new LiveCamStreams();
+  app.addHook("onClose", () => cameras.close());
+
+  app.get("/ws/accounts/:id/camera", { websocket: true }, (socket, req) => {
+    const { id: accountId } = req.params as { id: string };
+    const connection = authorizeSocket(socket, req, { accountId });
+    if (!connection) return;
+    const { run, send, subscribe } = connection;
+    // Complete the current account permission check before touching SoulFire.
+    run(() => {
+      if (socket.readyState !== socket.OPEN) return;
+      if (clientManager.get(accountId)?.getStatus().status !== "ONLINE") {
+        send({ type: "offline" }); socket.close(1000, "Account offline"); return;
+      }
+      send({ type: "loading" });
+      // Drop frames for slow clients instead of queuing renders or image data.
+      let pending = false;
+      subscribe(cameras.subscribe(accountId, {
+        frame: frame => {
+          if (pending || socket.readyState !== socket.OPEN || socket.bufferedAmount > 512 * 1024) return;
+          pending = true;
+          run(() => { try { send(frame); } finally { pending = false; } });
+        },
+        error: error => {
+          req.log.warn({ err: error, accountId }, "Live cam stream stopped");
+          run(() => { send({ type: "error", message: "Die Live Cam konnte nicht geladen werden. Bitte erneut versuchen." }); socket.close(1011, "Camera unavailable"); });
+        },
+      }));
+      subscribe(clientManager.onStatusEvent(status => {
+        if (status.id === accountId && status.status !== "ONLINE") {
+          send({ type: "offline" }); socket.close(1000, "Account offline");
+        }
+      }));
+    });
+  });
+
   app.get("/ws/accounts/:id", { websocket: true }, (socket, req) => {
     const { id: accountId } = req.params as { id: string };
     const connection = authorizeSocket(socket, req, { accountId });

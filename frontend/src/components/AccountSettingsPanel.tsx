@@ -23,6 +23,7 @@ export function AccountSettingsPanel({
   const compact = useCompactLayout();
   const [users, setUsers] = useState<AccessUser[]>(() => account.assignments.map((assignment) => assignment.user));
   const [crouchEnabled, setCrouchEnabled] = useState(account.crouchEnabled);
+  const [autoButton, setAutoButton] = useState(account.autoButton ?? "OFF");
   const [displayName, setDisplayName] = useState(account.displayName ?? "");
   const [serverHost, setServerHost] = useState(account.serverHost);
   const [serverPort, setServerPort] = useState(account.serverPort);
@@ -54,6 +55,7 @@ export function AccountSettingsPanel({
       await api.patch(`/minecraft/accounts/${account.id}`, {
         displayName,
         crouchEnabled,
+        autoButton,
         autoReconnect,
         serverHost,
         serverPort,
@@ -114,6 +116,7 @@ export function AccountSettingsPanel({
       on: crouchEnabled,
     },
     { id: "autosell", label: "Auto-sell", icon: "tag", on: autoSellEnabled },
+    { id: "autobutton", label: "Auto button", icon: "activity", on: autoButton !== "OFF" },
     {
       id: "spawner",
       label: "Spawner",
@@ -258,6 +261,31 @@ export function AccountSettingsPanel({
                 <Toggle label="Crouch" description="Continuously sneak while connected." checked={crouchEnabled} onChange={setCrouchEnabled} />
                 <Toggle label="Auto-reconnect" checked={autoReconnect} onChange={setAutoReconnect} />
               </>
+            )}
+
+            {active.id === "autobutton" && (
+              <fieldset className="space-y-3">
+                <legend className="label">Maustaste dauerhaft halten</legend>
+                <p className="text-xs" style={{ color: "var(--text-subtle)" }}>
+                  Bleibt nach Teleports, Weltwechseln und erneuter Verbindung aktiv.
+                </p>
+                <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Auto button">
+                  {([
+                    ["OFF", "Aus"],
+                    ["RIGHT", "Rechter Mausklick"],
+                    ["LEFT", "Linker Mausklick"],
+                  ] as const).map(([value, label]) => (
+                    <label key={value} className="cursor-pointer rounded-lg border px-3 py-3 text-center text-sm focus-within:ring-2"
+                      style={{ borderColor: autoButton === value ? "var(--accent)" : "var(--border)",
+                        backgroundColor: autoButton === value ? "var(--accent-soft)" : "transparent",
+                        color: autoButton === value ? "var(--accent)" : "var(--text)" }}>
+                      <input type="radio" name="auto-button" value={value} checked={autoButton === value}
+                        onChange={() => setAutoButton(value)} className="sr-only" />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
             )}
 
             {active.id === "autosell" && (

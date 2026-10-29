@@ -17,6 +17,7 @@ mod behaviors;
 mod msauth;
 mod mspassword;
 mod network_mode;
+mod auto_button;
 mod protocol;
 #[cfg(test)]
 mod protocol_compatibility;

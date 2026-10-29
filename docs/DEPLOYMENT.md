@@ -90,7 +90,7 @@ curl -s http://localhost/api/health
 # {"status":"ok"}
 ```
 
-The stack is configured with `restart: unless-stopped`, so both
+The stack is configured with `restart: unless-stopped`, so all three
 containers automatically start again after a Raspberry Pi reboot (as long
 as the Docker daemon itself is enabled, which `get.docker.com` does by
 default: `sudo systemctl enable docker`).
@@ -196,16 +196,23 @@ docker compose ps
 
 ## 8. Non-Docker fallback (systemd)
 
-If you'd rather not use Docker:
+If you'd rather not use Docker, install Java 25 first and prepare the dedicated
+runtime/input extension as described in [SoulFire migration](SOULFIRE-MIGRATION.md).
+The systemd units expect the JAR in `soulfire-runtime/`, the data directory in
+`soulfire-data/`, and both owned/writable by `afkservice`. In `backend/.env` set
+`SOULFIRE_URL=http://127.0.0.1:38765` and
+`SOULFIRE_SECRET_KEY_FILE=/opt/afk-service/soulfire-data/secret-key.bin`.
+
 
 ```bash
 cd /opt/afk-service/backend
-npm ci --omit=dev
+npm ci
 npm run build
+npm prune --omit=dev
 npx prisma migrate deploy
-sudo cp ../scripts/systemd/afk-backend.service /etc/systemd/system/
+sudo cp ../scripts/systemd/afk-backend.service ../scripts/systemd/afk-soulfire.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now afk-backend
+sudo systemctl enable --now afk-soulfire afk-backend
 sudo systemctl status afk-backend
 ```
 
@@ -218,87 +225,50 @@ of `/srv`, since there's no Docker volume here). Enable it with
 
 ## 9. Backups
 
+Use a complete backup before updates:
+
 ```bash
-./scripts/backup-db.sh ./backups
+cd /opt/afk-service
+bash scripts/backup-stack.sh
 ```
 
-Run this via cron for regular backups, e.g. nightly:
-
-```cron
-0 3 * * * cd /opt/afk-service && ./scripts/backup-db.sh /opt/afk-service/backups >> /var/log/afk-backup.log 2>&1
-```
-
-Restore with `./scripts/restore-db.sh <backup-file>` (stops the backend
-first).
+This stops/resumes the account services for a consistent snapshot and archives both website data
+and SoulFire data with private file permissions. A database-only backup omits
+Microsoft authentication caches and the SoulFire signing key. Keep `.env`
+separately. See [the migration guide](SOULFIRE-MIGRATION.md).
 
 ## 10. Updates
-
-For a Bedrock or website change that does not modify the Java bot, reuse the
-Java executable from the running Node-24 backend:
-
-```bash
-cd /opt/afk-service &&
-git pull --ff-only origin master &&
-./scripts/update-bedrock.sh
-```
-
-This builds the updated Node backend and website, then replaces both containers.
-It never invokes Cargo or downloads a Rust toolchain, even when Docker's Rust
-build cache is missing. The existing services remain running during the build;
-replacing the backend briefly disconnects its accounts, and normal auto-start
-restores running clients. The data volumes and `.env` remain in place. The
-script requires an already running backend using Node 24. The quick Dockerfile
-inherits the installed Java executable, runtime startup command and healthcheck.
-
-Use the normal build below whenever changes under `backend/rust-bot` must also
-be installed. It updates the Java executable as well:
 
 ```bash
 cd /opt/afk-service
 git pull --ff-only origin master
-docker compose build
-docker compose up -d
-docker compose logs -f backend   # confirm prisma migrate deploy applied cleanly
+bash scripts/backup-stack.sh
+bash scripts/update.sh
+docker compose logs --tail=100 backend soulfire
 ```
 
-The migration `20261004190000_reset_sell_earnings_once` clears the old sell
-earnings once, resetting the 5-minute, 1-hour and 24-hour counters for every
-account. New confirmed sales then accumulate normally. Prisma records the
-migration, so subsequent updates and backend restarts do not reset the counters.
-
-The Dockerfiles use persistent BuildKit caches for Cargo's registry/git data,
-compiled Rust dependencies and npm downloads. The first backend build on each
-Pi is still a cold build, but later source changes should only rebuild the
-project crate instead of recompiling all of Azalea. Keep the cache by avoiding
-`docker compose build --no-cache` and `docker builder prune` during normal
-updates. Changing `Cargo.lock`, the pinned Azalea revision, the Rust nightly
-date or the CPU architecture will legitimately invalidate a larger part of the
-cache.
-
-If only one half changed, build only that service:
-
-```bash
-docker compose build backend   # backend/Rust changes
-docker compose build web       # frontend-only changes
-docker compose up -d
-```
-
-Always back up the database before updating (`scripts/backup-db.sh`), in
-case a schema migration needs to be rolled back.
+All images build before any running container is replaced. SQLite migrations
+run at backend startup. Existing volumes and account IDs remain in place. The
+old `update-bedrock.sh` filename forwards to the complete update; it no longer
+retains an Azalea binary. Cold SoulFire builds/startups download the pinned
+release and Minecraft libraries; allow several minutes. Subsequent updates
+reuse Docker/download caches. The website no longer builds Rust.
 
 ## 11. Troubleshooting
 
-| Symptom | Likely cause / fix |
+| Symptom | Check |
 |---|---|
-| `docker compose up` fails building `backend` (argon2) | Native module build tools missing — the provided `Dockerfile` installs `python3 make g++` in the build stage; if building outside Docker, install those manually. |
-| The first backend build is slow | The image compiles Azalea natively for the Pi. This cold build is expected once per Docker builder. Later builds reuse persistent Cargo caches. Do not use `--no-cache` or routinely run `docker builder prune`. |
-| Web build fails at `npm ci` with `Missing: @floating-ui/dom` | Pull the corrected frontend lockfile and rebuild. The lockfile must include optional/peer dependencies required by npm in the Node 24 image. Maintainers should verify a clean `npm ci` and frontend build under Node 24, not only a build using existing local dependencies. |
-| Every backend build recompiles Azalea | Confirm BuildKit is enabled (`docker buildx version`) and that the builder cache was not pruned. `docker compose --progress=plain build backend` shows whether Cargo dependencies are `Fresh`. |
-| Login always returns 401 | Check `SESSION_COOKIE_SECURE` — if `true` but you're testing over plain HTTP, the cookie won't be sent back. Use `false` only for local HTTP dev. |
-| `403 Invalid or missing CSRF token` | The frontend must read the non-HttpOnly `afk_csrf` cookie and send it as `x-csrf-token` on mutating requests — this is already handled by `frontend/src/lib/api.ts`; if calling the API directly (e.g. via curl), you must do the same. |
-| Bot immediately disconnects with `RECONNECTING` looping | Check `serverHost`/`serverPort`/`minecraftVersion` match the target server; view the account's console for the exact kick/error reason. |
-| `azalea-bot binary not found` in the console | The compiled Rust binary is missing. In Docker it's built and bundled automatically; for local `npm run dev`, build it once with `cd backend/rust-bot && cargo build --release`. |
-| Bot doesn't join a newer Minecraft version | Update the pinned Azalea commit in `backend/rust-bot/Cargo.toml` to one that supports it and rebuild (see the README's "Azalea version pin" section). |
-| Bot can run `/gamemode` etc. but not other commands | Expected — the Minecraft server's own permission system still applies; grant the bot account OP or the relevant permission-plugin node on the server side. |
-| Caddy won't issue a certificate | Ports 80/443 must be reachable from the internet for HTTP-01 challenge, or use Cloudflare DNS-01/Origin Certificate instead (see section 5). |
-| High memory usage on the Pi | Each connected bot subprocess uses a modest but non-trivial amount of memory; on 8 GB you can comfortably run several dozen bots, but monitor via `/api/system/status` and `docker stats`. |
+| SoulFire is not healthy yet | Allow its initial verified runtime downloads to finish; inspect `docker compose logs soulfire`. |
+| SDK connection/authentication fails | Check the private `SOULFIRE_URL` and read-only signing-key mount; do not expose RPC publicly. |
+| An old account requests a device code | Its original cache was missing/rejected or incompatible. Account settings/history remain; complete one new Microsoft sign-in. |
+| Bedrock version rejected | This pinned engine exposes 1.26.51. Check server compatibility and the account's endpoint. |
+| Companion account cannot join | The default is the same host with Java 25565 / Bedrock 19132; correct custom endpoints in its settings. |
+| Held inputs do nothing | Confirm `afk-service-controls` is listed at SoulFire startup; Docker installs it in `/data/minecraft/mods`. |
+| Login cookie absent over local HTTP | Use `SESSION_COOKIE_SECURE=false` only for local HTTP development. |
+| CSRF rejected | Website writes need the current `afk_csrf` cookie echoed in `x-csrf-token`. |
+| High memory usage | Measure real accounts and set `SOULFIRE_JAVA_OPTIONS` together with backend/OS headroom; old Azalea capacity estimates do not apply. |
+
+The systemd fallback additionally needs a Java 25 SoulFire service and its input
+extension. Configure `SOULFIRE_URL` and `SOULFIRE_SECRET_KEY_FILE` in the backend
+environment and give its service user read access to the signing key. See the
+[local runtime instructions](SOULFIRE-MIGRATION.md).

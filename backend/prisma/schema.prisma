@@ -25,6 +25,12 @@ enum AuthType {
   MICROSOFT
 }
 
+enum AutoButton {
+  OFF
+  LEFT
+  RIGHT
+}
+
 enum ClientStatus {
   OFFLINE
   CONNECTING
@@ -107,19 +113,14 @@ model Session {
 model MinecraftAccount {
   id                         String       @id @default(cuid())
   name                       String       @unique
-  // Reserved for future Bedrock support. Azalea speaks the Java protocol only,
-  // so this is always "JAVA" today and is intentionally NOT exposed in the
-  // create/update API or UI (see docs/LIMITATIONS.md). A future Bedrock bot
-  // binary would branch on this in ClientManager without touching the Java path.
+  // Java and Bedrock are driven by the shared SoulFire service.
   edition                    String       @default("JAVA")
   // Optional website-only display label. Unlike `name` (which doubles as the
   // offline join username and therefore must be a valid Minecraft name), this
   // is purely cosmetic and may contain spaces etc. Empty means "fall back to
   // name". Editable at any time without touching the join identity.
   displayName                String       @default("")
-  // Empty string means "auto-detect" — MinecraftClient lets mineflayer ping
-  // the server and negotiate whichever protocol version it actually
-  // reports, rather than forcing a possibly-mismatched hardcoded version.
+  // Empty selects automatic Java server detection / the installed Bedrock codec.
   minecraftVersion           String       @default("")
   serverHost                 String
   serverPort                 Int          @default(25565)
@@ -134,6 +135,7 @@ model MinecraftAccount {
   credentialsPassword        String?
   // When enabled, the bot continuously sneaks/crouches.
   crouchEnabled              Boolean      @default(false)
+  autoButton                 AutoButton   @default(OFF)
   autoReconnect              Boolean      @default(true)
   // Free-form short note shown in the dashboard/settings (e.g. "farming cobble").
   notes                      String       @default("")

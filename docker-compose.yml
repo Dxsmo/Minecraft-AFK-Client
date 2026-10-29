@@ -1,4 +1,23 @@
 services:
+  soulfire:
+    build:
+      context: ./soulfire
+    container_name: afk-soulfire
+    restart: unless-stopped
+    environment:
+      JAVA_TOOL_OPTIONS: "${SOULFIRE_JAVA_OPTIONS:--XX:MaxRAMPercentage=65 -XX:+UseG1GC}"
+      TZ: "${TZ:-Europe/Berlin}"
+    volumes:
+      - soulfire_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:38765/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+    networks:
+      - internal
+
   backend:
     build:
       context: ./backend
@@ -14,8 +33,14 @@ services:
       PORT: "4000"
       # Local timezone for Node date formatting. Override via TZ in .env.
       TZ: "${TZ:-Europe/Berlin}"
+      SOULFIRE_URL: "http://soulfire:38765"
+      SOULFIRE_SECRET_KEY_FILE: "/soulfire-data/secret-key.bin"
+    depends_on:
+      soulfire:
+        condition: service_healthy
     volumes:
       - backend_data:/app/data
+      - soulfire_data:/soulfire-data:ro
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -70,6 +95,7 @@ networks:
     driver: bridge
 
 volumes:
+  soulfire_data:
   backend_data:
   caddy_data:
   caddy_config:

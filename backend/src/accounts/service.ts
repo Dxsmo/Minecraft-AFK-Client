@@ -26,6 +26,7 @@ const publicAccountSelect = {
   edition: true,
   authType: true,
   crouchEnabled: true,
+  autoButton: true,
   autoReconnect: true,
   notes: true,
   autoSellEnabled: true,

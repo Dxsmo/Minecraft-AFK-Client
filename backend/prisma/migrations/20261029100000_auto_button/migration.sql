@@ -1,0 +1,1 @@
+ALTER TABLE "MinecraftAccount" ADD COLUMN "autoButton" TEXT NOT NULL DEFAULT 'OFF';

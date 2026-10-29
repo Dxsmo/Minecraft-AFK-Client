@@ -128,7 +128,7 @@ async function main(): Promise<void> {
 
   const c = client as unknown as { on(event: string, cb: (...args: unknown[]) => void): void; close?: () => void; disconnect?: () => void };
   const sender = new BotSender(client as never, config.username);
-  const behavior = new BehaviorState(config, sender);
+  const behavior = new BehaviorState({ ...config, version: selected?.version ?? config.version }, sender);
 
   // Connect watchdog: if we never spawn, exit so Node can reschedule.
   const watchdog = setInterval(() => {
@@ -220,6 +220,7 @@ async function main(): Promise<void> {
   let localRuntimeEntityId: bigint | null = null;
   c.on("start_game", (packet: unknown) => {
     progress.advance("world");
+    behavior.autoButton.onStartGame(packet);
     try {
       const p = packet as { runtime_entity_id?: unknown; player_position?: unknown; rotation?: { x?: number; z?: number }; current_tick?: unknown; server_authoritative_inventory?: boolean };
       const id = toBigIntOrNull(p.runtime_entity_id);
@@ -236,7 +237,8 @@ async function main(): Promise<void> {
 
   // Proxies can switch dimension/world without another high-level spawn.
   c.on("change_dimension", (packet: unknown) => {
-    const p = packet as { position?: unknown };
+    const p = packet as { position?: unknown; dimension?: number };
+    behavior.autoButton.reset(p.dimension);
     sender.updatePosition(p.position, undefined, undefined, true);
     behavior.markTeleported();
   });
@@ -262,8 +264,20 @@ async function main(): Promise<void> {
   c.on("container_open", p => behavior.inventory.onOpen(p as Parameters<typeof behavior.inventory.onOpen>[0]));
   c.on("container_close", p => behavior.inventory.onClose(p as Parameters<typeof behavior.inventory.onClose>[0]));
   c.on("item_stack_response", p => behavior.inventory.onResponse(p as Parameters<typeof behavior.inventory.onResponse>[0]));
+  c.on("mob_equipment", (packet: any) => {
+    if (String(packet.runtime_entity_id) === String(localRuntimeEntityId)) behavior.inventory.onEquipment(packet);
+  });
+  c.on("subchunk", p => behavior.autoButton.onSubchunk(p));
+  c.on("item_registry", p => behavior.autoButton.onItemRegistry(p));
+  c.on("level_chunk", p => behavior.autoButton.onLevelChunk(p));
+  c.on("update_block", p => behavior.autoButton.onUpdateBlock(p));
+  c.on("update_subchunk_blocks", (p: any) => {
+    for (const block of p.blocks ?? []) behavior.autoButton.onUpdateBlock({ ...block, block_runtime_id: block.runtime_id });
+  });
+  for (const name of ["add_entity", "add_player", "move_entity", "move_entity_delta", "move_player", "remove_entity"]) c.on(name, p => behavior.autoButton.onEntity(name, p));
 
   c.on("set_entity_data", (packet: unknown) => {
+    behavior.autoButton.observeMetadata(packet);
     const sneaking = sender.observeSneakMetadata(packet);
     if (sneaking !== null) behavior.onSneakStatus(sneaking);
   });

@@ -56,3 +56,9 @@ frontend/node_modules/
 
 ### Rust
 backend/rust-bot/target/
+
+### Local SoulFire runtime and signing/account data ###
+soulfire-data/
+soulfire-runtime/
+soulfire/__pycache__/
+backups/

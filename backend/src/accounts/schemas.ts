@@ -28,16 +28,14 @@ export const createAccountSchema = z
     minecraftVersion: z.string().max(16).default(""),
     serverHost: z.string().min(1).max(255),
     serverPort: z.coerce.number().int().min(1).max(65535).default(25565),
-    // Which Minecraft edition to connect as. JAVA uses the Azalea Rust bot;
-    // BEDROCK uses the bedrock-protocol Node bot (see ClientManager binary
-    // selection). Write-once at creation, like authType — the update schema
-    // omits it so an account can't silently switch protocols after creation.
+    // Both editions run through SoulFire.
     edition: z.enum(["JAVA", "BEDROCK"]).default("JAVA"),
     // Microsoft account email. Used as the identity for the device-code sign-in
     // and its on-disk token cache. Required for every account. Never exposed
     // back to the frontend.
     credentialsSecret: z.string().trim().email().max(320),
     crouchEnabled: z.boolean().default(false),
+    autoButton: z.enum(["OFF", "LEFT", "RIGHT"]).default("OFF"),
     autoReconnect: z.boolean().default(true),
     notes: z.string().max(50).default(""),
     autoSellEnabled: z.boolean().default(false),
@@ -61,6 +59,7 @@ export const updateAccountSchema = z.object({
   serverHost: z.string().min(1).max(255).optional(),
   serverPort: z.coerce.number().int().min(1).max(65535).optional(),
   crouchEnabled: z.boolean().optional(),
+  autoButton: z.enum(["OFF", "LEFT", "RIGHT"]).optional(),
   autoReconnect: z.boolean().optional(),
   notes: z.string().max(50).optional(),
   autoSellEnabled: z.boolean().optional(),

@@ -4,7 +4,7 @@
  * A spawner's contents are handled per item type: every produced item can be
  * dropped out of the spawner, sold via the spawner's own sell button, or left
  * alone. Dropping always runs before selling, and both stop once fewer than two
- * stacks of that item remain (see the Rust bot's clean-spawner routine).
+ * stacks of that item remain (see soulfire/behaviors.ts).
  *
  * Keep this list in sync with `frontend/src/lib/spawners.ts`.
  */
@@ -61,7 +61,7 @@ export function getSpawnerType(id: string): SpawnerType | undefined {
 
 /**
  * Resolves the configured per-item actions into the two flat item-id lists the
- * Rust bot works with. Only items that actually belong to the selected spawner
+ * SoulFire scheduler works with. Only items that actually belong to the selected spawner
  * type are considered, so a stale action map can never make the bot touch an
  * unrelated item.
  */

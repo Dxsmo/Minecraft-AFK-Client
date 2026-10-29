@@ -1,7 +1,9 @@
 import os from "node:os";
 import type { FastifyInstance } from "fastify";
 import { clientManager } from "../minecraft/ClientManager.js";
-import { bedrockVersionCatalog } from "../bedrock-bot/version.js";
+import { soulFireRpc } from "../soulfire/rpc.js";
+import { protocolOptions, versionCatalog } from "../soulfire/versions.js";
+let cachedVersions: { at: number; value: ReturnType<typeof versionCatalog> } | undefined;
 
 const startedAt = Date.now();
 
@@ -11,9 +13,13 @@ const startedAt = Date.now();
  * Raspberry Pi. CPU load is a 1-minute average snapshot, not a live sampler.
  */
 export default async function systemRoutes(app: FastifyInstance) {
-  app.get("/api/minecraft/versions", { preHandler: app.requireAuth }, async () => ({
-    bedrock: bedrockVersionCatalog(),
-  }));
+  app.get("/api/minecraft/versions", { preHandler: app.requireAuth }, async (_req, reply) => {
+    if (cachedVersions && Date.now() - cachedVersions.at < 300_000) return cachedVersions.value;
+    try {
+      const value = versionCatalog(await protocolOptions(soulFireRpc()));
+      cachedVersions = { at: Date.now(), value }; return value;
+    } catch { return reply.code(503).send({ error: "SoulFire-Versionsliste ist gerade nicht erreichbar" }); }
+  });
 
   app.get("/api/system/status", { preHandler: app.requireAuth }, async (req, reply) => {
     const statuses = clientManager.getAllStatuses();

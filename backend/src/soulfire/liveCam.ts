@@ -1,0 +1,64 @@
+import path from "node:path";
+import { config } from "../config/config.js";
+import { readRemoteAccount } from "./auth.js";
+import { soulFireRpc } from "./rpc.js";
+import type { BotPovFrame } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
+
+export const LIVE_CAM_OPTIONS = { width: 640, height: 360, maxDistance: 48, intervalMs: 400, includeHud: true, includeHands: true } as const;
+export type CameraFrame = { type: "frame"; image: string };
+type Viewer = { frame: (frame: CameraFrame) => void; error: (error: unknown) => void };
+type Stream = { viewers: Set<Viewer>; abort: AbortController; done: Promise<void> };
+type FrameSource = (accountId: string, signal: AbortSignal) => AsyncIterable<BotPovFrame>;
+
+async function* frames(accountId: string, signal: AbortSignal): AsyncIterable<BotPovFrame> {
+  const ids = await readRemoteAccount(path.join(config.dataDir, "bot-cache", accountId));
+  if (!ids) throw new Error("No active SoulFire account");
+  if (signal.aborted) return;
+  yield* soulFireRpc().bot.watchBotPov({ ...ids, ...LIVE_CAM_OPTIONS }, { signal, timeoutMs: 0 });
+}
+
+/** One on-demand upstream stream per account, even with multiple viewers.
+ * No frame cache, background polling or rendering without subscribers. */
+export class LiveCamStreams {
+  private streams = new Map<string, Stream>();
+  constructor(private source: FrameSource = frames) {}
+
+  subscribe(accountId: string, viewer: Viewer): () => void {
+    let stream = this.streams.get(accountId);
+    if (!stream || stream.abort.signal.aborted) {
+      const previous = stream?.done;
+      stream = { viewers: new Set(), abort: new AbortController(), done: Promise.resolve() };
+      this.streams.set(accountId, stream);
+      const current = stream;
+      // Wait for a cancelled stream before reopening the same account.
+      current.done = Promise.resolve(previous).then(async () => {
+        if (current.abort.signal.aborted) return;
+        for await (const frame of this.source(accountId, current.abort.signal)) {
+          if (current.abort.signal.aborted) return;
+          const render = frame.render;
+          if (!render || render.imageMimeType !== "image/png" || !render.imageBase64 || render.imageBase64.length > 2 * 1024 * 1024) continue;
+          const message: CameraFrame = { type: "frame", image: render.imageBase64 };
+          for (const recipient of current.viewers) recipient.frame(message);
+        }
+        if (!current.abort.signal.aborted) throw new Error("Camera stream ended");
+      }).catch(error => {
+        if (!current.abort.signal.aborted) for (const recipient of current.viewers) recipient.error(error);
+      }).finally(() => {
+        current.abort.abort();
+        if (this.streams.get(accountId) === current) this.streams.delete(accountId);
+      });
+    }
+    const current = stream;
+    current.viewers.add(viewer);
+    return () => {
+      current.viewers.delete(viewer);
+      if (!current.viewers.size) current.abort.abort();
+    };
+  }
+
+  async close(): Promise<void> {
+    const streams = [...this.streams.values()];
+    for (const stream of streams) stream.abort.abort();
+    await Promise.allSettled(streams.map(stream => stream.done));
+  }
+}

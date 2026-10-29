@@ -74,7 +74,7 @@ export const config = {
   },
 
   loginRateLimit: {
-    max: env.LOGIN_RATE_LIMIT_MAX,
+    max: env.LOGIN_RATE_LIMIT_MAX * 2,
     window: env.LOGIN_RATE_LIMIT_WINDOW,
   },
 

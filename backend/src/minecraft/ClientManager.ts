@@ -1,3 +1,6 @@
+import path from "node:path";
+import { config } from "../config/config.js";
+import { stopRemoteAccount } from "../soulfire/lifecycle.js";
 import { MinecraftClient } from "./MinecraftClient.js";
 import type { ClientRuntimeConfig, ClientStatusSnapshot, ConsoleEvent } from "./types.js";
 import { prisma } from "../database/prisma.js";
@@ -27,6 +30,7 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     credentialsSecret: account.credentialsSecret,
     credentialsPassword: account.credentialsPassword,
     crouchEnabled: account.crouchEnabled,
+    autoButton: account.autoButton,
     autoReconnect: account.autoReconnect,
     autoSellEnabled: account.autoSellEnabled,
     autoSellIntervalSeconds: account.autoSellIntervalSeconds,
@@ -49,7 +53,6 @@ export class ClientManager {
   private statusListeners = new Set<StatusEventListener>();
   private sellListeners = new Set<SellEventListener>();
   private chatListeners = new Set<ChatEventListener>();
-
   onChatEvent(listener: ChatEventListener): () => void {
     this.chatListeners.add(listener);
     return () => this.chatListeners.delete(listener);
@@ -77,6 +80,12 @@ export class ClientManager {
     await prisma.minecraftAccount.updateMany({ where: { status: { not: "OFFLINE" } }, data: { status: "OFFLINE" } });
     for (const account of accounts) {
       this.register(account);
+    }
+    // Reconcile controllers after a backend crash while SoulFire stayed alive.
+    for (let offset = 0; offset < accounts.length; offset += 8) {
+      await Promise.all(accounts.slice(offset, offset + 8).map(account =>
+        stopRemoteAccount(path.join(config.dataDir, "bot-cache", account.id))
+          .catch(err => logger.warn({ err, accountId: account.id }, "SoulFire startup reconciliation failed"))));
     }
     const toResume = accounts.filter((a) => a.autoStart);
     for (const account of toResume) {
@@ -243,15 +252,13 @@ export class ClientManager {
   }
 
   /** Gracefully disconnects every client, e.g. during process shutdown. */
-  shutdownAll(): void {
-    for (const client of this.clients.values()) {
-      try {
-        client.disconnect();
-      } catch (err) {
-        logger.error({ err }, "Error while disconnecting client during shutdown");
-      }
-    }
+  async shutdownAll(): Promise<void> {
+    await Promise.all([...this.clients.values()].map(async client => {
+      try { await client.shutdown(); }
+      catch (err) { logger.error({ err }, "Error while disconnecting client during shutdown"); }
+    }));
   }
+
 }
 
 export const clientManager = new ClientManager();

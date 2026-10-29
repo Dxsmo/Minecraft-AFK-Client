@@ -24,11 +24,13 @@ describe("account assignment permissions", () => {
     const admin = await prisma.user.create({
       data: { username: "admin-perm", passwordHash: await hashPassword("x"), role: "ADMIN" },
     });
-    await prisma.minecraftAccount.create({ data: { name: "Bot_A", serverHost: "h", serverPort: 25565 } });
+    await prisma.minecraftAccount.create({ data: { name: "Bot_A", serverHost: "h", serverPort: 25565, autoButton: "RIGHT" } });
     await prisma.minecraftAccount.create({ data: { name: "Bot_B", serverHost: "h", serverPort: 25565 } });
 
     const accounts = await listAccountsForSession(toSession(admin as any));
     expect(accounts.map((a) => a.name).sort()).toEqual(["Bot_A", "Bot_B"]);
+    expect(accounts.find(a => a.name === "Bot_A")?.autoButton).toBe("RIGHT");
+    expect(accounts.find(a => a.name === "Bot_B")?.autoButton).toBe("OFF");
   });
 
   it("a normal user only sees accounts explicitly assigned to them", async () => {

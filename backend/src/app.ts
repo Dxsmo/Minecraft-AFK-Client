@@ -16,6 +16,7 @@ import securityRoutes from "./security/routes.js";
 import { isIpBanned } from "./security/ipBans.js";
 import registerWebsocketRoutes from "./websocket/routes.js";
 import { getItemTexture } from "./assets/itemTextures.js";
+import { getAccountItem } from "./assets/accountItems.js";
 import notesRoutes from "./notes/routes.js";
 import { isTrustedOrigin, isWebsiteSocketPath } from "./security/origins.js";
 import profileRoutes from "./profile/routes.js";
@@ -80,7 +81,7 @@ export async function buildApp() {
 
   // ---- Rate limiting (global baseline; login route has a stricter override) ----
   await app.register(rateLimit, {
-    max: 200,
+    max: 400,
     timeWindow: "1 minute",
   });
 
@@ -99,6 +100,14 @@ export async function buildApp() {
   await app.register(registerWebsocketRoutes);
 
   app.get("/api/health", async () => ({ status: "ok" }));
+
+  app.get("/api/assets/account-items/:name", { config: { rateLimit: false } }, async (req, reply) => {
+    const name = (req.params as { name: string }).name;
+    if (!name.endsWith(".png")) return reply.code(404).send();
+    const data = await getAccountItem(name.slice(0, -4));
+    if (!data) return reply.code(404).send();
+    return reply.type("image/png").header("Cache-Control", "public, max-age=86400").send(data);
+  });
 
   // Public item/block texture endpoint (no auth — textures aren't sensitive).
   // Served from the minecraft-assets package so item lists can show real

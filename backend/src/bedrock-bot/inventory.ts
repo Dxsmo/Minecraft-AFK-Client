@@ -49,6 +49,7 @@ export class BedrockInventory {
   private titles = new Map<string, string>();
   private lastFailureAt = -Infinity;
   private needsFullPlayerContent = false;
+  private hotbarSlot = 0;
   private multiplierScan: { deadline: number; windowId: WindowId | null } | null = null;
   constructor(private sender: BotSender) {}
 
@@ -56,6 +57,16 @@ export class BedrockInventory {
   get blocked(): boolean { return !!this.container && !this.container.owned; }
   get synchronized(): boolean { return !this.needsFullPlayerContent; }
   get readingMultipliers(): boolean { return this.multiplierScan !== null; }
+  get mouseBlocked(): boolean { return !!this.container || this.needsFullPlayerContent; }
+  get mouseHand(): { slot: number; item: BedrockItem } | null {
+    const item = this.player?.[this.hotbarSlot];
+    return item && !this.needsFullPlayerContent ? { slot: this.hotbarSlot, item: { ...item } } : null;
+  }
+  onEquipment(packet: { selected_slot: number; item: BedrockItem }): void {
+    if (!Number.isInteger(packet.selected_slot) || packet.selected_slot < 0 || packet.selected_slot > 8) return;
+    this.hotbarSlot = packet.selected_slot;
+    if (this.player && !this.needsFullPlayerContent) this.player[this.hotbarSlot] = { ...packet.item };
+  }
   requestMultipliers(now: number): void {
     this.manualGuardUntil = 0;
     this.multiplierScan = { deadline: now + 10_000, windowId: null };
@@ -66,6 +77,7 @@ export class BedrockInventory {
     this.cancelMultiplierScan();
     this.titles.clear(); this.manualGuardUntil = 0; this.cancelledSellUntil = 0;
     this.player = null; this.container = null; this.requestedAt = null;
+    this.hotbarSlot = 0;
     this.targets = null; this.pending = null;
   }
 

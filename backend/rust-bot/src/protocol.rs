@@ -10,6 +10,15 @@ pub enum JavaNetworkMode {
     Standard,
 }
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoButton {
+    #[default]
+    Off,
+    Left,
+    Right,
+}
+
 /// The first line sent on stdin when the process starts.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
@@ -36,6 +45,8 @@ pub struct Config {
     /// When true, continuously sneak/crouch.
     #[serde(default)]
     pub crouch_enabled: bool,
+    #[serde(default)]
+    pub auto_button: AutoButton,
     /// Periodically sell the inventory by running the sell command and moving
     /// all items into the sell menu the server opens.
     #[serde(default)]
@@ -82,6 +93,8 @@ fn default_autosell_command() -> String {
 pub struct BehaviorConfig {
     #[serde(default)]
     pub crouch_enabled: bool,
+    #[serde(default)]
+    pub auto_button: AutoButton,
     #[serde(default)]
     pub autosell_enabled: bool,
     #[serde(default = "default_autosell_interval")]

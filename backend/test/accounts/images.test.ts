@@ -126,6 +126,26 @@ it("broadcasts replacement images only to authorized dashboard viewers and honor
   }
 });
 
+it("offers the complete alphabetical transparent item catalog and saves a choice with existing account permissions", async () => {
+  expect((await app.inject({ url: "/api/minecraft/account-items" })).statusCode).toBe(401);
+  const response = await app.inject({ url: "/api/minecraft/account-items", headers: sessions[1] });
+  expect(response.statusCode).toBe(200);
+  const items = response.json(); expect(items).toHaveLength(1489);
+  expect(items.every((item: any) => item.name === item.id.replace(/_/g, " ") && !item.name.endsWith(".png"))).toBe(true);
+  expect(items.map((item: any) => item.name.toLowerCase())).toEqual(items.map((item: any) => item.name.toLowerCase()).sort());
+  const item = items.find((item: any) => item.id === "diamond_sword"); expect(item).toBeDefined();
+  const publicImage = await app.inject({ url: item.url }); expect(publicImage.statusCode).toBe(200);
+  const png = PNG.sync.read(publicImage.rawPayload); expect(png.data.some((byte, index) => index % 4 === 3 && byte === 0)).toBe(true);
+  expect((await app.inject({ method: "PUT", url: imagePath(), headers: sessions[3], payload: { itemId: item.id } })).statusCode).toBe(404);
+  const selected = await app.inject({ method: "PUT", url: imagePath(), headers: sessions[1], payload: { itemId: item.id } });
+  expect(selected.statusCode).toBe(200);
+  expect((await app.inject({ url: selected.json().imageUrl, headers: sessions[1] })).rawPayload).toEqual(publicImage.rawPayload);
+  for (const id of ["../catalog", "missing_item", "diamond_sword.png"]) {
+    expect((await app.inject({ method: "PUT", url: imagePath(), headers: sessions[1], payload: { itemId: id } })).statusCode).toBe(400);
+  }
+  expect((await app.inject({ url: "/api/assets/account-items/catalog.json" })).statusCode).toBe(404);
+});
+
 it("deletes the image with its Minecraft account", async () => {
   await prisma.minecraftAccount.delete({ where: { id: accountId } });
   expect(await prisma.accountImage.count({ where: { minecraftAccountId: accountId } })).toBe(0);

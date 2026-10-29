@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BotSender } from "../../src/bedrock-bot/send.js";
 import { BehaviorState } from "../../src/bedrock-bot/behaviors.js";
 import { BedrockInventory, type BedrockItem } from "../../src/bedrock-bot/inventory.js";
+import { BedrockAutoButton, decodeMouseSubchunk } from "../../src/bedrock-bot/autoButton.js";
 const require = createRequire(import.meta.url);
 const { createSerializer } = require("bedrock-protocol/src/transforms/serializer");
 const { Versions } = require("bedrock-protocol/src/options") as { Versions: Record<string, number> };
@@ -45,6 +46,127 @@ describe("Bedrock automation with the installed wire codec", () => {
   beforeEach(() => { vi.useFakeTimers(); vi.spyOn(process.stdout, "write").mockImplementation(() => true); });
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
+  function mouse(version: string, mode: "left" | "right", hashes = false) {
+    const test = setup(version);
+    test.sender.updatePosition({ x: 0.5, y: 70.5, z: 0.5 }, 0, 0);
+    test.sender.setSneak(true);
+    const registry = require("prismarine-registry")(`bedrock_${version}`);
+    const start = { itemstates: registry.writeItemStates(), block_network_ids_are_hashes: hashes, dimension: 0 };
+    registry.handleStartGame(start);
+    const held = new BedrockAutoButton(test.sender, test.inventory, version);
+    held.onStartGame(start); held.configure(mode);
+    test.sender.mouseInput = () => held.tick(Date.now());
+    test.inventory.onContent({ window_id: "inventory", input: Array.from({ length: 36 }, empty) });
+    test.sender.tickInput();
+    const request = test.packets.find(p => p.name === "subchunk_request")!.params;
+    held.onSubchunk({ cache_enabled: false, dimension: 0, origin: request.origin,
+      entries: request.requests.map((p: any) => ({ dx: p.x ?? p.dx, dy: p.y ?? p.dy, dz: p.z ?? p.dz, result: "success_all_air" })) });
+    const stone = Object.entries(registry.blocksByRuntimeId).find(([, b]: any) => b.stateId === registry.blocksByName.stone.defaultState)!;
+    held.onUpdateBlock({ position: { x: 0, y: 70, z: 2 }, block_runtime_id: Number(stone[0]) >>> 0 });
+    return { ...test, held, registry };
+  }
+
+  it.each(["1.21.50", "1.21.130", "1.26.40", "1.26.51"])("holds right use without release and switches exclusively to left in %s", version => {
+    const { sender, packets, held } = mouse(version, "right");
+    sender.tickInput();
+    const use = packets.at(-1)!.params;
+    expect(use.transaction.data).toMatchObject({ action_type: "click_block", block_position: { x: 0, y: 70, z: 2 }, face: 2, held_item: { network_id: 0 } });
+    expect(inputFlag(use, "item_interact")).toBe(true);
+    for (let i = 0; i < 10; i++) { vi.advanceTimersByTime(50); sender.tickInput(); }
+    expect(packets.filter(p => p.name === "inventory_transaction")).toHaveLength(0);
+    held.configure("left"); sender.tickInput();
+    expect(packets.filter(p => p.name === "inventory_transaction").map(p => p.params.transaction.transaction_type)).toEqual(["item_release"]);
+    expect(packets.at(-1)!.params.block_action).toEqual([expect.objectContaining({ action: "start_break" })]);
+    vi.advanceTimersByTime(50); sender.tickInput();
+    expect(packets.at(-1)!.params.block_action).toEqual([expect.objectContaining({ action: "continue_break" })]);
+    expect(packets.at(-1)!.params.transaction).toBeFalsy();
+    expect(packets.filter(p => p.name === "player_auth_input").every(p => inputFlag(p.params, "sneak_down") && !inputFlag(p.params, "stop_sneaking"))).toBe(true);
+    held.configure("off"); sender.tickInput();
+    expect(packets.at(-1)!.params.block_action).toEqual([expect.objectContaining({ action: "abort_break" })]);
+    vi.advanceTimersByTime(1000); sender.tickInput();
+    expect(packets.at(-1)!.params.transaction).toBeFalsy();
+    expect(packets.at(-1)!.params.block_action).toBeFalsy();
+  });
+
+  it("uses hashed block IDs and resumes held input after a world reload without releasing", () => {
+    const { sender, packets, held, inventory } = mouse("1.26.51", "right", true);
+    sender.tickInput();
+    expect(packets.at(-1)!.params.transaction.data.action_type).toBe("click_block");
+    inventory.onOpen({ window_id: "first", window_type: "container" });
+    vi.advanceTimersByTime(300); sender.tickInput();
+    expect(packets.at(-1)!.params.transaction).toBeFalsy();
+    inventory.onClose({ window_id: "first" });
+    held.reset(); sender.updatePosition({ x: 32.5, y: 70.5, z: 0.5 }, 0, 0, true);
+    sender.tickInput();
+    expect(packets.at(-1)!.params.transaction).toBeFalsy();
+    // Actual Geyser-style complete chunks, all air around the camera.
+    held.onLevelChunk({ x: 2, z: 0, dimension: 0, cache_enabled: false, sub_chunk_count: 3,
+      payload: Buffer.from([9, 0, 3, 9, 0, 4, 9, 0, 5]) });
+    sender.tickInput();
+    expect(packets.at(-1)!.params.transaction.data.action_type).toBe("click_air");
+    expect(packets.filter(p => p.name === "inventory_transaction")).toHaveLength(0);
+  });
+
+  it("does not restart an item held in use and releases only when the setting changes", () => {
+    const { sender, packets, held } = mouse("1.26.51", "right");
+    sender.tickInput();
+    held.observeMetadata({ runtime_entity_id: 123n, metadata: [{ key: "flags", value: { using_item: true } }] });
+    for (let i = 0; i < 40; i++) { vi.advanceTimersByTime(50); sender.tickInput(); }
+    expect(packets.filter(p => p.name === "player_auth_input" && p.params.transaction)).toHaveLength(1);
+    held.configure("off");
+    expect(packets.at(-1)!.params.transaction.transaction_type).toBe("item_release");
+  });
+
+  it("decodes uniform runtime palettes and rejects malformed chunk data", () => {
+    expect([...decodeMouseSubchunk(Buffer.from([9, 1, 4, 1, 10]))]).toEqual(new Array(4096).fill(5));
+    expect(decodeMouseSubchunk(Buffer.from([9, 1, 4, 1, 255, 255, 255, 255, 15]))[0]).toBe(0x80000000);
+    // Independent network fixture: 1 bit per block, two runtime IDs (5, 7).
+    const words = Buffer.alloc(512); words.writeUInt32LE(2, 0);
+    const mixed = decodeMouseSubchunk(Buffer.concat([Buffer.from([9, 1, 4, 3]), words, Buffer.from([4, 10, 14])]));
+    expect(mixed[0]).toBe(5); expect(mixed[1]).toBe(7); expect(mixed[4095]).toBe(5);
+    for (const payload of [Buffer.alloc(0), Buffer.from([9, 1, 4, 5]), Buffer.from([7, 0]), Buffer.from([9, 1, 4, 0])]) expect(() => decodeMouseSubchunk(payload)).toThrow();
+  });
+
+  it("keeps input off until enabled and applies cached full chunks plus later block updates", () => {
+    const { sender, inventory, packets } = setup("1.26.51");
+    sender.updatePosition({ x: 0.5, y: 70.5, z: 0.5 }, 0, 0);
+    inventory.onContent({ window_id: "inventory", input: Array.from({ length: 36 }, empty) });
+    const held = new BedrockAutoButton(sender, inventory, "1.26.51");
+    const registry = require("prismarine-registry")("bedrock_1.26.51");
+    held.onStartGame({ itemstates: registry.writeItemStates(), dimension: 0 });
+    sender.mouseInput = () => held.tick(Date.now());
+    held.onLevelChunk({ x: 0, z: 0, dimension: 0, sub_chunk_count: 3, payload: Buffer.from([9, 0, 3, 9, 0, 4, 9, 0, 5]) });
+    held.onUpdateBlock({ position: { x: 0, y: 70, z: 2 }, block_runtime_id: registry.blocksByName.stone.defaultState });
+    sender.tickInput();
+    expect(packets.map(p => p.name)).toEqual(["player_auth_input"]);
+    expect(packets[0].params.transaction).toBeFalsy();
+    held.configure("right"); sender.tickInput();
+    expect(packets.at(-1)!.params.transaction.data).toMatchObject({ action_type: "click_block", block_position: { x: 0, y: 70, z: 2 } });
+  });
+
+  it("does not attack entities through blocks and keeps mining/attacking mutually exclusive", () => {
+    const { sender, packets, held } = mouse("1.26.51", "left");
+    held.onEntity("add_entity", { runtime_id: 99n, unique_id: 99n, entity_type: "minecraft:zombie", position: { x: 0.5, y: 70, z: 3 } });
+    sender.tickInput();
+    expect(packets.filter(p => p.name === "inventory_transaction")).toHaveLength(0);
+    held.onEntity("move_entity", { runtime_entity_id: 99n, position: { x: 0.5, y: 70, z: 1.5 } });
+    sender.tickInput();
+    const attack = packets.find(p => p.name === "inventory_transaction")!.params.transaction;
+    expect(attack).toMatchObject({ transaction_type: "item_use_on_entity", transaction_data: { action_type: "attack", entity_runtime_id: 99n } });
+    expect(packets.at(-1)!.params.block_action).toEqual([expect.objectContaining({ action: "abort_break" })]);
+  });
+
+  it("retries a failed release before applying the other button", () => {
+    const { sender, packets, queue, held } = mouse("1.26.51", "right");
+    sender.tickInput();
+    queue.mockImplementationOnce(() => { throw new Error("temporary failure"); });
+    held.configure("left");
+    sender.tickInput();
+    const last = packets.slice(-2);
+    expect(last[0].params.transaction.transaction_type).toBe("item_release");
+    expect(last[1].params.block_action[0].action).toBe("start_break");
+  });
+
   it.each([false, true])("sends no game packets during a pending join with crouch=%s", crouch => {
     const { sender, packets, queue } = setup("1.26.51");
     const behavior = new BehaviorState({
@@ -85,15 +207,14 @@ describe("Bedrock automation with the installed wire codec", () => {
     expect(packets.at(-1)!.params.tick).toBe(6n);
   });
 
-  it.each(["1.21.50", "1.21.130", "1.26.40", "1.26.51"])("resynchronizes Geyser's cached shift across distinct input ticks in %s", version => {
+  it.each(["1.21.50", "1.21.130", "1.26.40", "1.26.51"])("reasserts sneak without any release, including failed sends, in %s", version => {
     const { sender, packets, queue } = setup(version);
     sender.setSneak(true); sender.tickInput();
     sender.setSneak(true, true);
     queue.mockImplementationOnce(() => { throw new Error("temporary failure"); });
     expect(sender.tickInput()).toBe(false);
     expect(sender.tickInput()).toBe(true);
-    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(true);
-    // A metadata reply to the release must not keep restarting the release.
+    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(false);
     sender.setSneak(true, true); sender.tickInput();
     expect(inputFlag(packets.at(-1)!.params, "start_sneaking")).toBe(true);
     expect(inputFlag(packets.at(-1)!.params, "sneak_current_raw")).toBe(true);
@@ -104,7 +225,8 @@ describe("Bedrock automation with the installed wire codec", () => {
       if (next !== cached) downstream.push(next);
       cached = next;
     }
-    expect(downstream).toEqual([true, false, true]);
+    expect(downstream).toEqual([true]);
+    expect(packets.every(packet => inputFlag(packet.params, "sneak_down") && !inputFlag(packet.params, "sneak_released_raw"))).toBe(true);
     expect(packets[2].params.tick).toBeGreaterThan(packets[1].params.tick);
     sender.setSneak(true, true); sender.tickInput();
     sender.setSneak(false); sender.tickInput(); sender.tickInput();
@@ -131,16 +253,16 @@ describe("Bedrock automation with the installed wire codec", () => {
     expect(sender.observeSneakMetadata({ runtime_entity_id: "invalid", metadata: [] })).toBeNull();
   });
 
-  it("releases and reasserts crouch after negative server feedback without getting stuck in release", () => {
+  it("keeps crouch held through negative metadata and teleports", () => {
     const { sender, packets } = setup();
     const behavior = new BehaviorState({ host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "", crouch_enabled: true }, sender);
     behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
     behavior.onSneakStatus(true); vi.advanceTimersByTime(2100);
     behavior.onSneakStatus(false); behavior.onTick();
-    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(false);
     behavior.onSneakStatus(false); vi.advanceTimersByTime(50); behavior.onTick();
-    expect(inputFlag(packets.at(-1)!.params, "start_sneaking")).toBe(true);
-    // Delayed metadata from our deliberate release arrives after the press.
+    expect(inputFlag(packets.at(-1)!.params, "sneak_down")).toBe(true);
+    // Repeated delayed negative metadata cannot make a release appear.
     vi.advanceTimersByTime(300); behavior.onSneakStatus(false); behavior.onTick();
     expect(inputFlag(packets.at(-1)!.params, "sneak_down")).toBe(true);
     expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(false);
@@ -148,9 +270,10 @@ describe("Bedrock automation with the installed wire codec", () => {
     expect(inputFlag(packets.at(-1)!.params, "sneak_down")).toBe(true);
     expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(false);
     behavior.markTeleported(); vi.advanceTimersByTime(150); behavior.onTick();
-    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(false);
     vi.advanceTimersByTime(50); behavior.onTick();
-    expect(inputFlag(packets.at(-1)!.params, "start_sneaking")).toBe(true);
+    expect(inputFlag(packets.at(-1)!.params, "sneak_down")).toBe(true);
+    expect(packets.every(packet => inputFlag(packet.params, "sneak_down") && !inputFlag(packet.params, "stop_sneaking"))).toBe(true);
   });
 
   it("retries input after a transient serialization failure", () => {
@@ -304,13 +427,21 @@ describe("Bedrock automation with the installed wire codec", () => {
     const { sender, packets } = setup();
     const behavior = new BehaviorState({ host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "", crouch_enabled: true }, sender);
     behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
+    const check = vi.spyOn(behavior, "checkCrouch");
+    vi.mocked(process.stdout.write).mockClear();
     for (const message of ["<HugoSMP> Du wurdest zu deinem Home Farm teleportiert!", "[HugoSMP] Steve hat deine Teleportations-Anfrage angenommen!"]) {
       behavior.onChat(null, message); behavior.onTick();
-      expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(true);
+      expect(inputFlag(packets.at(-1)!.params, "stop_sneaking")).toBe(false);
       vi.advanceTimersByTime(50); behavior.onTick();
+      expect(inputFlag(packets.at(-1)!.params, "sneak_down")).toBe(true);
+      vi.advanceTimersByTime(2949); behavior.onTick();
+      expect(check).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1); behavior.onTick();
+      expect(check).toHaveBeenCalledTimes(1);
       expect(inputFlag(packets.at(-1)!.params, "start_sneaking")).toBe(true);
-      vi.advanceTimersByTime(2100); behavior.onTick();
-      expect(inputFlag(packets.at(-1)!.params, "start_sneaking")).toBe(true);
+      check.mockClear();
     }
+    expect(packets.every(packet => !inputFlag(packet.params, "stop_sneaking"))).toBe(true);
+    expect(vi.mocked(process.stdout.write).mock.calls.map(([line]) => String(line)).join("")).not.toMatch(/behavior_log|"status"/);
   });
 });

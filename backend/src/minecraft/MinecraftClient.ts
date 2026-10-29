@@ -4,8 +4,7 @@ import { parseSellEarning } from "./sellEarnings.js";
 import {
   parseWorldRestartSeconds, WORLD_RESTART_SELL_LEAD_MS, WORLD_RESTART_SELL_COOLDOWN_MS,
 } from "./worldRestart.js";
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createSoulFireController, type SoulFireController } from "../soulfire/controller.js";
 import path from "node:path";
 import readline from "node:readline";
 import type {
@@ -20,6 +19,7 @@ import type {
 import { accountLogger } from "../logging/logger.js";
 import { config as appConfig } from "../config/config.js";
 import type { Logger } from "pino";
+import { stopRemoteAccount } from "../soulfire/lifecycle.js";
 import { terminateSubprocess } from "../utils/terminateSubprocess.js";
 
 // Fixed, locked retry interval for every account and every attempt.
@@ -54,27 +54,12 @@ function isServerFallbackMessage(message: string): boolean {
     .test(message.trim().replace(/\s+/g, " "));
 }
 
-function javaNetworkMode(account: ClientRuntimeConfig): "optimized" | "standard" {
-  const selected = (process.env.JAVA_STANDARD_NETWORK_ACCOUNTS ?? "")
-    .split(",").map(value => value.trim()).filter(Boolean)
-    .some(value => value === "*" || value === account.id || value.toLowerCase() === account.name.toLowerCase());
-  return selected ? "standard" : "optimized";
-}
-/**
- * Wraps the Azalea Rust bot subprocess (one per Minecraft account) and exposes
- * a small state machine plus console/status/profile event streams.
- *
- * The Rust process speaks NDJSON over stdio: we send a config line then command
- * lines, and read one JSON event per stdout line. Node owns the reconnect
- * policy — the Rust bot simply exits when a connection ends, and we respawn it.
- *
- * Emitted events:
- *   - "status"  (ClientStatusSnapshot)  status/detail changed
- *   - "console" (ConsoleEvent)          a console line to display/persist
- *   - "profile" (ProfileEvent)          resolved Minecraft username/uuid
- */
+/** Supervises isolated SoulFire controllers through the existing NDJSON
+ * contract. All controllers share Node and a dedicated JVM, avoiding one OS
+ * process per account. This class owns reconnection and website events. */
 export class MinecraftClient extends EventEmitter {
-  private subprocess: ChildProcess | null = null;
+  private subprocess: SoulFireController | null = null;
+  private pendingStop: Promise<void> = Promise.resolve();
   private status: ClientStatus = "OFFLINE";
   private reconnectTimer: NodeJS.Timeout | null = null;
   private restartTimer: NodeJS.Timeout | null = null;
@@ -120,6 +105,7 @@ export class MinecraftClient extends EventEmitter {
       this.sendToBot({
         type: "configure",
         crouch_enabled: config.crouchEnabled,
+        auto_button: (config.autoButton ?? "OFF").toLowerCase(),
         autosell_enabled: config.autoSellEnabled,
         autosell_interval_seconds: config.autoSellIntervalSeconds,
         autosell_command: config.autoSellCommand,
@@ -160,6 +146,16 @@ export class MinecraftClient extends EventEmitter {
     this.clearHangTimer();
     this.teardownSubprocess("Manual disconnect requested");
     this.setStatus("OFFLINE");
+  }
+
+  /** Wait before the website process exits: the Minecraft bot lives in a
+   * separate JVM and needs its explicit stop request to complete. */
+  async shutdown(): Promise<void> {
+    const controller = this.subprocess;
+    const closed = controller && controller.exitCode === null && controller.signalCode === null
+      ? new Promise<void>(resolve => controller.once("close", () => resolve())) : Promise.resolve();
+    this.disconnect();
+    await Promise.all([closed, this.pendingStop]);
   }
 
   restart(): void {
@@ -220,26 +216,9 @@ export class MinecraftClient extends EventEmitter {
       `Connecting to ${this.config.serverHost}:${this.config.serverPort}`,
     );
 
-    const botBinaryPath = this.resolveBotLauncher();
-    if (!botBinaryPath) {
-      const err =
-        this.config.edition === "BEDROCK"
-          ? "bedrock-bot script not found"
-          : "azalea-bot binary not found";
-      this.log.error(err);
-      this.emitConsole("ERROR", err);
-      this.handleConnectionFailure(err);
-      return;
-    }
-
-    let child: ChildProcess;
+    let child: SoulFireController;
     try {
-      // RUST_LOG=error keeps Azalea's own logging off stdout so it can't
-      // interfere with the NDJSON protocol (any stray line is ignored anyway).
-      child = spawn(botBinaryPath.command, botBinaryPath.args, {
-        stdio: ["pipe", "pipe", "pipe"],
-        env: { ...process.env, RUST_LOG: "error" },
-      });
+      child = createSoulFireController();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err }, `Failed to spawn bot subprocess: ${message}`);
@@ -265,7 +244,7 @@ export class MinecraftClient extends EventEmitter {
       const trimmed = line.trim();
       if (!trimmed) return;
       try {
-        this.handleRustBotEvent(JSON.parse(trimmed));
+        this.handleBotEvent(JSON.parse(trimmed));
       } catch (err) {
         // Non-JSON line (e.g. a stray log): safe to ignore.
         this.log.debug({ err, line: trimmed }, "Ignoring non-JSON bot output");
@@ -308,15 +287,15 @@ export class MinecraftClient extends EventEmitter {
       port: this.config.serverPort,
       auth_type: this.config.authType === "MICROSOFT" ? "microsoft" : "offline",
       username: this.config.name,
-      ...(this.config.edition === "JAVA" ? {
-        java_network_mode: javaNetworkMode(this.config),
-      } : {}),
-      // Consumed by the Bedrock bot (empty = auto-detect); ignored by Azalea.
+      account_id: this.config.id,
+      edition: this.config.edition,
+      // Both editions resolve their protocol through SoulFire.
       version: this.config.minecraftVersion,
       email: this.config.credentialsSecret,
       password: this.config.credentialsPassword,
       cache_dir: cacheDir,
       crouch_enabled: this.config.crouchEnabled,
+      auto_button: (this.config.autoButton ?? "OFF").toLowerCase(),
       autosell_enabled: this.config.autoSellEnabled,
       autosell_interval_seconds: this.config.autoSellIntervalSeconds,
       autosell_command: this.config.autoSellCommand,
@@ -368,7 +347,7 @@ export class MinecraftClient extends EventEmitter {
     return this.status === "ONLINE" && this.config.crouchEnabled && this.sendToBot({ type: "check_crouch" });
   }
 
-  private handleRustBotEvent(event: Record<string, unknown>): void {
+  private handleBotEvent(event: Record<string, unknown>): void {
     const type = event.type as string;
 
     switch (type) {
@@ -378,6 +357,8 @@ export class MinecraftClient extends EventEmitter {
           user_code: string;
           expires_in: number;
         };
+        this.clearHangTimer();
+        this.hangTimer = setTimeout(() => this.handleConnectionFailure("Microsoft-Anmeldung abgelaufen"), Math.min(expires_in, 900) * 1000 + 15_000);
         this.msaSignIn = {
           verificationUri: verification_uri,
           userCode: user_code,
@@ -392,9 +373,15 @@ export class MinecraftClient extends EventEmitter {
       case "profile": {
         const { username, uuid } = event as { username: string; uuid: string };
         this.log.info({ username, uuid }, "Resolved Minecraft profile");
+        this.clearHangTimer();
+        this.hangTimer = setTimeout(() => this.handleConnectionFailure("Connection timed out"), SUBPROCESS_HANG_TIMEOUT_MS);
+        this.msaSignIn = undefined;
         this.authenticated = true;
         this.emitConsole("SYSTEM", `Authenticated as ${username}`);
         this.emit("profile", { minecraftAccountId: this.config.id, username, uuid } as ProfileEvent);
+        // Complete the website sign-in flow even if the game server is slow
+        // or unreachable. CONNECTING itself has not changed at this point.
+        this.emitStatus();
         break;
       }
 
@@ -426,7 +413,7 @@ export class MinecraftClient extends EventEmitter {
             this.worldRestartAt = Date.now() + seconds * 1000;
             if (seconds <= 10) this.scheduleRestartCrouchChecks(this.worldRestartAt);
             this.sendToBot({ type: "pause_autosell", ...this.sellPauseWindow() });
-            this.emitConsole("SYSTEM", "Weltneustart: AutoSell pausiert ab 10 Sekunden vorher bis 3 Minuten danach");
+            this.emitConsole("SYSTEM", "Weltneustart: AutoSell pausiert ab 10 Sekunden vorher bis 2 Minuten danach");
           }
         }
         const amount = parseSellEarning(clean);
@@ -543,7 +530,9 @@ export class MinecraftClient extends EventEmitter {
       /* stdin may already be gone */
     }
 
-    terminateSubprocess(child);
+    this.pendingStop = stopRemoteAccount(path.join(appConfig.dataDir, "bot-cache", this.config.id))
+      .catch(err => this.log.warn({ err }, "Could not stop shared SoulFire bot"));
+    terminateSubprocess(child, 500, 4000);
   }
 
   private sendToBot(payload: Record<string, unknown>): boolean {
@@ -642,47 +631,4 @@ export class MinecraftClient extends EventEmitter {
     } as ConsoleEvent);
   }
 
-  /**
-   * Resolve how to launch the bot subprocess for this account's edition.
-   * Both editions speak the identical NDJSON protocol over stdio, so the rest
-   * of this class is edition-agnostic:
-   *   - JAVA    → the compiled Azalea Rust binary, run directly.
-   *   - BEDROCK → the bedrock-protocol Node bot, run as `node dist/bedrock-bot/index.js`.
-   */
-  private resolveBotLauncher(): { command: string; args: string[] } | null {
-    if (this.config.edition === "BEDROCK") {
-      const script = this.findBedrockBotScript();
-      return script ? { command: process.execPath, args: [script] } : null;
-    }
-    const binary = this.findBotBinary();
-    return binary ? { command: binary, args: [] } : null;
-  }
-
-  /** Locate the compiled bedrock-bot entry (Docker image or local dev build). */
-  private findBedrockBotScript(): string | null {
-    const candidates = [
-      "/app/dist/bedrock-bot/index.js",
-      path.join(process.cwd(), "dist", "bedrock-bot", "index.js"),
-      path.join(process.cwd(), "backend", "dist", "bedrock-bot", "index.js"),
-    ];
-    for (const candidate of candidates) {
-      if (existsSync(candidate)) return candidate;
-    }
-    return null;
-  }
-
-  /** Locate the compiled azalea-bot binary (Docker image or local dev build). */
-  private findBotBinary(): string | null {
-    const candidates = [
-      "/app/azalea-bot",
-      path.join(process.cwd(), "rust-bot", "target", "release", "azalea-bot"),
-      path.join(process.cwd(), "rust-bot", "target", "debug", "azalea-bot"),
-      path.join(process.cwd(), "..", "rust-bot", "target", "release", "azalea-bot"),
-    ];
-    for (const candidate of candidates) {
-      if (existsSync(candidate)) return candidate;
-      if (existsSync(candidate + ".exe")) return candidate + ".exe";
-    }
-    return null;
-  }
 }

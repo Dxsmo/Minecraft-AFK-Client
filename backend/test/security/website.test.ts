@@ -18,6 +18,23 @@ let sessions: {sessionId:string;csrfToken:string}[] = [];
 const sockets: WebSocket[] = [];
 const statusListeners = new Set<(status:any) => void>(), consoleListeners = new Set<(event:any) => void>();
 const sellListeners = new Set<(event: { id: string; lastSellAt: string }) => void>();
+const cameraViewers = new Map<string, Set<{ frame: (frame: any) => void; error: (error: unknown) => void }>>();
+const cameraSubscribe = vi.fn((id: string, viewer: { frame: (frame: any) => void; error: (error: unknown) => void }) => {
+  if (!cameraViewers.has(id)) cameraViewers.set(id, new Set());
+  cameraViewers.get(id)!.add(viewer);
+  return () => { cameraViewers.get(id)?.delete(viewer); };
+});
+vi.mock("../../src/soulfire/liveCam.js", () => ({ LiveCamStreams: class {
+  subscribe(id: string, viewer: any) { return cameraSubscribe(id, viewer); }
+  async close() {}
+} }));
+vi.mock("../../src/soulfire/versions.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../../src/soulfire/versions.js")>();
+  return { ...actual, protocolOptions: vi.fn(async () => [
+    { id: "RELEASE|777", displayName: "26.3", keywords: ["26.3", "777"] },
+    { id: "SPECIAL|2193", displayName: "Bedrock 1.26.51", keywords: ["Bedrock 1.26.51", "2193"] },
+  ]) };
+});
 const sendCommand = vi.fn(() => true);
 const headers = (index = 0, csrf = true) => ({ cookie: `${config.session.cookieName}=${sessions[index].sessionId}`, ...(csrf ? {"x-csrf-token": sessions[index].csrfToken} : {}) });
 const snapshot = (account: {id:string;name:string}) => ({ id:account.id, name:account.name, status:"ONLINE", serverHost:"minecraft.example", serverPort:25565,
@@ -51,7 +68,7 @@ beforeEach(async()=>{
   for(const ws of sockets.splice(0)) ws.terminate();
   await prisma.minecraftAccount.deleteMany({where:{id:{in:accounts.map(a=>a.id)}}});
   await prisma.user.deleteMany({where:{id:{in:users.map(u=>u.id)}}});
-  users=[];accounts=[];sessions=[];sendCommand.mockClear();
+  users=[];accounts=[];sessions=[];sendCommand.mockClear();cameraSubscribe.mockClear();cameraViewers.clear();
   for(const role of ["USER","USER","ADMIN"] as const) {
     const user=await prisma.user.create({data:{username:"security-"+randomUUID().slice(0,8),passwordHash,role}});
     users.push(user);sessions.push(await createSession(user.id,{}));
@@ -89,7 +106,8 @@ it("provides authenticated users with the installed Bedrock version catalogue", 
   const { bedrock } = response.json();
   expect(bedrock.defaultVersion).toBe("1.26.51");
   expect(bedrock.versions[0]).toBe("1.26.51");
-  expect(bedrock.versions).toContain("1.21.130");
+  expect(bedrock.versions).toEqual(["1.26.51"]);
+  expect(response.json().java.versions).toEqual(["26.3"]);
   expect(bedrock.versions).not.toContain("26.2");
   expect(bedrock.versions).not.toContain("1.26.60");
   expect(new Set(bedrock.versions).size).toBe(bedrock.versions.length);
@@ -291,7 +309,7 @@ it("exposes last-sale times only to authorized viewers and rechecks dashboard ac
 });
 
 it("rejects missing, null and foreign origins for cookie-authenticated sockets",async()=>{
-  for(const path of ["/ws/dashboard","/ws/%64ashboard",`/ws/%61ccounts/${accounts[0].id}`])
+  for(const path of ["/ws/dashboard","/ws/%64ashboard",`/ws/%61ccounts/${accounts[0].id}`,`/ws/accounts/${accounts[0].id}/camera`])
   for(const origin of [undefined,"null","https://evil.example",config.publicOrigin+".evil.example"]) {
     const ws=new WebSocket(url+path,{headers:{...headers(),...(origin?{origin}:{})}});sockets.push(ws);
     const error=await once(ws,"error");expect(String(error[0])).toContain("403");
@@ -301,9 +319,39 @@ it("rejects missing, null and foreign origins for cookie-authenticated sockets",
 it("rejects unauthenticated, foreign account sockets",async()=>{
   const anonymous=new WebSocket(url+"/ws/dashboard",{headers:{origin:config.publicOrigin}});sockets.push(anonymous);
   expect((await once(anonymous,"close"))[0]).toBe(4401);
-  for(const path of [`/ws/accounts/${accounts[1].id}`]) {
+  for(const path of [`/ws/accounts/${accounts[1].id}`, `/ws/accounts/${accounts[1].id}/camera`]) {
     const connection=await socket(path);expect((await connection.closed)[0]).toBe(4401);expect(connection.messages).toEqual([]);
   }
+});
+
+it("checks camera access before rendering and aborts on revoked permissions, logout and account disconnect", async () => {
+  const foreign=await socket(`/ws/accounts/${accounts[1].id}/camera`);
+  expect((await foreign.closed)[0]).toBe(4401); expect(cameraSubscribe).not.toHaveBeenCalled();
+  const own=await socket(`/ws/accounts/${accounts[0].id}/camera`);
+  await waitFor(()=>cameraSubscribe.mock.calls.length===1);
+  for(const viewer of cameraViewers.get(accounts[0].id)!) viewer.frame({type:"frame",image:"own-frame"});
+  await waitFor(()=>own.messages.some(m=>m.image==="own-frame"));
+  await prisma.userMinecraftAccount.deleteMany({where:{minecraftAccountId:accounts[0].id}});
+  for(const viewer of cameraViewers.get(accounts[0].id)!) viewer.frame({type:"frame",image:"revoked-secret"});
+  expect((await own.closed)[0]).toBe(4401); expect(JSON.stringify(own.messages)).not.toContain("revoked-secret");
+  await waitFor(()=>cameraViewers.get(accounts[0].id)!.size===0);
+  const admin=await socket(`/ws/accounts/${accounts[1].id}/camera`,2);
+  await waitFor(()=>cameraViewers.get(accounts[1].id)?.size===1);
+  await destroySession(sessions[2].sessionId); expect((await admin.closed)[0]).toBe(4401);
+  await waitFor(()=>cameraViewers.get(accounts[1].id)!.size===0);
+  const other=await socket(`/ws/accounts/${accounts[1].id}/camera`,1);
+  await waitFor(()=>cameraViewers.get(accounts[1].id)?.size===1);
+  for(const listener of statusListeners) listener({...snapshot(accounts[1]),status:"OFFLINE"});
+  expect((await other.closed)[0]).toBe(1000);await waitFor(()=>cameraViewers.get(accounts[1].id)!.size===0);
+});
+
+it("never starts a camera for anonymous visitors or offline accounts", async () => {
+  const anonymous=new WebSocket(url+`/ws/accounts/${accounts[0].id}/camera`,{headers:{origin:config.publicOrigin}});sockets.push(anonymous);
+  expect((await once(anonymous,"close"))[0]).toBe(4401);expect(cameraSubscribe).not.toHaveBeenCalled();
+  vi.mocked(clientManager.get).mockImplementationOnce(()=>({getStatus:()=>({...snapshot(accounts[0]),status:"OFFLINE"})}) as any);
+  const offline=await socket(`/ws/accounts/${accounts[0].id}/camera`);
+  expect((await offline.closed)[0]).toBe(1000);expect(cameraSubscribe).not.toHaveBeenCalled();
+  expect(offline.messages).toContainEqual({type:"offline"});
 });
 
 it("validates WebSocket commands, CSRF and current account access before sending them",async()=>{

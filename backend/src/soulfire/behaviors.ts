@@ -1,0 +1,262 @@
+import { readMultiplier, tooltipText } from "../minecraft/sellMultipliers.js";
+
+export type BehaviorConfig = { crouch_enabled?: boolean; auto_button?: "off" | "left" | "right"; autosell_enabled?: boolean;
+  autosell_interval_seconds?: number; autosell_command?: string; spawner_type?: string; spawner_drop_items?: string[]; spawner_sell_items?: string[] };
+export type GameSlot = { slot: number; itemId: string; count: number; displayName: string; tooltipLines: string[] };
+export type GameInventory = { menuId: string; title: string; containerSlots: number[]; playerSlots: number[]; slots: GameSlot[] };
+export interface GameGateway {
+  held(config: BehaviorConfig): Promise<void>;
+  sneak(): Promise<void>;
+  chat(text: string): Promise<void>;
+  inventory(): Promise<GameInventory>;
+  click(menu: string, slot: number, action: "transfer" | "drop" | "left"): Promise<void>;
+  close(menu: string): Promise<void>;
+  openSpawner(crouch: boolean): Promise<boolean>;
+}
+export type BotOutput = (event: Record<string, unknown>) => void;
+type Sell = { requested: number; opened: number | null; menu: string | null; targets: number[] | null; pending: { slot: GameSlot; at: number } | null };
+type Foreground = { kind: "multipliers" | "spawner"; deadline: number; opened: number | null; menu: string | null; phase: "drop" | "sell"; stalls: number; last: string; next: number };
+const plain = (text: string) => tooltipText(text).trim();
+const sellTitle = (text: string) => /^(items verkaufen|sell)$/i.test(plain(text));
+const teleportSuccess = (text: string) => /^(?:<(?:HugoSMP)>|\[HugoSMP\])?\s*(?:Du wurdest zu deinem Home .+ teleportiert!|[^:]+ hat deine Teleportations-Anfrage angenommen!|Du hast die Teleportations-Anfrage von .+ angenommen!)$/i.test(plain(text));
+
+/** One serialized scheduler for both editions. Deadlines are finite and
+ * independent of inventory traffic; transitions always clear stale ownership. */
+export class SoulFireBehaviors {
+  private cfg: BehaviorConfig;
+  private online = false;
+  private readyAt = 0;
+  private nextSell = 0;
+  private pauseStart = 0;
+  private pauseEnd = 0;
+  private manualUntil = 0;
+  private nextSneak = 0;
+  private sneakChecks: number[] = [];
+  private commands: Array<{ type: string; text?: string }> = [];
+  private sell: Sell | null = null;
+  private foreground: Foreground | null = null;
+  private commandCredits = 3;
+  private creditAt = 0;
+  private lastCommandAt = -Infinity;
+  private lastFailure = -Infinity;
+
+  constructor(config: BehaviorConfig, private game: GameGateway, private emit: BotOutput, private clock = Date.now) { this.cfg = { ...config }; }
+
+  async configure(config: BehaviorConfig): Promise<void> {
+    const changed = config.autosell_enabled !== this.cfg.autosell_enabled || config.autosell_interval_seconds !== this.cfg.autosell_interval_seconds || config.autosell_command !== this.cfg.autosell_command;
+    this.cfg = { ...config };
+    await this.game.held(this.cfg);
+    if (!config.autosell_enabled) await this.cancelSell();
+    if (changed) this.nextSell = this.clock();
+  }
+
+  async spawned(): Promise<void> {
+    this.online = true;
+    this.transition();
+    await this.game.held(this.cfg);
+  }
+
+  joining(): void { this.online = false; this.resetTasks(); }
+
+  transition(): void {
+    this.resetTasks();
+    this.readyAt = this.clock() + 2000;
+    this.nextSell = this.readyAt;
+    this.nextSneak = 0;
+    this.scheduleSneak();
+  }
+
+  pause(afterMs: number, resumeMs: number): void {
+    const now = this.clock(); this.pauseStart = now + afterMs; this.pauseEnd = now + resumeMs;
+    if (resumeMs === 0) this.pauseStart = this.pauseEnd = 0;
+  }
+
+  enqueue(type: string, text?: string): void {
+    if (type === "clean_spawner" && this.commands.some(command => command.type === type)) return;
+    this.commands.push({ type, text });
+  }
+
+  checkSneak(): void { if (this.cfg.crouch_enabled) this.nextSneak = 0; }
+
+  onChat(sender: string | null, message: string): void {
+    if (sender && sender.toLowerCase() !== "hugosmp") return;
+    if (teleportSuccess(message)) { this.scheduleSneak(); this.nextSneak = 0; }
+    const text = plain(message).toLowerCase();
+    if ((text.includes("inventar") || text.includes("inventory")) && /geladen|gespeichert|saving|loading/.test(text)) {
+      this.sell = null; this.readyAt = this.clock() + 1000; this.nextSell = this.readyAt;
+    }
+  }
+
+  private scheduleSneak(): void {
+    const due = this.clock() + 3000;
+    if (due - (this.sneakChecks.at(-1) ?? -Infinity) >= 50) this.sneakChecks.push(due);
+    if (this.sneakChecks.length > 64) this.sneakChecks.shift();
+  }
+
+  private resetTasks(): void { this.sell = null; this.foreground = null; }
+
+  async tick(): Promise<void> {
+    const now = this.clock();
+    if (!this.online) return;
+    while (this.sneakChecks.length && this.sneakChecks[0] <= now) { this.sneakChecks.shift(); this.checkSneak(); }
+    if (this.cfg.crouch_enabled && now >= this.nextSneak) {
+      try { await this.game.sneak(); this.nextSneak = now + 30 * 60_000; }
+      catch { this.nextSneak = now + 1000; } // Checks are intentionally silent.
+
+    }
+    if (this.commands.length) {
+      const command = this.commands[0];
+      if (!this.creditReady(now)) return;
+      this.commands.shift();
+      await this.runCommand(command, now);
+      return;
+    }
+    const paused = now >= this.pauseStart && now < this.pauseEnd;
+    if (paused) { await this.cancelSell(); return; }
+    if (now < this.readyAt) return;
+    if (this.foreground) { await this.tickForeground(now); return; }
+    if (!this.cfg.autosell_enabled || now < this.manualUntil) return;
+    await this.tickSell(now);
+  }
+
+  private creditReady(now: number): boolean {
+    if (!this.creditAt) this.creditAt = now;
+    const credits = Math.floor((now - this.creditAt) / 1500);
+    if (credits > 0) { this.commandCredits = Math.min(3, this.commandCredits + credits); this.creditAt += credits * 1500; }
+    return this.commandCredits >= 1;
+  }
+
+  private async dispatch(text: string): Promise<void> {
+    await this.game.chat(text);
+    this.commandCredits--; this.lastCommandAt = this.clock();
+  }
+
+  private async runCommand(command: { type: string; text?: string }, now: number): Promise<void> {
+    await this.cancelSell();
+    if (this.foreground?.menu) await this.closeOwned(this.foreground.menu);
+    this.foreground = null;
+    const inventory = await this.game.inventory();
+    if (inventory.containerSlots.length) await this.game.close(inventory.menuId);
+    this.manualUntil = now + 5000;
+    if (command.type === "read_sell_multipliers") {
+      await this.dispatch("/sellmulti");
+      this.foreground = { kind: "multipliers", deadline: now + 10_000, opened: null, menu: null, phase: "drop", stalls: 0, last: "", next: now };
+    } else if (command.type === "clean_spawner") {
+      if (!await this.game.openSpawner(!!this.cfg.crouch_enabled)) { this.emit({ type: "warning", message: "CleanSpawner: kein erreichbarer Spawner gefunden" }); return; }
+      this.foreground = { kind: "spawner", deadline: now + 60_000, opened: null, menu: null, phase: "drop", stalls: 0, last: "", next: now + 400 };
+    } else if (command.text) {
+      await this.dispatch(command.text);
+      if (/^\/(?:tpaccept|tpyes)(?:\s|$)/i.test(command.text)) this.scheduleSneak();
+      this.emit({ type: "behavior_log", message: `Command dispatched: ${command.text}` });
+    }
+  }
+
+  private async tickSell(now: number): Promise<void> {
+    if (!this.sell && now < this.nextSell) return;
+    // Fetch current menu identity and slots, never a snapshot from before TP.
+    const inventory = await this.game.inventory();
+    if (!this.sell && inventory.containerSlots.length) {
+      // Only a known late sale GUI may be recovered. Manual/foreign menus stay open.
+      if (sellTitle(inventory.title)) { await this.game.close(inventory.menuId); this.nextSell = now + 500; }
+      return;
+    }
+    if (!this.sell) {
+      if (now < this.nextSell || now - this.lastCommandAt < 1500 || !this.creditReady(now)) return;
+      await this.dispatch((this.cfg.autosell_command || "/sell").trim());
+      this.sell = { requested: now, opened: null, menu: null, targets: null, pending: null };
+      this.nextSell = now + Math.max(1500, (this.cfg.autosell_interval_seconds ?? 60) * 1000);
+      return;
+    }
+    const sale = this.sell;
+    if (now - sale.requested >= 10_000) { await this.failSell("Verkaufsmenü hat nicht rechtzeitig geantwortet"); return; }
+    if (!inventory.containerSlots.length) {
+      if (sale.menu) { this.sell = null; this.nextSell = Math.max(this.nextSell, now + 500); }
+      return;
+    }
+    if (!sellTitle(inventory.title)) { this.sell = null; return; }
+    if (sale.menu && sale.menu !== inventory.menuId) { this.sell = null; return; }
+    if (!sale.menu) { sale.menu = inventory.menuId; sale.opened = now; }
+    const populated = inventory.slots.filter(slot => inventory.playerSlots.includes(slot.slot) && slot.count > 0).map(slot => slot.slot);
+    // A newly opened menu can arrive before its content packet. A genuinely
+    // empty inventory receives the same bounded loading window.
+    if (!sale.targets && !populated.length && now - sale.opened! < 500) return;
+    sale.targets ??= populated;
+    if (sale.pending) {
+      const current = inventory.slots.find(slot => slot.slot === sale.pending!.slot.slot);
+      if (current && current.itemId === sale.pending.slot.itemId && current.count >= sale.pending.slot.count) {
+        if (now - sale.pending.at >= 2000) await this.failSell("Item-Transfer wurde nicht bestätigt");
+        return;
+      }
+      sale.pending = null;
+    }
+    const slotIndex = sale.targets.shift();
+    if (slotIndex === undefined) { await this.cancelSell(); return; }
+    const item = inventory.slots.find(slot => slot.slot === slotIndex && slot.count > 0);
+    if (!item) return;
+    try {
+      await this.game.click(inventory.menuId, item.slot, "transfer");
+      sale.pending = { slot: { ...item }, at: now };
+    } catch { await this.failSell("Item-Transfer wurde abgelehnt"); }
+  }
+
+  private async tickForeground(now: number): Promise<void> {
+    const task = this.foreground!;
+    if (now < task.next) return;
+    const inventory = await this.game.inventory();
+    if (now >= task.deadline) {
+      if (task.menu) await this.closeOwned(task.menu);
+      this.foreground = null;
+      this.emit({ type: "warning", message: task.kind === "multipliers" ? "Desmo: SELL MULTI nicht vollständig lesbar (10s Timeout)" : "CleanSpawner: Zeitlimit erreicht; Menü geschlossen" });
+      return;
+    }
+    if (!inventory.containerSlots.length) { if (task.menu) this.foreground = null; return; }
+    if (task.menu && task.menu !== inventory.menuId) { this.foreground = null; return; }
+    if (!task.menu) { task.menu = inventory.menuId; task.opened = now; }
+    if (task.kind === "multipliers") {
+      const entries = inventory.containerSlots.slice(0, 9).map(index => {
+        const slot = inventory.slots.find(item => item.slot === index);
+        return slot ? readMultiplier(slot.displayName, slot.tooltipLines) : null;
+      });
+      if (entries.length === 9 && entries.every(Boolean)) {
+        await this.game.close(inventory.menuId); this.foreground = null;
+        this.emit({ type: "sell_multipliers", entries });
+      }
+      return;
+    }
+    const stock = inventory.slots.filter(slot => inventory.containerSlots.includes(slot.slot) && slot.count > 0);
+    if (!stock.length && now - task.opened! < 1000) return;
+    const names = task.phase === "drop" ? this.cfg.spawner_drop_items ?? [] : this.cfg.spawner_sell_items ?? [];
+    const matching = this.cfg.spawner_type ? stock.filter(slot => names.includes(slot.itemId)) : [...stock].sort((a, b) => b.slot - a.slot);
+    const legacyDone = !this.cfg.spawner_type && !stock.some(slot => slot.slot === inventory.containerSlots[2]);
+    const fingerprint = matching.map(slot => `${slot.slot}:${slot.itemId}:${slot.count}`).join("|");
+    task.stalls = fingerprint === task.last ? task.stalls + 1 : 0; task.last = fingerprint;
+    if ((this.cfg.spawner_type ? matching.length <= 1 : legacyDone || matching.length === 0) || task.stalls >= 8) {
+      if (task.phase === "drop" && this.cfg.spawner_type) { task.phase = "sell"; task.stalls = 0; task.last = ""; }
+      else { await this.game.close(inventory.menuId); this.foreground = null; this.emit({ type: "behavior_log", message: "Spawner aufgeräumt; Menü geschlossen" }); }
+      return;
+    }
+    if (task.phase === "drop") await this.game.click(inventory.menuId, matching[0].slot, "drop");
+    else {
+      const configuredStock = [...this.cfg.spawner_drop_items ?? [], ...this.cfg.spawner_sell_items ?? []];
+      const sellButton = stock.find(slot => !configuredStock.includes(slot.itemId) && /verkaufen|sell/i.test([slot.displayName, ...slot.tooltipLines].map(plain).join(" ")));
+      if (sellButton) await this.game.click(inventory.menuId, sellButton.slot, "left");
+      else task.stalls++;
+    }
+    task.next = now + 400;
+  }
+
+  private async closeOwned(menu: string): Promise<void> {
+    const inventory = await this.game.inventory();
+    if (inventory.menuId === menu && inventory.containerSlots.length) await this.game.close(menu);
+  }
+
+  private async cancelSell(): Promise<void> {
+    const sale = this.sell; this.sell = null;
+    if (sale?.menu) await this.closeOwned(sale.menu);
+  }
+
+  private async failSell(reason: string): Promise<void> {
+    await this.cancelSell(); this.nextSell = this.clock() + 1500;
+    if (this.clock() - this.lastFailure >= 30_000) { this.lastFailure = this.clock(); this.emit({ type: "warning", message: `AutoSell: ${reason}; versuche es weiter` }); }
+  }
+}

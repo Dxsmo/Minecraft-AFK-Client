@@ -23,16 +23,18 @@ Application services (auth, users, accounts, commands, logging)
 Minecraft Client Manager (ClientManager)
         │
         ▼
-MinecraftClient instances ──spawn──▶ azalea-bot (Rust subprocess, NDJSON over stdio)
-        │                                    │  Crouch / Auto-sell
-        ▼                                    ▼
-Minecraft Server(s) ◀────────────────────────┘
+MinecraftClient instances → SoulFire controllers (shared Node scheduler)
+        │                    │ authenticated SDK / private RPC
+        │                    ▼
+        │              SoulFire 2.10.6 + native held-input extension (Java 25)
+        ▼                    │ Java / ViaBedrock
+Minecraft Server(s) ◀─────────┘
 ```
 
 | Layer     | Choice                                                        |
 |-----------|----------------------------------------------------------------|
 | Backend   | Node.js 24+, TypeScript, Fastify, `@fastify/websocket`         |
-| Minecraft | [Azalea](https://github.com/azalea-rs/azalea) (Rust) bot, run as a per-account subprocess |
+| Minecraft | [SoulFire 2.10.6](https://github.com/soulfiremc-com/SoulFire) shared Java/Bedrock engine |
 | Database  | SQLite via Prisma ORM                                          |
 | Auth      | Argon2id password hashing, **server-side sessions** (cookie + DB), CSRF double-submit cookie |
 | Logging   | Pino (structured JSON), secrets redacted                       |
@@ -54,7 +56,7 @@ users/          user CRUD (admin-only)
 accounts/       Minecraft account CRUD, ownership checks, assignments
 notes/          rich-text notes, owner-managed read/write sharing
 minecraft/      MinecraftClient (state machine + subprocess control), ClientManager
-rust-bot/       Azalea-based Minecraft bot compiled to a native binary (Rust)
+soulfire/       common SDK adapter, authentication migration and automation
 commands/       permission-checked command dispatch
 websocket/      live console + dashboard WebSocket routes
 logging/        pino logger, console log persistence, audit log
@@ -67,14 +69,11 @@ config/         typed environment configuration
 ## 2. Prerequisites
 
 - Node.js 24+ and npm
-- Docker + Docker Compose (recommended deployment path — it compiles the
-  Rust bot for you, so you don't need a local Rust toolchain)
-- A Minecraft server accepting the native Java bot's pinned protocol
-  (currently Minecraft 26.2 / protocol 776), or Bedrock accounts with their
-  supported `minecraftVersion` selection
-- **Only if building the bot outside Docker:** a Rust **nightly** toolchain
-  (`rustup toolchain install nightly-2026-10-16`) — Azalea uses nightly-only features.
-  See section 6 for the one-line build command.
+- Docker + Docker Compose (recommended; builds the SoulFire input extension)
+- A server compatible with SoulFire's installed Java/ViaBedrock codecs
+- For local engine development outside Docker: Java 25 JDK + Python 3
+
+Existing installation: see [SoulFire migration and account retention](docs/SOULFIRE-MIGRATION.md).
 
 ---
 
@@ -87,15 +86,11 @@ cd backend
 cp ../.env.example .env        # then edit values, see section 4
 npm install
 npx prisma migrate dev         # creates backend/data/afk.db + applies schema
-# Build the Azalea bot once (needs a Rust nightly toolchain). MinecraftClient
-# looks for the binary at rust-bot/target/{release,debug}/azalea-bot.
-( cd rust-bot && cargo build --release )
+# Start SoulFire separately with the input extension and set SOULFIRE_URL /
+# SOULFIRE_SECRET_KEY_FILE (see docs/SOULFIRE-MIGRATION.md).
 npm run dev                    # http://localhost:4000
 ```
 
-> Skipping the `cargo build` step is fine if you only work on the web app —
-> the backend starts normally and simply reports "azalea-bot binary not found"
-> when you try to start a client.
 
 On first start, if no ADMIN user exists yet, one is created automatically
 from `INITIAL_ADMIN_USERNAME` / `INITIAL_ADMIN_PASSWORD` in `.env` (defaults
@@ -126,8 +121,8 @@ checks for Minecraft accounts, command-execution permission checks, user
 service invariants (last-admin protection, session invalidation), and the
 `MinecraftClient` state machine (`OFFLINE → CONNECTING → ONLINE`,
 reconnect scheduling, manual disconnect, command dispatch, NDJSON event
-handling) using a **mocked `azalea-bot` subprocess** — no real Minecraft
-server or compiled Rust binary is required to run the tests.
+handling) using mocked SoulFire controllers — no live Minecraft server or Microsoft login
+is required for the unit tests.
 
 With Vite running, the uploader-category browser regression check can be run
 from the repository root using an installed Playwright and Chrome:
@@ -226,319 +221,47 @@ login form to sign in.
 
 ## 6. Minecraft account configuration
 
-Any authenticated user can create a Minecraft account under **Dashboard →
-New account** (they're automatically the sole assignee; admins can grant
-additional users access afterwards in the account's **Settings** panel):
+All Java and Bedrock accounts use **SoulFire 2.10.6** through the same scheduler.
+The website framework, roles, account IDs and existing data remain in place.
+The input extension, authentication migration and complete deployment procedure
+are documented in [SoulFire migration](docs/SOULFIRE-MIGRATION.md).
 
-- `name` – the account's display name. For **offline** accounts this is the
-  Minecraft username you type in and is also the name the bot joins with.
-  For **Microsoft** accounts you don't set it — the account is auto-named
-  after the real in-game username once the bot signs in.
-- `serverHost` / `serverPort`
-- `minecraftVersion` – selects the Bedrock version or auto-detection. Java
-  accounts use the Rust bot's pinned protocol (currently 26.2 / 776); this
-  setting does not change the Java wire version.
-- `authType` – `OFFLINE` (cracked/offline server) or `MICROSOFT`. For
-  `MICROSOFT` you provide **only the account email**, which is set once at
-  creation and can't be changed afterwards (to use a different account,
-  delete and recreate). Azalea authenticates via Microsoft's **device-code
-  flow**: the first time the bot starts, the account page shows a live
-  sign-in link + code; open it, approve once, and the token is cached on
-  disk (`data/bot-cache/<account>/`) so subsequent starts are silent. No
-  password is ever entered or stored.
-- Continuous crouching and auto-reconnect
-- Auto-sell: send the sell command, wait up to 500ms for the Java menu and
-  its inventory data, shift occupied player slots one at a time with at least
-  100ms between clicks, and close on the tick after the final click. Delayed
-  ticks never send a burst to catch up missed clicks. Large inventories therefore
-  take longer than the configured command interval; sell cycles never overlap.
-  Each click reads the current slots and revision again, and replaced/reopened
-  screens cancel the old click sequence even if the numeric menu ID is reused.
-  Ready menus proceed immediately, even if a tick was delayed. Full
-  content packets distinguish genuinely empty menus from unloaded shells and
-  keep the inventory revision used by clicks synchronized. Initially empty
-  inventories get the same loading window, so a slow response is not discarded.
-  Direct `set_player_inventory` updates also synchronize player/container slots
-  without overwriting the open menu's revision. Direct cursor updates are applied
-  before the next click packet is built. New menus start with a fresh revision
-  and cursor, matching the normal Java client.
-  Missing/partial menus time out and retry silently. Bedrock also waits up to
-  500ms for a sell menu to open and retries without a menu-timeout console line.
-  Teleports/world changes cancel stale cycles.
-  Empty or stale local inventory snapshots do not delay the configured interval.
-  A missing or late menu never shortens that interval either: the silent 500ms
-  menu deadline closes an unresolved attempt, but does not schedule extra sell
-  commands before the next configured cycle. Farm pickups during a timeout and
-  late empty menu replies obey the same command cadence.
-  World-restart countdowns pause automatic selling from 10 seconds before the
-  announced restart until 3 minutes afterwards, including bot reconnects.
-  HugoSMP announcements are recognized in both system messages and named chat.
-  From the announcement at ten seconds or less, enabled crouch is checked once
-  per minute for five minutes. Checks inspect server sneak metadata, reassert
-  held input, and survive bot reconnects; a missed check runs on rejoin within
-  that window.
-  Enabled crouch also receives an independent server-metadata check every
-  30 minutes while online, for both Java and Bedrock. World changes and the
-  existing checks and reconnects do not postpone it. A check missed during
-  reconnection runs on rejoin; disabling crouch or stopping an account cancels
-  this periodic timer.
-  Auto-sell recognizes HugoSMP's `Items verkaufen` menu from the current
-  inventory state, even when spawn events or delayed callbacks have cleared
-  the request association. Populated late sell menus are reused for selling.
-  Spawn selectors and manual menus (including `/home` selections) are left open;
-  another explicit command, such as `/home <name>`, can interrupt them.
-  Explicit commands are processed on packet/login events as well as ticks,
-  so they remain usable while a world transfer is waiting for Spawn. Manual
-  commands cancel queued automatic sell commands, flush through the actual
-  packet handlers immediately, and pause automation for five seconds. A delayed
-  sell-menu response to an interrupted sale is closed without clicking its slots;
-  manual menus remain open until another explicit command or world transition.
-  A missing tick heartbeat triggers recovery even if chat messages are still arriving.
-  During connection configuration, manual commands stay queued until game
-  packets can be sent again. Open menus are closed once before the command;
-  `Command dispatched` records packet dispatch, not a server acknowledgement.
-  Each Java world login/respawn clears the previous loaded-chunk/client-loaded
-  markers, so the new server receives its own `PlayerLoaded` acknowledgement
-  after the destination chunk loads. Position packets alone cannot start selling
-  in an unloaded destination. Spawn adds a bounded two-second stabilization
-  guard; continuous pickups do not extend it. Inventory-loading rejections delay
-  the next attempt by one second without releasing manual command priority.
-  The native AFK network reader processes at most 256 packets or four
-  milliseconds of incoming work per update, then lets ticks and outgoing
-  commands proceed. Dropped item entities and their visual updates are omitted
-  locally; server-side pickup and player/container inventory updates remain
-  active. Only raw packet callbacks used by selling and world transitions are
-  forwarded to the bot handler. Player physics, other entities, authentication,
-  keepalives, compression and encryption remain handled by Azalea. The startup
-  console line `AFK-Netzwerk aktiv` confirms that this reader is enabled.
-  When a read batch exhausts its packet/time budget, the scheduler yields to
-  async tasks and immediately continues with another bounded update. It no
-  longer imposes a frame sleep between every batch while packets are waiting,
-  which could accumulate incoming traffic and delay bundled control replies.
-  Due game ticks and commands still run between batches; game ticks remain at
-  20 Hz. Once the socket is empty, updates return to their normal 60 Hz pacing.
-  An incomplete bundle alone does not request more updates, and its packets
-  still take effect only after the closing delimiter. The startup suffix
-  `direkte Fortsetzung bei Paket-Rückstau` identifies this scheduler fix.
-  Empty framed/decompressed payloads have no packet ID and are silently skipped.
-  Valid one-byte bundle delimiters remain intact.
-  Consumed TCP buffer prefixes are reclaimed after 64 KiB even if a fragmented
-  next packet prevents the buffer from becoming completely empty. This prevents
-  already processed data from accumulating throughout a long AFK session.
-  Other parse warnings include the payload length and protocol state, are limited
-  to one per 30 seconds, and do not prevent processing subsequent packets.
-  A Java server-loss announcement or disconnect emits one
-  `AFK-Verbindungsdiagnose` line with received keepalives, queued replies,
-  replies actually written to TCP, pending outgoing packets, unread buffer
-  bytes (unread and total stored), empty frames and read errors. This provides
-  client-side evidence even when server/proxy logs are unavailable.
-  A completed TCP write does not prove
-  the remote server received or acknowledged it, and these counters do not
-  expose a kick reason the proxy withheld. Empty frames remain silent.
-  A stopped TCP writer no longer immediately discards unread server packets.
-  The reader keeps its normal per-update limits for up to two seconds to recover
-  a queued kick/disconnect reason. A received server reason takes priority;
-  otherwise the connection reports the TCP read/write failure. Write diagnostics
-  preserve the packet name, I/O error kind and operating-system error code.
-  Failure diagnostics also inspect the original server message for `show_text`
-  tooltips before Azalea flattens the chat component and discards hover metadata.
-  The `Server-Tooltip` field records any supplied text, or explicitly says the
-  message has no text tooltip. It handles nested components and legacy/modern
-  hover field names. Extraction is limited to trusted server-loss announcements
-  and game/configuration disconnect packets; routine chat and item/click metadata
-  are not logged as failure details. Output is limited to 1,024 characters.
-  This improves diagnostics, but cannot reveal a
-  reason the proxy did not send or prevent an external server from disconnecting.
-  To compare the AFK network path with Azalea's standard reader, set
-  `JAVA_STANDARD_NETWORK_ACCOUNTS=MogliHD` in the Compose `.env` file and rebuild
-  the backend. Use the dashboard account name or stable account ID from its URL;
-  multiple selections are comma-separated. `*` selects all Java accounts.
-  Only selected accounts use `java_network_mode: standard`; an empty selection
-  and older configs default to the optimized reader. The startup line
-  `Java-Netzwerk: Standardmodus (Azalea), AFK-Paketfilter deaktiviert` confirms
-  the comparison mode. It keeps the same pinned protocol/client patches but
-  uses the standard packet scheduling, item processing and packet callbacks.
-  Both readers silently skip empty payloads and reclaim consumed buffer prefixes.
-  AFK-specific counters/tooltips are supplied by the optimized reader and are
-  unavailable in standard mode. Start with one account because standard mode
-  processes the full item traffic. Keep it at the same farm with AutoSell off
-  while comparing disconnects; this mode is a diagnostic comparison, not a
-  confirmed remedy for server loss. To restore the AFK reader, clear the variable
-  and recreate the backend container. Selection survives automatic reconnects.
-- Sell earnings under the console keep the rolling 5m/1h/24h totals. Hovering
-  over the earnings or using the arrow opens a live graph for the last 1h, 6h or 24h, with time
-  labels below and amounts on the right. All views use completed, clock-aligned
-  five-minute intervals (12/72/288 points for 1h/6h/24h) and refresh at every
-  five-minute boundary. Points become denser as the time range grows. Every
-  interval has a time tick; printed labels adapt to available space to remain
-  readable. Hover/touch or arrow keys show each exact five-minute timestamp
-  and amount.
-  Only users with access to the account can read its history. Earnings are kept
-  for 25 hours so the oldest complete 24h graph bucket survives cleanup; the
-  summary totals remain rolling 5m/1h/24h totals. The account console view fits
-  the screen with the graph either closed or open. Opening the graph reallocates
-  most of the available height to earnings over a 500ms animation, while the
-  console shrinks at the same speed. Text and chart axes adapt to the screen size.
-  The console keeps its own scrollable log history.
-- Spawner: pick the spawner type the account is parked at, then choose per
-  produced item whether it is **dropped** out of the spawner or **sold** via the
-  spawner's own sell button. Dropping always runs first, and both stop once
-  fewer than two stacks of that item remain. The clear action is started manually.
-- Clean Spawner only ever acts on the block the bot is **currently looking at**;
-  it never searches the surroundings.
-- `autoReconnect` – fixed 15s retry delay (no jitter) after a dropped
-  connection, retried indefinitely as long as the client isn't manually
-  stopped; can be disabled per account at any time. The server announcement
-  `Verbindung zum vorherigen Server verloren – du wurdest auf einen anderen
-  Server verschoben.` also triggers this recovery: a proxy can keep the bot's
-  connection and tick heartbeat alive on a fallback server after the AFK server
-  is lost. Normal transfers and player chat do not trigger recovery. With
-  auto-reconnect disabled, the failed connection is stopped and reported as an
-  error. Rejoining uses the configured server address; the destination within
-  that network is chosen by the server.
-- Any admin or user assigned to the account can edit its settings,
-  start/stop/restart it, and delete it entirely. Admins and creators who still
-  have access can grant other users access by entering their exact username in
-  **Settings → Access**. This shows existing assignments rather than all users.
-
-The Microsoft account email (`credentialsSecret`) is **never** included in
-any API response sent to the frontend — only account metadata and live
-status are exposed.
-
-### Bedrock UDP connection diagnostics
-
-For `Invalid tag: ... > 20` errors after spawning, the Bedrock reader now
-discards an unreadable, explicitly allowed game NBT packet and continues the
-connection. Warnings identify the packet and protocol instead of only reporting
-`undefined`. Failed inventory packets pause AutoSell until a complete fresh
-inventory arrives; commands remain available. Critical join/registry errors
-still reconnect. See [Bedrock recovery limits and tests](docs/LIMITATIONS.md#what-works-vs-what-is-limited-on-bedrock).
-
-The network NBT array codec also corrects a confirmed parsing bug: Int/Long
-array elements use ZigZag VarInts instead of fixed-width values. This prevents
-valid block-entity packets from consuming the next field's bytes and reporting
-tag 115. Independent tests reproduce that error with a valid 125-byte packet;
-after the correction its contents and menu title are delivered normally.
-
-If Microsoft authentication succeeds but Bedrock repeatedly reports a
-`RakNet/UDP connection ... Connect timed out`, run this from the repository
-on the affected host. It uses the existing backend container's network,
-without rebuilding the image or stopping accounts:
-
-```sh
-git pull --ff-only
-docker compose exec -T backend node --input-type=module < backend/scripts/diagnose-bedrock.mjs
-```
-
-The default target is `HugoSMP.net:19132`. A custom target can be tested with
-`node backend/scripts/diagnose-bedrock.mjs hostname 19132` where Node is installed.
-The test reports the resolved IPv4 address, status advertisement, and both
-offline RakNet handshake steps (including cookie negotiation and four MTU
-sizes). It sends no Microsoft credentials, account name, Minecraft login or
-commands. An answered status ping alone does not prove a server accepts
-connections. Even a successful offline handshake does not prove native
-transport completion or a world join; compare with a normal Bedrock client
-using the same network.
-
-### Server resource/texture packs
-
-If the target server requires accepting a resource pack before letting a
-player fully join, the Azalea bot accepts it automatically (Azalea's
-built-in `AcceptResourcePacksPlugin`). There's no renderer to actually
-download/display the pack, so there's nothing to prompt a human for — this
-works out of the box for texture-pack-gated servers.
-
-### Reliable "online" detection
-
-The Rust bot reports lifecycle events over NDJSON: `login` when the login
-packet arrives and `spawn` once the player is fully in a loaded world. The
-Node side marks the client `ONLINE` on `spawn`. If a connection attempt
-neither spawns nor fails within 5 minutes (a hung subprocess), it's
-recycled and retried. When the connection later ends, the Rust process
-exits and Node schedules the next attempt on its fixed 15s timer — Node,
-not Azalea, owns the reconnect policy.
-
-### Azalea version pin (tracking new Minecraft releases)
-
-The Rust bot pins Azalea to a specific GitHub commit in
-`backend/rust-bot/Cargo.toml` (Azalea publishes Minecraft protocol support
-on `main` well ahead of crates.io releases):
-
-```
-azalea = { git = "https://github.com/azalea-rs/azalea", rev = "<commit-sha>" }
-```
-
-The current pin is upstream `0d38e0dc` (2026-10-16), using Minecraft 26.2 /
-protocol 776 in both Java network modes. Bedrock uses `bedrock-protocol 3.60.1`
-with Node 24 or newer. Java AutoSell has a minimum command interval of 1.5 seconds
-and shares a burst budget with manual commands to avoid server spam kicks.
-The comparison with the official Minecraft client and shared movement fixes
-are documented in [the Java protocol audit](docs/JAVA_PROTOCOL_AUDIT.md).
-
-Bedrock dropdowns load the installed version catalogue from the backend. They
-only list codecs actually available in `bedrock-protocol`; a Java selection is
-reset when switching edition during account creation. With auto-detect, a newer
-server advertisement (for example 26.60 preview/protocol 2225) triggers an
-explicit offer of the supported stable client, currently 1.26.51/protocol 2193.
-Both network settings and login advertise that real client protocol. This works
-only if the server accepts it; it does not add a 2225 codec. A refusal is shown
-with both server and client protocol numbers. Explicit version selections are
-never replaced automatically.
-
-For Bedrock/website-only updates without recompiling Java, use
-[`scripts/update-bedrock.sh`](scripts/update-bedrock.sh) after pulling the source.
-It retains the Java executable from the running Node-24 backend image; use the
-normal build below when Java code has changed.
-
-**To update** (e.g. for a newly released Minecraft version): pick a commit
-from [azalea-rs/azalea](https://github.com/azalea-rs/azalea) that supports
-it, update the `rev` in `Cargo.toml`, then rebuild
-(`cd backend/rust-bot && cargo build --release`, or just rebuild
-the Docker image). Pinning an exact commit keeps builds reproducible.
-
-Azalea completes the join sequence (including the configuration phase and
-resource-pack exchange) on servers where some other headless clients get
-stuck — which is exactly why this project uses it.
-
-### NDJSON subprocess protocol
-
-`MinecraftClient` (Node) and `azalea-bot` (Rust) talk over the subprocess's
-stdio, one JSON object per line (see `backend/rust-bot/src/protocol.rs` and
-`backend/src/minecraft/MinecraftClient.ts`):
-
-- **stdin, first line:** a `Config` object (host, port, auth type, username,
-  email, cache dir, behavior settings).
-- **stdin, subsequent lines:** `Command`s — `{"type":"chat","text":…}`,
-  `{"type":"configure",…}` (live behavior update), `{"type":"disconnect"}`.
-- **stdout:** one `OutEvent` per line — `login`, `spawn`, `chat`,
-  `msa_code`, `profile`, `disconnect`, `connection_failed`, `warning`,
-  `behavior_log`, `fatal_error`. Azalea's own logging is sent to stderr
-  (`RUST_LOG=error`) so it never corrupts the protocol.
-
-### Account automation system
-
-Behaviors live in the Rust bot (`backend/rust-bot/src/behaviors.rs`) and are
-driven from Azalea's game tick:
-
-- **Crouch** – continuously hold sneak; recheck server input after home/TPA teleports and world changes without releasing the key
-- **Auto-sell** – sell-menu cycle with bounded timeouts and recovery after teleports/world changes
-- **Clean Spawner** – drop/sell the targeted spawner's contents per item type
-
-They read a shared config that `{"type":"configure"}` updates live, so
-toggling automation or changing intervals in the UI takes effect without
-reconnecting.
-
-The spawner sell button is located by item **name/lore keywords** because GUI
-layouts differ per server and resource pack. A temporarily missing button is
-retried several times before the run closes the menu and reports the failure.
+- New accounts authenticate once using Microsoft's device-code flow. Passwords
+  are never collected. Accepted legacy refresh tokens are imported without
+  another sign-in; revoked or incompatible tokens need a new device code.
+- The version selector reads SoulFire's installed Java/ViaBedrock codecs. Java
+  automatic detection queries the server status. This release exposes Bedrock
+  **1.26.51**; other Bedrock versions require a compatible engine release.
+- Java and Bedrock accounts are added and authenticated separately. Adding one
+  edition never discovers, links or creates an account for the other edition.
+- The **Live Cam** tab between Console and Einstellungen shows the selected
+  account's real SoulFire POV. It loads only while the tab is open, the account
+  is online and the browser document is visible. Multiple viewers share one
+  stream per account; leaving the view cancels it when the last viewer leaves.
+- Crouch remains held. Silent checks after home/TPA/position transitions run
+  after 3 seconds; periodic and restart checks remain. Checks never toggle off.
+- Auto button Off/Left/Right holds native Minecraft input without an open video
+  session and restores it after respawns/reconnects. Game/server cooldowns apply.
+- AutoSell shifts player inventory items into its current sale menu and waits
+  for acknowledgments. Timeouts recover with finite deadlines. World changes
+  discard stale tasks. Announced restarts pause selling from 10 seconds before
+  until **2 minutes after** the restart, including controller reconnects.
+- Manual commands take priority. `/desmo` reads nine `/sellmulti` categories.
+  CleanSpawner finds a reachable spawner and applies the configured keep/drop/
+  sell actions. The client requests **6 chunks** view distance; simulation
+  distance remains controlled by the server.
+- Clicking an account icon opens the searchable, alphabetically sorted chooser
+  containing **1,489 transparent PNGs**, with custom upload still available.
+- Reconnect remains fixed at 15 seconds, with a five-second manual restart wait.
+  Real game-state checks feed the existing frozen-client watchdog.
 
 ### Feature visibility
 
-Live inventory viewing, moving and dropping have been removed for all roles,
-including admins, together with their API routes and bot protocol commands.
-Balance polling, automatic home queries, home shortcuts, auto-home and
-auto-TPA have been removed for all roles. Manually entered commands remain
-available through the console.
+Live inventory viewing, moving and dropping remain removed for all roles,
+including their API routes. Balance polling, automatic home queries, home
+shortcuts, auto-home and auto-TPA remain removed. Manually entered commands
+remain available through the console. Microsoft credentials never appear in
+account API responses.
 
 ---
 
@@ -595,8 +318,8 @@ Restart leaves the account offline for five seconds before reconnecting.
   recheck current sessions and account/admin rights before queued actions
 - Full RBAC + per-account ownership checks enforced in every API route
   (not just hidden in the UI)
-- Rate limiting: global (200 req/min) + strict login limiter
-  (`LOGIN_RATE_LIMIT_MAX` per `LOGIN_RATE_LIMIT_WINDOW`)
+- Rate limiting: global (400 req/min) + strict login limiter
+  (twice the legacy `LOGIN_RATE_LIMIT_MAX` per `LOGIN_RATE_LIMIT_WINDOW`, default 10/min)
 - Security headers via `@fastify/helmet` and Caddy (including frontend CSP)
 - Zod input validation on every request body
 - Audit log for admin-critical actions (user/account CRUD, assignments,
@@ -619,18 +342,18 @@ docker compose up -d
 docker compose logs -f
 ```
 
-This starts two containers:
+This starts three containers:
 
-- **backend** – the Fastify API + WebSocket server + all Minecraft clients
-  (SQLite DB persisted in the `backend_data` volume). The image is built in
-  multiple stages: a Rust nightly stage compiles the `azalea-bot` binary, a
-  Node stage compiles the TypeScript, and the slim runtime stage bundles
-  both. The first `docker compose build` therefore takes a few minutes while
-  the Rust dependencies compile. Persistent BuildKit cache mounts retain the
-  Cargo registry, git dependencies and compiled dependency artifacts, so later
-  bot-source changes do not rebuild all of Azalea.
-- **web** – Caddy, serving the built React SPA and reverse-proxying
-  `/api/*` and `/ws/*` to `backend`, listening on `80`/`443`
+- **backend**: Fastify, SQLite, WebSockets and all lightweight account controllers
+  in one Node runtime. Existing data stays in `backend_data`.
+- **soulfire**: the common Java/Bedrock engine and native held-input extension.
+  Its accounts, signing key and Minecraft runtime persist in `soulfire_data`.
+  RPC is private to the Compose network.
+- **web**: Caddy serves the React SPA and proxies `/api/*` and `/ws/*` to the
+  backend on public ports 80/443.
+
+For an existing installation, back up both data volumes and use
+`bash scripts/update.sh`; see [the migration procedure](docs/SOULFIRE-MIGRATION.md).
 
 Set `SITE_ADDRESS` in `.env` to your real domain (e.g. `afk.example.com`)
 for Caddy to automatically provision HTTPS via Let's Encrypt, or leave it
@@ -643,14 +366,18 @@ troubleshooting).
 
 ## 10. Documentation index
 
+- [`docs/RESOURCE-MEASUREMENTS.md`](docs/RESOURCE-MEASUREMENTS.md) — measured local
+  backend CPU/RAM, an isolated repeatable benchmark, and a read-only Linux sampler
+  for separate Java/Bedrock process measurements on the actual bot host.
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — Raspberry Pi 5 setup, Docker
   vs systemd, Caddy reverse proxy, Cloudflare DNS/HTTPS, firewall,
   backups, updates, troubleshooting.
 - [`docs/SECURITY_REVIEW.md`](docs/SECURITY_REVIEW.md) — V4.2.0 security findings,
   fixes, test evidence and unverified deployment boundaries.
-- [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — features that Azalea (Java-only,
-  headless) cannot support: Bedrock accounts and rendered Live View / screenshots,
-  with the path to add each later.
+- [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — current protocol, authentication,
+  renderer and verification boundaries.
+- [`docs/SOULFIRE-MIGRATION.md`](docs/SOULFIRE-MIGRATION.md) — updating, account
+  retention, cache import, feature mapping and complete backups.
 - `.env.example` — all environment variables with descriptions.
 - `scripts/backup-db.sh` / `scripts/restore-db.sh` — SQLite backup/restore
   (works for both Docker and bare-metal installs).
@@ -661,13 +388,13 @@ troubleshooting).
 
 ## 11. Known limitations / future work
 
-- Microsoft authentication uses Azalea's Microsoft **device-code** flow.
-  The account's Microsoft email is stored in `credentialsSecret` and used as
-  the token cache key. For unattended Raspberry Pi operation, complete the
-  interactive device-code login once (the link + code appear live on the
-  account page on first connect) — the resulting token is cached under
-  `data/bot-cache/<account>/` so subsequent restarts don't require
-  re-authentication.
+- Microsoft can require another sign-in if previous refresh tokens are no longer
+  accepted. Automatic companion accounts require successful authentication for
+  that edition; ownership/profile restrictions may prevent it.
+- The Pi's previous Azalea capacity measurements do not predict SoulFire's
+  memory/CPU requirements. Measure real accounts before choosing a capacity.
+- SoulFire has screenshot/POV APIs; a website live-view UI is not added by this
+  migration. See [current limitations](docs/LIMITATIONS.md).
 - No built-in email/2FA — access control relies on strong passwords +
   the RBAC/audit system described above. Consider adding 2FA if exposing
   this beyond a small trusted group.

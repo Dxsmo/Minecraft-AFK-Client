@@ -132,3 +132,8 @@ Automation now shares a command budget with manual commands and `/sellmulti`.
 It allows three immediate commands and refills one credit every 1.5 seconds;
 auto-sell also has a minimum interval of 1.5 seconds. Credits survive settings
 and world changes. Control replies are never subject to this chat budget.
+
+The held mouse input added on 2026-10-29 retains `LeftClickMine` through world
+transitions. Both automatic mining and mining progress ignore open container
+screens (`Inventory.id != 0`), so held gameplay input cannot mine behind an
+AutoSell or manual menu. The selected button resumes when the screen closes.

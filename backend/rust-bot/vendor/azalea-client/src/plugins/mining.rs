@@ -101,6 +101,7 @@ fn handle_auto_mine(
         current_mining_item,
     ) in &mut query.iter_mut()
     {
+        if inventory.id != 0 { continue; }
         let block_pos = hit_result_component
             .as_block_hit_result_if_not_miss()
             .map(|b| b.block_pos);
@@ -617,6 +618,7 @@ pub fn continue_mining_block(
         mut prediction_handler,
     ) in query.iter_mut()
     {
+        if inventory.id != 0 { continue; }
         if game_mode == GameMode::Creative {
             // TODO: worldborder check
             **mine_delay = 5;

@@ -30,6 +30,7 @@ export interface Config {
 
   /** When true, continuously sneak/crouch. */
   crouch_enabled?: boolean;
+  auto_button?: "off" | "left" | "right";
   autosell_enabled?: boolean;
   autosell_interval_seconds?: number;
   autosell_command?: string;
@@ -40,6 +41,7 @@ export interface Config {
 /** Behavior-only subset of Config, re-sent later to update settings live. */
 export interface BehaviorConfig {
   crouch_enabled?: boolean;
+  auto_button?: "off" | "left" | "right";
   autosell_enabled?: boolean;
   autosell_interval_seconds?: number;
   autosell_command?: string;

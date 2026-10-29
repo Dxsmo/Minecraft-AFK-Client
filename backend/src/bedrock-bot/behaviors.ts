@@ -11,6 +11,7 @@
 import { emit, type BehaviorConfig, type Config, type OutEvent } from "./protocol.js";
 import { BotSender } from "./send.js";
 import { BedrockInventory } from "./inventory.js";
+import { BedrockAutoButton } from "./autoButton.js";
 
 /** Emit a heartbeat at most this often. */
 const HEARTBEAT_INTERVAL_MS = 15000;
@@ -47,7 +48,9 @@ function isInventoryBusyMessage(message: string): boolean {
 export class BehaviorState {
   private sender: BotSender;
   readonly inventory: BedrockInventory;
+  readonly autoButton: BedrockAutoButton;
   private nextCrouchCheckAt = 0;
+  private teleportCrouchChecks: number[] = [];
   private manualAutosellPauseUntil = 0;
   private cfg: BehaviorConfig;
 
@@ -69,9 +72,13 @@ export class BehaviorState {
   constructor(config: Config, sender: BotSender) {
     this.sender = sender;
     this.inventory = new BedrockInventory(sender);
+    this.autoButton = new BedrockAutoButton(sender, this.inventory, config.version || "1.26.51");
+    this.autoButton.configure(config.auto_button);
+    sender.mouseInput = () => this.autoButton.tick(Date.now());
     this.pauseAutosell(config.autosell_pause_after_ms ?? 0, config.autosell_resume_after_ms ?? 0);
     this.cfg = {
       crouch_enabled: config.crouch_enabled ?? false,
+      auto_button: config.auto_button ?? "off",
       autosell_enabled: config.autosell_enabled ?? false,
       autosell_interval_seconds: config.autosell_interval_seconds ?? 60,
       autosell_command: config.autosell_command ?? "/sell",
@@ -91,6 +98,7 @@ export class BehaviorState {
       this.cfg.autosell_interval_seconds !== cfg.autosell_interval_seconds ||
       this.cfg.autosell_command !== cfg.autosell_command;
     this.cfg = { ...cfg };
+    this.autoButton.configure(cfg.auto_button);
     if (!cfg.autosell_enabled) this.inventory.interrupt();
     if (autosellChanged && this.cfg.autosell_enabled) {
       this.nextAutosellAt = Math.max(Date.now(), this.automationReadyAt);
@@ -110,6 +118,7 @@ export class BehaviorState {
   }
 
   markJoining(): void {
+    this.autoButton.reset();
     this.inventory.reset();
     this.spawned = false;
     this.crouchResyncPending = true;
@@ -118,6 +127,8 @@ export class BehaviorState {
   }
 
   markTeleported(): void {
+    this.autoButton.teleported();
+    this.scheduleTeleportCrouchCheck(Date.now());
     this.inventory.interrupt();
     this.spawned = true;
     this.automationReadyAt = Date.now() + TELEPORT_STABILIZE_MS;
@@ -145,6 +156,10 @@ export class BehaviorState {
   onTick(): void {
     const now = Date.now();
     let actionSentThisTick = false;
+    while (this.spawned && this.teleportCrouchChecks.length && now >= this.teleportCrouchChecks[0]) {
+      this.teleportCrouchChecks.shift();
+      this.checkCrouch();
+    }
 
     if (now - this.lastHeartbeatAt >= HEARTBEAT_INTERVAL_MS) {
       this.lastHeartbeatAt = now;
@@ -208,6 +223,7 @@ export class BehaviorState {
         if (manual) this.manualAutosellPauseUntil = now + 5000;
         this.inventory.interrupt(true, task.text.trim() === (this.cfg.autosell_command ?? "/sell").trim());
         this.sender.send(task.text);
+        if (/^\/(?:tpaccept|tpyes)(?:\s|$)/i.test(task.text.trim())) this.scheduleTeleportCrouchCheck(now);
         this.postponeAutomation(
           now + (isTeleportCommand(task.text) ? TELEPORT_COMMAND_GUARD_MS : CHAT_COMMAND_GUARD_MS),
         );
@@ -234,11 +250,12 @@ export class BehaviorState {
     const plain = message.replace(/§./g, "").replace(/^(?:<HugoSMP>|\[HugoSMP\])\s*/, "").trim();
     if ((!sender || sender.toLowerCase() === "hugosmp") && (
       /^Du wurdest zu deinem Home .+ teleportiert!$/.test(plain) ||
-      /^[^:]+ hat deine Teleportations-Anfrage angenommen!$/.test(plain)
+      /^[^:]+ hat deine Teleportations-Anfrage angenommen!$/.test(plain) ||
+      /^Du hast die Teleportations-Anfrage von .+ angenommen!$/.test(plain)
     )) {
       this.crouchResyncPending = true;
       this.serverSneaking = null;
-      this.nextCrouchCheckAt = now;
+      this.scheduleTeleportCrouchCheck(now);
     }
     if (isInventoryBusyMessage(message)) {
       this.inventory.interrupt();
@@ -255,8 +272,7 @@ export class BehaviorState {
 
   onSneakStatus(sneaking: boolean): void {
     this.serverSneaking = sneaking;
-    // The release's own delayed metadata must not start another release/press
-    // cycle. Keep its status, then retry on the regular check if still false.
+    // Bound retries of negative feedback without ever releasing held sneak.
     if (!sneaking && this.cfg.crouch_enabled && Date.now() >= this.crouchResyncGraceUntil) {
       this.crouchResyncPending = true;
       this.nextCrouchCheckAt = Date.now();
@@ -265,10 +281,17 @@ export class BehaviorState {
 
   checkCrouch(): void {
     if (!this.cfg.crouch_enabled) return;
-    const status = this.serverSneaking === true ? "bestätigt" : this.serverSneaking === false ? "nicht aktiv" : "noch nicht bestätigt";
-    emit({ type: "behavior_log", message: `Crouch-Check: Serverstatus ${status}; Sneak wird erneut angefordert` });
     this.crouchResyncPending = true;
     this.nextCrouchCheckAt = Date.now();
+  }
+
+  private scheduleTeleportCrouchCheck(now: number): void {
+    const deadline = now + 3000;
+    // Coalesce the same tick's command/chat/position notifications, while
+    // retaining checks for successive teleports rather than postponing them.
+    if (deadline - (this.teleportCrouchChecks.at(-1) ?? -Infinity) < 50) return;
+    this.teleportCrouchChecks.push(deadline);
+    if (this.teleportCrouchChecks.length > 64) this.teleportCrouchChecks.shift();
   }
 
   private applyCrouch(on: boolean, resync = false): void {

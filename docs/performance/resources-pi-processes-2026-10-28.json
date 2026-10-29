@@ -1,0 +1,203 @@
+{
+  "java": [
+    {
+      "pid": 49277,
+      "cpu": 7.3,
+      "rss": 58.6,
+      "pss": 36.5
+    },
+    {
+      "pid": 49296,
+      "cpu": 8,
+      "rss": 65.3,
+      "pss": 43.3
+    },
+    {
+      "pid": 49406,
+      "cpu": 7.7,
+      "rss": 69.1,
+      "pss": 46.9
+    },
+    {
+      "pid": 49619,
+      "cpu": 7.9,
+      "rss": 59.5,
+      "pss": 37.4
+    },
+    {
+      "pid": 49723,
+      "cpu": 7.4,
+      "rss": 54.7,
+      "pss": 32.6
+    },
+    {
+      "pid": 50141,
+      "cpu": 7.3,
+      "rss": 61.1,
+      "pss": 39
+    },
+    {
+      "pid": 50159,
+      "cpu": 8.7,
+      "rss": 57.9,
+      "pss": 35.9
+    },
+    {
+      "pid": 50252,
+      "cpu": 7.8,
+      "rss": 60,
+      "pss": 37.8
+    },
+    {
+      "pid": 71598,
+      "cpu": 10.6,
+      "rss": 118,
+      "pss": 95.8
+    },
+    {
+      "pid": 90521,
+      "cpu": 7.6,
+      "rss": 53,
+      "pss": 30.9
+    },
+    {
+      "pid": 90878,
+      "cpu": 7.7,
+      "rss": 52.7,
+      "pss": 30.6
+    },
+    {
+      "pid": 92237,
+      "cpu": 8,
+      "rss": 52.8,
+      "pss": 30.7
+    },
+    {
+      "pid": 95890,
+      "cpu": 0,
+      "rss": 14.8,
+      "pss": 4.2
+    }
+  ],
+  "bedrock": [
+    {
+      "pid": 95509,
+      "cpu": 8.3,
+      "rss": 203.8,
+      "pss": 161.9
+    },
+    {
+      "pid": 95516,
+      "cpu": 4.6,
+      "rss": 230.7,
+      "pss": 188.7
+    },
+    {
+      "pid": 95554,
+      "cpu": 13.5,
+      "rss": 246.4,
+      "pss": 204.5
+    },
+    {
+      "pid": 95784,
+      "cpu": 5,
+      "rss": 213.6,
+      "pss": 171.7
+    }
+  ],
+  "backend": {
+    "pid": 66,
+    "cpu": 2.5,
+    "rss": 338.3,
+    "pss": 296.6
+  },
+  "shell": {
+    "pid": 1,
+    "cpu": 0,
+    "rss": 1.4,
+    "pss": 0.3
+  },
+  "swappss": 0,
+  "processesBefore": 19,
+  "processesAfter": 19,
+  "durationSeconds": 30,
+  "source": "User screenshot ai-chat-attachment-7399807371446940007.png",
+  "date": "2026-10-28",
+  "limitations": [
+    "Online account status not independently verified",
+    "One Java process had zero measured CPU and 4.2 MiB PSS",
+    "CPU measured over 30 seconds; memory is a final snapshot",
+    "All displayed values rounded to 0.1",
+    "CPU-active means nonzero measured CPU; it does not prove ONLINE status.",
+    "Screenshot memory and CPU values rounded to one decimal; derived sums are approximate.",
+    "No simultaneous whole-host MemAvailable reading was provided for this sample."
+  ],
+  "metrics": {
+    "javaAll": {
+      "count": 13,
+      "cpu": {
+        "sum": 95.99999999999999,
+        "mean": 7.384615384615383
+      },
+      "rss": {
+        "sum": 777.5,
+        "mean": 59.80769230769231
+      },
+      "pss": {
+        "sum": 501.59999999999997,
+        "mean": 38.58461538461538
+      }
+    },
+    "javaWithCpuActivity": {
+      "count": 12,
+      "cpu": {
+        "sum": 95.99999999999999,
+        "mean": 7.999999999999999
+      },
+      "rss": {
+        "sum": 762.7,
+        "mean": 63.55833333333334
+      },
+      "pss": {
+        "sum": 497.4,
+        "mean": 41.449999999999996
+      }
+    },
+    "bedrock": {
+      "count": 4,
+      "cpu": {
+        "sum": 31.4,
+        "mean": 7.85
+      },
+      "rss": {
+        "sum": 894.5,
+        "mean": 223.625
+      },
+      "pss": {
+        "sum": 726.8,
+        "mean": 181.7
+      }
+    },
+    "all": {
+      "count": 19,
+      "cpu": {
+        "sum": 129.89999999999998,
+        "mean": 6.836842105263156
+      },
+      "rss": {
+        "sum": 2011.7,
+        "mean": 105.87894736842105
+      },
+      "pss": {
+        "sum": 1525.3,
+        "mean": 80.27894736842104
+      }
+    }
+  },
+  "units": {
+    "cpu": "percent of one logical CPU, averaged over 30 seconds",
+    "rss": "MiB, end snapshot; shared resident pages counted per process",
+    "pss": "MiB, end snapshot; shared resident pages counted proportionally",
+    "swappss": "MiB, end snapshot; all displayed processes 0.0"
+  }
+}

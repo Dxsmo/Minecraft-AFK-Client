@@ -14,7 +14,7 @@ describe("Bedrock crouch after world transitions", () => {
   });
 
   function setup(crouch = true) {
-    const sender = { setSneak: vi.fn(), tickInput: vi.fn(), packet: vi.fn(() => true), command: vi.fn(), send: vi.fn() };
+    const sender = { setSneak: vi.fn(), tickInput: vi.fn(), clearMouseActions: vi.fn(), packet: vi.fn(() => true), command: vi.fn(), send: vi.fn() };
     const config: Config = {
       host: "localhost", port: 19132, auth_type: "offline", username: "Bot",
       cache_dir: "", crouch_enabled: crouch,
@@ -52,6 +52,30 @@ describe("Bedrock crouch after world transitions", () => {
     vi.advanceTimersByTime(150);
     behavior.onTick();
     expect(sender.setSneak.mock.calls).toEqual([[true, true], [true, true]]);
+  });
+
+  it("checks three seconds after accepting TPA even when the account itself is not moved", () => {
+    const { sender, behavior } = setup();
+    behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
+    const check = vi.spyOn(behavior, "checkCrouch");
+    behavior.enqueueChat("/tpaccept Steve"); behavior.onTick();
+    vi.advanceTimersByTime(2999); behavior.onTick();
+    expect(check).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1); behavior.onTick();
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(sender.setSneak.mock.calls.every(([on]) => on === true)).toBe(true);
+  });
+
+  it("retains separate checks when another teleport happens within three seconds", () => {
+    const { behavior } = setup();
+    behavior.markSpawned(); vi.advanceTimersByTime(300); behavior.onTick();
+    const check = vi.spyOn(behavior, "checkCrouch");
+    behavior.markTeleported();
+    vi.advanceTimersByTime(1000); behavior.markTeleported();
+    vi.advanceTimersByTime(2000); behavior.onTick();
+    expect(check).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000); behavior.onTick();
+    expect(check).toHaveBeenCalledTimes(2);
   });
 
   it("leaves crouch disabled when it is switched off", () => {
@@ -129,7 +153,7 @@ describe("Bedrock crouch after world transitions", () => {
   });
 
   it("honors a restart pause supplied when a subprocess is recreated", () => {
-    const sender = { setSneak: vi.fn(), tickInput: vi.fn(), packet: vi.fn(() => true), command: vi.fn(), send: vi.fn() };
+    const sender = { setSneak: vi.fn(), tickInput: vi.fn(), clearMouseActions: vi.fn(), packet: vi.fn(() => true), command: vi.fn(), send: vi.fn() };
     const behavior = new BehaviorState({
       host: "localhost", port: 19132, auth_type: "offline", username: "Bot", cache_dir: "",
       autosell_enabled: true, autosell_pause_after_ms: 0, autosell_resume_after_ms: 60_000,

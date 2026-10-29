@@ -9,6 +9,7 @@ import { ConsoleView } from "../components/ConsoleView";
 import { EarningsBox } from "../components/EarningsBox";
 import { useCompactLayout } from "../lib/useCompactLayout";
 const AccountSettingsPanel = lazy(() => import("../components/AccountSettingsPanel").then(module => ({ default: module.AccountSettingsPanel })));
+const LiveCamPanel = lazy(() => import("../components/LiveCamPanel").then(module => ({ default: module.LiveCamPanel })));
 
 export function AccountDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -24,8 +25,9 @@ export function AccountDetailPage() {
   const consolePageRef = useRef<HTMLDivElement>(null);
   const accountIdRef = useRef(id);
   accountIdRef.current = id;
-  const tab = searchParams.get("tab") === "settings" ? "settings" : "console";
-  function setTab(next: "console" | "settings") {
+  const selectedTab = searchParams.get("tab");
+  const tab = selectedTab === "settings" || selectedTab === "camera" ? selectedTab : "console";
+  function setTab(next: "console" | "camera" | "settings") {
     if (next !== tab) {
       setEarningsExpanded(false);
     }
@@ -310,6 +312,10 @@ export function AccountDetailPage() {
           <TabIcon name="console" />
           Console
         </button>
+        <button className="tab-btn" data-active={tab === "camera"} onClick={() => setTab("camera")}>
+          <TabIcon name="camera" />
+          Live Cam
+        </button>
         <button className="tab-btn" data-active={tab === "settings"} onClick={() => setTab("settings")}>
           <TabIcon name="settings" />
           Einstellungen
@@ -341,6 +347,14 @@ export function AccountDetailPage() {
           </form>
           {commandError && <p role="alert" className="alert-error">{commandError}</p>}
           {id && !compact && <EarningsBox key={id} accountId={id} onExpandedChange={setEarningsExpanded} />}
+        </div>
+      )}
+
+      {tab === "camera" && (
+        <div key="camera" className="tab-panel">
+          <Suspense fallback={<p className="text-sm">Live Cam wird geladen…</p>}>
+            <LiveCamPanel key={account.id} accountId={account.id} online={liveStatus === "ONLINE"} />
+          </Suspense>
         </div>
       )}
 
@@ -384,7 +398,7 @@ function StatPill({
   );
 }
 
-function TabIcon({ name }: { name: "console" | "settings" }) {
+function TabIcon({ name }: { name: "console" | "camera" | "settings" }) {
   const common = {
     width: 15,
     height: 15,
@@ -395,6 +409,7 @@ function TabIcon({ name }: { name: "console" | "settings" }) {
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
   };
+  if (name === "camera") return <svg {...common}><rect x="3" y="5" width="13" height="14" rx="2" /><path d="m16 10 5-3v10l-5-3" /></svg>;
   if (name === "console") {
     return (
       <svg {...common}>

@@ -25,7 +25,7 @@ export interface ConsoleEvent {
   timestamp: string;
 }
 
-/** Emitted once the Rust bot resolves the real Minecraft profile (username/uuid). */
+/** Emitted once SoulFire resolves the real Minecraft profile (username/uuid). */
 export interface ProfileEvent {
   minecraftAccountId: string;
   username: string;
@@ -38,7 +38,7 @@ export interface ClientRuntimeConfig {
   minecraftVersion: string;
   serverHost: string;
   serverPort: number;
-  /** Which bot binary drives this account: Java (Azalea) or Bedrock (bedrock-protocol). */
+  /** Minecraft edition supplied to the shared SoulFire service. */
   edition: "JAVA" | "BEDROCK";
   authType: "OFFLINE" | "MICROSOFT";
   /** Microsoft account email, only relevant when authType === "MICROSOFT". Never exposed to the frontend. */
@@ -46,6 +46,7 @@ export interface ClientRuntimeConfig {
   /** Microsoft account password, only relevant when authType === "MICROSOFT". Never exposed to the frontend. */
   credentialsPassword: string | null;
   crouchEnabled: boolean;
+  autoButton: "OFF" | "LEFT" | "RIGHT";
   autoReconnect: boolean;
   /** Periodically run the sell command and move all items into the sell menu. */
   autoSellEnabled: boolean;

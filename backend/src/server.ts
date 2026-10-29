@@ -42,7 +42,7 @@ async function main() {
     shuttingDown = true;
     logger.info({ signal }, "Shutting down gracefully...");
     clearInterval(pruneInterval);
-    clientManager.shutdownAll();
+    await clientManager.shutdownAll();
     await app.close();
     await flushConsoleLogs();
     await disconnectDatabase();

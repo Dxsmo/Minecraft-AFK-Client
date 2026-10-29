@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 
 /**
- * Fake `azalea-bot` subprocess: an EventEmitter with the child-process surface
+ * Fake SoulFire adapter subprocess: an EventEmitter with the child-process surface
  * MinecraftClient uses (stdin.write, stdout/stderr streams, kill, exit). Tests
  * drive the real state machine by pushing NDJSON lines to stdout and emitting
  * `exit`, without spawning a real process or opening a network connection.
@@ -42,23 +42,11 @@ class FakeChild extends EventEmitter {
 
 const children: FakeChild[] = [];
 
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    spawn: vi.fn(() => {
-      const child = new FakeChild();
-      children.push(child);
-      return child;
-    }),
-  };
-});
-
-// Pretend the compiled bot binary exists so findBotBinary() resolves a path.
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, existsSync: vi.fn(() => true) };
-});
+vi.mock("../../src/soulfire/controller.js", () => ({
+  createSoulFireController: vi.fn(() => {
+    const child = new FakeChild(); children.push(child); return child;
+  }),
+}));
 
 const { MinecraftClient } = await import("../../src/minecraft/MinecraftClient.js");
 import type { ClientRuntimeConfig } from "../../src/minecraft/types.js";
@@ -79,6 +67,7 @@ function baseConfig(overrides: Partial<ClientRuntimeConfig> = {}): ClientRuntime
     autoReconnect: true,
     edition: "JAVA",
     crouchEnabled: false,
+    autoButton: "OFF",
     autoSellEnabled: false,
     autoSellIntervalSeconds: 60,
     autoSellCommand: "/sell",
@@ -99,7 +88,7 @@ function lastChild(): FakeChild {
   return children[children.length - 1];
 }
 
-describe("MinecraftClient (Azalea subprocess) state machine", () => {
+describe("MinecraftClient (SoulFire adapter) state machine", () => {
   beforeEach(() => {
     children.length = 0;
     active.length = 0;
@@ -137,6 +126,18 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     await tick();
     expect(status).not.toHaveBeenCalled();
     for (const field of ["health", "food", "reconnectAttempt"]) expect(client.getStatus()).not.toHaveProperty(field);
+  });
+
+  it.each(["JAVA", "BEDROCK"] as const)("passes persistent mouse input to %s on initial connection, live changes and reconnect", async edition => {
+    const client = makeClient({ edition, autoButton: "RIGHT" });
+    client.connect();
+    const messages = (child: FakeChild) => child.stdin.write.mock.calls.map(([line]) => JSON.parse(String(line)));
+    expect(messages(lastChild())[0]).toMatchObject({ auto_button: "right" });
+    lastChild().send({ type: "spawn" }); await tick();
+    client.updateConfig(baseConfig({ edition, autoButton: "LEFT" }));
+    expect(messages(lastChild()).at(-1)).toMatchObject({ type: "configure", auto_button: "left" });
+    client.disconnect(); client.connect();
+    expect(messages(lastChild())[0]).toMatchObject({ auto_button: "left" });
   });
 
   it.each(["JAVA", "BEDROCK"] as const)("checks enabled %s crouch every 30 minutes independently of repeat spawns", async edition => {
@@ -236,48 +237,17 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     expect(config.host).toBe("play.example.com");
     expect(config.port).toBe(25566);
     expect(config.auth_type).toBe("offline");
-    expect(config.java_network_mode).toBe("optimized");
+    expect(config.edition).toBe("JAVA");
     expect(config).not.toHaveProperty("auto_command_enabled");
     expect(config).not.toHaveProperty("tpauto_enabled");
   });
 
-  it.each([
-    [" acc-1 , other ", "standard"],
-    ["bot_01", "standard"],
-    ["*", "standard"],
-    ["acc-12", "optimized"],
-    ["another-account", "optimized"],
-    [" , ", "optimized"],
-  ])("selects the Java reader for %s without enabling automation", (selection, expected) => {
-    vi.stubEnv("JAVA_STANDARD_NETWORK_ACCOUNTS", selection);
-    const client = makeClient({ autoSellEnabled: false });
+  it.each(["JAVA", "BEDROCK"] as const)("launches %s through the common SoulFire adapter", edition => {
+    const client = makeClient({ edition });
     client.connect();
-    const config = JSON.parse(String(lastChild().stdin.write.mock.calls[0][0]));
-    expect(config.java_network_mode).toBe(expected);
-    expect(config.autosell_enabled).toBe(false);
-  });
-
-  it("keeps the selected Java reader across reconnects", () => {
-    vi.useFakeTimers();
-    try {
-      vi.stubEnv("JAVA_STANDARD_NETWORK_ACCOUNTS", "acc-1");
-      const client = makeClient();
-      client.connect();
-      lastChild().send({ type: "spawn" });
-      lastChild().send({ type: "disconnect", reason: "server closed" });
-      vi.advanceTimersByTime(15_000);
-      expect(children).toHaveLength(2);
-      const config = JSON.parse(String(lastChild().stdin.write.mock.calls[0][0]));
-      expect(config.java_network_mode).toBe("standard");
-    } finally { vi.useRealTimers(); }
-  });
-
-  it("does not apply Java network selection to Bedrock", () => {
-    vi.stubEnv("JAVA_STANDARD_NETWORK_ACCOUNTS", "*");
-    const client = makeClient({ edition: "BEDROCK" });
-    client.connect();
-    const config = JSON.parse(String(lastChild().stdin.write.mock.calls[0][0]));
-    expect(config).not.toHaveProperty("java_network_mode");
+    const cfg = JSON.parse(String(lastChild().stdin.write.mock.calls[0][0]));
+    expect(cfg).toMatchObject({ edition, account_id: "acc-1" });
+    expect(cfg).not.toHaveProperty("java_network_mode");
   });
 
   it.each(["JAVA", "BEDROCK"] as const)("keeps %s offline for five seconds on restart and force-kills a stuck old process", edition => {
@@ -361,14 +331,14 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
       await tick();
       const commands = first.stdin.write.mock.calls.map(([line]) => JSON.parse(String(line)));
       expect(commands.find((cmd) => cmd.type === "pause_autosell")).toEqual({
-        type: "pause_autosell", autosell_pause_after_ms: 20_000, autosell_resume_after_ms: 210_000,
+        type: "pause_autosell", autosell_pause_after_ms: 20_000, autosell_resume_after_ms: 150_000,
       });
-      // A later countdown refers to the same restart rather than restarting three minutes from now.
+      // A later countdown refers to the same restart rather than restarting two minutes from now.
       vi.advanceTimersByTime(25_000);
       first.send({ type: "chat", sender: null, message: "Die Welt wird in 5 Sekunden neu gestartet!" });
       await tick();
       expect(JSON.parse(String(first.stdin.write.mock.calls.at(-1)![0]))).toEqual({
-        type: "pause_autosell", autosell_pause_after_ms: 0, autosell_resume_after_ms: 185_000,
+        type: "pause_autosell", autosell_pause_after_ms: 0, autosell_resume_after_ms: 125_000,
       });
       first.exitWith(1);
       await tick();
@@ -377,14 +347,14 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
       expect(replacement).not.toBe(first);
       const config = JSON.parse(String(replacement.stdin.write.mock.calls[0][0]));
       expect(config.autosell_pause_after_ms).toBe(0);
-      expect(config.autosell_resume_after_ms).toBe(170_000);
+      expect(config.autosell_resume_after_ms).toBe(110_000);
       replacement.send({ type: "spawn" });
       await tick();
       client.updateConfig(baseConfig({ edition, autoSellEnabled: true, autoSellIntervalSeconds: 5 }));
       expect(JSON.parse(String(replacement.stdin.write.mock.calls.at(-1)![0]))).toMatchObject({
         type: "configure", autosell_enabled: true, autosell_interval_seconds: 5,
       });
-      vi.advanceTimersByTime(170_000);
+      vi.advanceTimersByTime(110_000);
       client.restart();
       expect(client.getStatus().status).toBe("OFFLINE");
       vi.advanceTimersByTime(5000);
@@ -420,7 +390,7 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
       await tick();
       const commands = child.stdin.write.mock.calls.map(([line]) => JSON.parse(String(line)));
       expect(commands.find((cmd) => cmd.type === "pause_autosell")).toEqual({
-        type: "pause_autosell", autosell_pause_after_ms: 50_000, autosell_resume_after_ms: 240_000,
+        type: "pause_autosell", autosell_pause_after_ms: 50_000, autosell_resume_after_ms: 180_000,
       });
       client.dispose();
     } finally {
@@ -907,6 +877,28 @@ describe("MinecraftClient (Azalea subprocess) state machine", () => {
     await tick();
 
     expect(profiles).toEqual([{ minecraftAccountId: "acc-1", username: "CoolBot", uuid: "uuid-123" }]);
+  });
+
+  it.each(["JAVA", "BEDROCK"] as const)("confirms %s sign-in to live subscribers before the server accepts the connection", async edition => {
+    const client = makeClient({ edition, authType: "MICROSOFT", credentialsSecret: "bot@example.com" });
+    client.connect();
+    const child = lastChild();
+    child.send({ type: "msa_code", verification_uri: "https://microsoft.com/link", user_code: "ABCD-EFGH", expires_in: 900 });
+    await tick();
+    const statuses = vi.fn();
+    client.on("status", statuses);
+
+    child.send({ type: "profile", username: "CoolBot", uuid: "uuid-123" });
+    await tick();
+
+    expect(statuses).toHaveBeenCalledTimes(1);
+    expect(statuses.mock.calls[0][0]).toMatchObject({ id: "acc-1", status: "CONNECTING", authenticated: true });
+    expect(statuses.mock.calls[0][0].msaSignIn).toBeUndefined();
+    // A later connection failure must not be the first sign-in notification.
+    child.send({ type: "connection_failed", error: "Connection timed out" });
+    await tick();
+    expect(statuses.mock.calls[0][0].authenticated).toBe(true);
+    expect(client.getStatus().status).toBe("RECONNECTING");
   });
 
   it("emits status snapshots (not bare strings) on transitions", async () => {

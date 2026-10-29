@@ -1,0 +1,68 @@
+{
+  "receivedDate": "2026-10-28",
+  "source": "User-provided free -h, docker stats --no-stream, docker top output from production host",
+  "scope": "Uncontrolled snapshots, not an interval benchmark",
+  "hostMemoryRounded": {
+    "total": "7.9 GiB",
+    "used": "4.4 GiB",
+    "free": "600 MiB",
+    "available": "3.4 GiB",
+    "swapTotal": "2.0 GiB",
+    "swapUsed": "1.1 GiB"
+  },
+  "containerStatsEarlierSnapshot": {
+    "backendCpuPercentOneCore": 111.14,
+    "webCpuPercentOneCore": 0.02,
+    "memoryAccounting": "0B / 0B reported; no usable container RAM measurement"
+  },
+  "vmstatIntervalMeasurement": {
+    "command": "vmstat 2 16",
+    "firstRowExcluded": "CPU and I/O averages since boot",
+    "intervals": 15,
+    "durationSeconds": 30,
+    "cpuUserPercentMean": 21.066666666666666,
+    "cpuSystemPercentMean": 7.933333333333334,
+    "cpuComputeBusyPercentMean": 29.0,
+    "cpuComputeBusyPercentMax": 42.0,
+    "cpuIdlePercentMean": 69.13333333333334,
+    "cpuIoWaitPercentMean": 1.8,
+    "cpuStealPercentAllIntervals": 0,
+    "swapInPerSecondAllIntervals": 0,
+    "swapOutPerSecondAllIntervals": 0,
+    "swapUsedKiBAllIntervals": 1191664,
+    "cpuSamplesUserSystemIdleIoWaitPercent": [
+      [21, 8, 69, 1], [19, 9, 70, 2], [17, 7, 75, 2],
+      [19, 7, 72, 2], [21, 8, 69, 2], [17, 7, 73, 2],
+      [23, 7, 69, 1], [20, 8, 70, 2], [17, 7, 74, 2],
+      [21, 8, 69, 2], [23, 8, 68, 1], [19, 8, 71, 2],
+      [26, 8, 64, 2], [32, 10, 55, 2], [21, 9, 69, 2]
+    ]
+  },
+  "processSnapshot": {
+    "java": {
+      "observedProcesses": 13,
+      "rssKiB": [60000, 66864, 70784, 60976, 55984, 62576, 59296, 61440, 120800, 54192, 53952, 53856, 15104],
+      "totalRssMiB": 777.171875,
+      "meanRssMiB": 59.78245192307692,
+      "medianRssMiB": 58.59375
+    },
+    "additionalNodeProcesses": {
+      "observedProcesses": 3,
+      "classification": "Likely Bedrock according to launcher architecture, not yet verified from command paths or dashboard",
+      "rssKiB": [262976, 263056, 235520],
+      "totalRssMiB": 743.703125,
+      "meanRssMiB": 247.90104166666666
+    },
+    "backend": { "rssKiB": 347376, "rssMiB": 339.234375 },
+    "shell": { "rssKiB": 1456 },
+    "totalSummedRssMiB": 1861.53125
+  },
+  "limitations": [
+    "No verified ONLINE account counts or active automation settings supplied yet.",
+    "RSS counts shared resident pages per process and excludes swapped-out pages.",
+    "Per-process swap/PSS have not been measured; vmstat found no active swapping in the 30-second window.",
+    "docker top pcpu is a lifetime average, not a shared fixed interval.",
+    "docker stats and process snapshots were supplied at different times.",
+    "No maximum account capacity can be established from these snapshots."
+  ]
+}

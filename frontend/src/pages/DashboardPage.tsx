@@ -360,8 +360,8 @@ const AccountCard = memo(function AccountCard({ account, compact, live, index, t
               style={{ transform: expanded ? "rotate(90deg)" : undefined, transition: "transform 300ms ease" }}><path d="m9 6 6 6-6 6" /></svg>
           </button>
         </div>
-        {!compact && <AccountImageButton accountId={account.id} imageUrl={account.imageUrl} blurred={isBlurred}
-          onUpdated={updateImage} onError={setError} />}
+        <AccountImageButton accountId={account.id} imageUrl={account.imageUrl} blurred={isBlurred}
+          onUpdated={updateImage} onError={setError} />
         <div
           className="account-summary min-w-0"
           style={{

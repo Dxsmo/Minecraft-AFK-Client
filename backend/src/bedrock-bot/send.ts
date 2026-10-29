@@ -12,6 +12,9 @@ type AnyClient = {
 /** All-zero UUID: the command_request `uuid` field must be a valid UUID string. */
 const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 
+export type PlayerView = { position: { x: number; y: number; z: number }; direction: { x: number; y: number; z: number } };
+export type InputFrame = { flags?: Record<string, boolean>; transaction?: object; blockActions?: object[]; sent?: () => void };
+
 function warn(message: string): void {
   emit({ type: "warning", message } satisfies OutEvent);
 }
@@ -27,11 +30,23 @@ export class BotSender {
   private inputTick = 0n;
   private sneaking = false;
   private sneakEdge = true;
-  private releaseForSneakResync = false;
-  private sneakPressPending = false;
   private handledTeleport = false;
   private lastWarningAt = new Map<string, number>();
   authoritativeInventory = true;
+  mouseInput?: () => InputFrame;
+  private queuedBlockActions: object[] = [];
+
+  get localEntityId(): bigint | null { return this.runtimeEntityId; }
+  get playerView(): PlayerView | null {
+    if (!this.position) return null;
+    return { position: { ...this.position }, direction: {
+      x: -Math.sin(this.yaw * Math.PI / 180) * Math.cos(this.pitch * Math.PI / 180),
+      y: -Math.sin(this.pitch * Math.PI / 180),
+      z: Math.cos(this.yaw * Math.PI / 180) * Math.cos(this.pitch * Math.PI / 180),
+    } };
+  }
+  queueBlockAction(action: object): void { this.queuedBlockActions.push(action); }
+  clearMouseActions(): void { this.queuedBlockActions = []; }
 
   constructor(client: AnyClient, username: string) {
     this.client = client;
@@ -121,13 +136,10 @@ export class BotSender {
 
   setInputTick(tick: bigint): void { this.inputTick = tick; }
 
-  /** Geyser caches Java input: START alone may leave its held shift unchanged
-   * after a proxy transfer. A resync sends release and press in separate ticks. */
+  /** A check may reassert held sneak, but must never synthesize a release. */
   setSneak(sneaking: boolean, resync = false): void {
-    if (sneaking && resync && this.sneaking && !this.sneakPressPending) this.releaseForSneakResync = true;
-    if (!sneaking) { this.releaseForSneakResync = false; this.sneakPressPending = false; }
+    this.sneakEdge ||= resync || this.sneaking !== sneaking;
     this.sneaking = sneaking;
-    this.sneakEdge = true;
   }
 
   /** Only the local player's authoritative flags count as sneak confirmation. */
@@ -145,7 +157,9 @@ export class BotSender {
   /** Modern Bedrock/Geyser reads held keys from PlayerAuthInput every game tick. */
   tickInput(): boolean {
     if (this.runtimeEntityId == null || !this.position) return false;
-    const heldSneak = this.sneaking && !this.releaseForSneakResync;
+    const mouse = this.mouseInput?.() ?? {};
+    const blockActions = [...this.queuedBlockActions, ...(mouse.blockActions ?? [])];
+    const heldSneak = this.sneaking;
     const inputFlags = {
       sneaking: heldSneak, sneak_down: heldSneak, sneak_current_raw: heldSneak,
       persist_sneak: heldSneak,
@@ -154,6 +168,8 @@ export class BotSender {
       sneak_pressed_raw: heldSneak && this.sneakEdge,
       sneak_released_raw: !heldSneak && this.sneakEdge,
       handled_teleport: this.handledTeleport,
+      ...mouse.flags,
+      block_action: blockActions.length > 0,
     };
     const sent = this.packet("player_auth_input", {
       pitch: this.pitch, yaw: this.yaw, head_yaw: this.yaw, position: this.position,
@@ -171,17 +187,14 @@ export class BotSender {
         y: -Math.sin(this.pitch * Math.PI / 180),
         z: Math.cos(this.yaw * Math.PI / 180) * Math.cos(this.pitch * Math.PI / 180),
       },
+      transaction: mouse.transaction,
+      block_action: blockActions.length ? blockActions : undefined,
     });
     if (sent) {
-      if (this.releaseForSneakResync) {
-        this.releaseForSneakResync = false;
-        this.sneakPressPending = true;
-        this.sneakEdge = true;
-      } else {
-        this.sneakPressPending = false;
-        this.sneakEdge = false;
-      }
+      this.sneakEdge = false;
       this.handledTeleport = false;
+      this.queuedBlockActions = [];
+      mouse.sent?.();
     }
     return sent;
   }

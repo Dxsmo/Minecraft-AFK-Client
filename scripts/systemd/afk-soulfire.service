@@ -1,0 +1,26 @@
+[Unit]
+Description=Minecraft AFK SoulFire runtime
+After=network-online.target
+Wants=network-online.target
+Before=afk-backend.service
+
+[Service]
+Type=simple
+UMask=0077
+WorkingDirectory=/opt/afk-service/soulfire-data
+# Requires Java 25 and the extension in soulfire-data/minecraft/mods/.
+Environment="JAVA_TOOL_OPTIONS=-Xms512m -Xmx4g -XX:+UseG1GC"
+ExecStart=/usr/bin/java -Dsf.baseDir=/opt/afk-service/soulfire-data -Dsf.grpc.host=127.0.0.1 -Dsf.grpc.port=38765 -jar /opt/afk-service/soulfire-runtime/SoulFireDedicated-2.10.6.jar
+Restart=on-failure
+RestartSec=5
+User=afkservice
+Group=afkservice
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/afk-service/soulfire-data
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

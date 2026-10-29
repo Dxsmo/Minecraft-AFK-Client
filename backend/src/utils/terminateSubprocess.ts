@@ -1,7 +1,15 @@
-import type { ChildProcess } from "node:child_process";
+/** Minimal lifecycle surface shared by OS processes and in-process controllers.
+ * Keep event return types structural across installed Node type versions. */
+export interface TerminableProcess {
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+  once(event: "exit" | "close", listener: () => void): unknown;
+  removeListener(event: "exit" | "close", listener: () => void): unknown;
+  kill(signal?: NodeJS.Signals): boolean;
+}
 
 /** Escalate until the process actually exits, even if it ignores SIGTERM. */
-export function terminateSubprocess(child: ChildProcess, graceMs = 500, forceMs = 1500): void {
+export function terminateSubprocess(child: TerminableProcess, graceMs = 500, forceMs = 1500): void {
   if (child.exitCode != null || child.signalCode != null) return;
   let exited = false;
   let termTimer: NodeJS.Timeout | undefined;
