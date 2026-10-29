@@ -66,6 +66,62 @@ describe("common SoulFire automation", () => {
     expect(f.game.click).toHaveBeenCalledWith("sell-1", 2, "transfer");
   });
 
+  it("accepts a server payout when hoppers refill the transferred slot to the same count", async () => {
+    const f = fixture({ autosell_enabled: true }); await f.engine.spawned(); f.advance(2000); await f.engine.tick();
+    f.sellMenu(); f.inventory({ slots: [slot(2), slot(3)] }); await f.engine.tick();
+    f.engine.onChat(null, "[HugoSMP] +$121,60 (Basis: $64, Bonus: +$57,60 durch 1.9x)");
+    f.advance(100); await f.engine.tick();
+    expect(f.game.click).toHaveBeenLastCalledWith("sell-1", 3, "transfer");
+    expect(f.emit).not.toHaveBeenCalled();
+  });
+
+  it("ignores player payout imitations and retains a finite deadline for a genuinely stalled transfer", async () => {
+    const f = fixture({ autosell_enabled: true }); await f.engine.spawned(); f.advance(2000); await f.engine.tick(); f.sellMenu(); await f.engine.tick();
+    f.engine.onChat("attacker", "[HugoSMP] +$121,60 (Basis: $64, Bonus: +$57,60 durch 1.9x)");
+    f.engine.onChat(null, "<attacker> [HugoSMP] +$121,60 (Basis: $64, Bonus: +$57,60 durch 1.9x)");
+    f.advance(5000); await f.engine.tick();
+    expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("Item-Transfer wurde nicht bestätigt") }));
+    expect(f.game.click).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not apply the menu-opening deadline to a sale that is still making progress", async () => {
+    const f = fixture({ autosell_enabled: true }); await f.engine.spawned(); f.advance(2000); await f.engine.tick(); f.sellMenu();
+    f.inventory({ playerSlots: [2, 3, 4, 5], slots: [slot(2), slot(3), slot(4), slot(5)] });
+    await f.engine.tick();
+    for (let i = 2; i <= 5; i++) {
+      f.inventory({ slots: Array.from({ length: 5 - i }, (_, n) => slot(i + n + 1)) });
+      f.advance(4000); await f.engine.tick();
+    }
+    expect(f.game.click).toHaveBeenCalledTimes(4);
+    expect(f.game.close).toHaveBeenCalledExactlyOnceWith("sell-1"); expect(f.emit).not.toHaveBeenCalled();
+  });
+
+  it("starts the acknowledgment budget after the RPC and preserves payouts received during the click", async () => {
+    const f = fixture({ autosell_enabled: true }); await f.engine.spawned(); f.advance(2000); await f.engine.tick(); f.sellMenu();
+    vi.mocked(f.game.click).mockImplementationOnce(async () => {
+      f.advance(8000);
+      f.engine.onChat("HugoSMP", "+$121,60 (Basis: $64, Bonus: +$57,60 durch 1.9x)");
+    });
+    await f.engine.tick(); f.advance(100); await f.engine.tick();
+    expect(f.game.close).toHaveBeenCalledExactlyOnceWith("sell-1"); expect(f.emit).not.toHaveBeenCalled();
+  });
+
+  it("waits for a delayed transfer acknowledgment after a slow click rather than immediately timing out", async () => {
+    const f = fixture({ autosell_enabled: true }); await f.engine.spawned(); f.advance(2000); await f.engine.tick(); f.sellMenu();
+    vi.mocked(f.game.click).mockImplementationOnce(async () => { f.advance(8000); });
+    await f.engine.tick(); f.advance(100); await f.engine.tick();
+    expect(f.game.close).not.toHaveBeenCalled(); expect(f.emit).not.toHaveBeenCalled();
+    f.inventory({ slots: [] }); f.advance(100); await f.engine.tick();
+    expect(f.game.close).toHaveBeenCalledExactlyOnceWith("sell-1");
+  });
+
+  it("does not revive an old sale if a teleport happens while its command is being sent", async () => {
+    const f = fixture({ autosell_enabled: true }); await f.engine.spawned(); f.advance(2000);
+    vi.mocked(f.game.chat).mockImplementationOnce(async () => { f.engine.transition(); });
+    await f.engine.tick(); f.sellMenu(); f.advance(100); await f.engine.tick();
+    expect(f.game.click).not.toHaveBeenCalled(); expect(f.game.close).not.toHaveBeenCalled();
+  });
+
   it("waits for delayed menus and does not abandon ownership after half a second", async () => {
     const f = fixture({ autosell_enabled: true }); await f.engine.spawned(); f.advance(2000); await f.engine.tick();
     f.advance(1500); await f.engine.tick(); f.sellMenu(); await f.engine.tick();
@@ -109,6 +165,21 @@ describe("common SoulFire automation", () => {
     f.inventory({ containerSlots: [], menuId: "player" });
     f.engine.enqueue("chat", "/first"); f.engine.enqueue("chat", "/second"); await f.engine.tick(); await f.engine.tick();
     expect(f.game.chat).not.toHaveBeenCalledWith("/second"); f.advance(1500); await f.engine.tick(); expect(f.game.chat).toHaveBeenLastCalledWith("/second");
+  });
+
+  it("closes the active sale menu only once before dispatching a manual command", async () => {
+    const f = fixture({ autosell_enabled: true }); await f.engine.spawned(); f.advance(2000); await f.engine.tick(); f.sellMenu(); await f.engine.tick();
+    f.engine.enqueue("chat", "/homes"); await f.engine.tick();
+    expect(f.game.close).toHaveBeenCalledExactlyOnceWith("sell-1");
+    expect(f.game.chat).toHaveBeenLastCalledWith("/homes");
+  });
+
+  it("identifies a failed manual command without silently repeating an ambiguous send", async () => {
+    const f = fixture(); await f.engine.spawned();
+    vi.mocked(f.game.chat).mockRejectedValueOnce(new Error("deadline_exceeded"));
+    f.engine.enqueue("chat", "/home base"); await f.engine.tick(); await f.engine.tick();
+    expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("Befehl /home base fehlgeschlagen") }));
+    expect(f.game.chat).toHaveBeenCalledTimes(1);
   });
 
   it("reads all nine /desmo categories and closes the matching menu", async () => {

@@ -1,4 +1,5 @@
 import { readMultiplier, tooltipText } from "../minecraft/sellMultipliers.js";
+import { parseSellEarning } from "../minecraft/sellEarnings.js";
 
 export type BehaviorConfig = { crouch_enabled?: boolean; auto_button?: "off" | "left" | "right"; autosell_enabled?: boolean;
   autosell_interval_seconds?: number; autosell_command?: string; spawner_type?: string; spawner_drop_items?: string[]; spawner_sell_items?: string[] };
@@ -14,7 +15,7 @@ export interface GameGateway {
   openSpawner(crouch: boolean): Promise<boolean>;
 }
 export type BotOutput = (event: Record<string, unknown>) => void;
-type Sell = { requested: number; opened: number | null; menu: string | null; targets: number[] | null; pending: { slot: GameSlot; at: number } | null };
+type Sell = { requested: number; opened: number | null; menu: string | null; targets: number[] | null; pending: { slot: GameSlot; at: number; confirmed: boolean } | null };
 type Foreground = { kind: "multipliers" | "spawner"; deadline: number; opened: number | null; menu: string | null; phase: "drop" | "sell"; stalls: number; last: string; next: number };
 const plain = (text: string) => tooltipText(text).trim();
 const sellTitle = (text: string) => /^(items verkaufen|sell)$/i.test(plain(text));
@@ -39,6 +40,7 @@ export class SoulFireBehaviors {
   private creditAt = 0;
   private lastCommandAt = -Infinity;
   private lastFailure = -Infinity;
+  private generation = 0;
 
   constructor(config: BehaviorConfig, private game: GameGateway, private emit: BotOutput, private clock = Date.now) { this.cfg = { ...config }; }
 
@@ -81,9 +83,14 @@ export class SoulFireBehaviors {
   onChat(sender: string | null, message: string): void {
     if (sender && sender.toLowerCase() !== "hugosmp") return;
     if (teleportSuccess(message)) { this.scheduleSneak(); this.nextSneak = 0; }
+    // A hopper can refill the same slot before the next snapshot. A genuine
+    // server payout still confirms that pending transfer; unchanged counts
+    // alone must not turn a successful sale into a timeout.
+    if (this.sell?.pending && /^(?:\[HugoSMP\]|<HugoSMP>)?\s*\+\$/i.test(plain(message))
+        && parseSellEarning(message) !== null) this.sell.pending.confirmed = true;
     const text = plain(message).toLowerCase();
     if ((text.includes("inventar") || text.includes("inventory")) && /geladen|gespeichert|saving|loading/.test(text)) {
-      this.sell = null; this.readyAt = this.clock() + 1000; this.nextSell = this.readyAt;
+      this.resetTasks(); this.readyAt = this.clock() + 1000; this.nextSell = this.readyAt;
     }
   }
 
@@ -93,7 +100,7 @@ export class SoulFireBehaviors {
     if (this.sneakChecks.length > 64) this.sneakChecks.shift();
   }
 
-  private resetTasks(): void { this.sell = null; this.foreground = null; }
+  private resetTasks(): void { this.generation++; this.sell = null; this.foreground = null; }
 
   async tick(): Promise<void> {
     const now = this.clock();
@@ -108,7 +115,10 @@ export class SoulFireBehaviors {
       const command = this.commands[0];
       if (!this.creditReady(now)) return;
       this.commands.shift();
-      await this.runCommand(command, now);
+      try { await this.runCommand(command); }
+      catch (error) {
+        this.emit({ type: "warning", message: `Befehl ${command.text ?? command.type} fehlgeschlagen: ${error instanceof Error ? error.message : String(error)}. Bei einem Timeout vor erneutem Senden die Serverantwort prüfen.` });
+      }
       return;
     }
     const paused = now >= this.pauseStart && now < this.pauseEnd;
@@ -131,21 +141,23 @@ export class SoulFireBehaviors {
     this.commandCredits--; this.lastCommandAt = this.clock();
   }
 
-  private async runCommand(command: { type: string; text?: string }, now: number): Promise<void> {
-    await this.cancelSell();
-    if (this.foreground?.menu) await this.closeOwned(this.foreground.menu);
+  private async runCommand(command: { type: string; text?: string }): Promise<void> {
+    this.sell = null;
     this.foreground = null;
     const inventory = await this.game.inventory();
     if (inventory.containerSlots.length) await this.game.close(inventory.menuId);
-    this.manualUntil = now + 5000;
+    this.manualUntil = this.clock() + 5000;
     if (command.type === "read_sell_multipliers") {
       await this.dispatch("/sellmulti");
+      const now = this.clock();
       this.foreground = { kind: "multipliers", deadline: now + 10_000, opened: null, menu: null, phase: "drop", stalls: 0, last: "", next: now };
     } else if (command.type === "clean_spawner") {
       if (!await this.game.openSpawner(!!this.cfg.crouch_enabled)) { this.emit({ type: "warning", message: "CleanSpawner: kein erreichbarer Spawner gefunden" }); return; }
+      const now = this.clock();
       this.foreground = { kind: "spawner", deadline: now + 60_000, opened: null, menu: null, phase: "drop", stalls: 0, last: "", next: now + 400 };
     } else if (command.text) {
       await this.dispatch(command.text);
+      this.manualUntil = this.clock() + 5000;
       if (/^\/(?:tpaccept|tpyes)(?:\s|$)/i.test(command.text)) this.scheduleSneak();
       this.emit({ type: "behavior_log", message: `Command dispatched: ${command.text}` });
     }
@@ -154,7 +166,10 @@ export class SoulFireBehaviors {
   private async tickSell(now: number): Promise<void> {
     if (!this.sell && now < this.nextSell) return;
     // Fetch current menu identity and slots, never a snapshot from before TP.
+    const generation = this.generation;
     const inventory = await this.game.inventory();
+    if (generation !== this.generation) return;
+    now = this.clock();
     if (!this.sell && inventory.containerSlots.length) {
       // Only a known late sale GUI may be recovered. Manual/foreign menus stay open.
       if (sellTitle(inventory.title)) { await this.game.close(inventory.menuId); this.nextSell = now + 500; }
@@ -162,13 +177,18 @@ export class SoulFireBehaviors {
     }
     if (!this.sell) {
       if (now < this.nextSell || now - this.lastCommandAt < 1500 || !this.creditReady(now)) return;
-      await this.dispatch((this.cfg.autosell_command || "/sell").trim());
-      this.sell = { requested: now, opened: null, menu: null, targets: null, pending: null };
-      this.nextSell = now + Math.max(1500, (this.cfg.autosell_interval_seconds ?? 60) * 1000);
+      const sale: Sell = { requested: now, opened: null, menu: null, targets: null, pending: null };
+      this.sell = sale;
+      try { await this.dispatch((this.cfg.autosell_command || "/sell").trim()); }
+      catch (error) { if (this.sell === sale) { this.sell = null; this.nextSell = this.clock() + 5000; } throw error; }
+      if (this.sell !== sale || generation !== this.generation) return;
+      sale.requested = this.clock();
+      this.nextSell = sale.requested + Math.max(1500, (this.cfg.autosell_interval_seconds ?? 60) * 1000);
       return;
     }
     const sale = this.sell;
-    if (now - sale.requested >= 10_000) { await this.failSell("Verkaufsmenü hat nicht rechtzeitig geantwortet"); return; }
+    if (sale.opened === null && now - sale.requested >= 10_000) { await this.failSell("Verkaufsmenü hat nicht rechtzeitig geantwortet"); return; }
+    if (sale.opened !== null && now - sale.opened >= 120_000) { await this.failSell("Zeitlimit für diesen Verkauf erreicht"); return; }
     if (!inventory.containerSlots.length) {
       if (sale.menu) { this.sell = null; this.nextSell = Math.max(this.nextSell, now + 500); }
       return;
@@ -183,8 +203,8 @@ export class SoulFireBehaviors {
     sale.targets ??= populated;
     if (sale.pending) {
       const current = inventory.slots.find(slot => slot.slot === sale.pending!.slot.slot);
-      if (current && current.itemId === sale.pending.slot.itemId && current.count >= sale.pending.slot.count) {
-        if (now - sale.pending.at >= 2000) await this.failSell("Item-Transfer wurde nicht bestätigt");
+      if (!sale.pending.confirmed && current && current.itemId === sale.pending.slot.itemId && current.count >= sale.pending.slot.count) {
+        if (now - sale.pending.at >= 5000) await this.failSell("Item-Transfer wurde nicht bestätigt");
         return;
       }
       sale.pending = null;
@@ -193,10 +213,12 @@ export class SoulFireBehaviors {
     if (slotIndex === undefined) { await this.cancelSell(); return; }
     const item = inventory.slots.find(slot => slot.slot === slotIndex && slot.count > 0);
     if (!item) return;
+    const pending = { slot: { ...item }, at: now, confirmed: false };
+    sale.pending = pending;
     try {
       await this.game.click(inventory.menuId, item.slot, "transfer");
-      sale.pending = { slot: { ...item }, at: now };
-    } catch { await this.failSell("Item-Transfer wurde abgelehnt"); }
+      if (this.sell === sale && sale.pending === pending) pending.at = this.clock();
+    } catch { if (this.sell === sale && !pending.confirmed) await this.failSell("Item-Transfer wurde abgelehnt"); }
   }
 
   private async tickForeground(now: number): Promise<void> {

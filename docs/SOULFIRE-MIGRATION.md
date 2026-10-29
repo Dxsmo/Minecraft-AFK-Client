@@ -25,6 +25,11 @@ Do not remove Docker volumes. The update builds all three images before
 replacing containers; a build failure leaves the running installation intact.
 `update-bedrock.sh` forwards to the same complete update for compatibility.
 
+After updating from the original inventory-polling adapter, use
+`bash scripts/update.sh --recreate` once. It builds first, then recreates the
+runtime/backend/web containers to release previously allocated native renderer
+caches. Named volumes, account settings and Microsoft login caches are retained.
+
 The first SoulFire build downloads a roughly 400 MB release and compiles the
 small input extension using Java 25. The first startup also downloads and
 verifies Minecraft/runtime libraries. Allow several minutes and internet
@@ -74,8 +79,16 @@ metadata columns.
   renderer caches can remain allocated in the shared JVM after rendering stops.
 - Java and Bedrock share the same scheduler for commands, AutoSell, `/desmo`
   multiplier tooltips and CleanSpawner. Clicks carry SoulFire's current menu
-  identity; transfers wait for slot acknowledgments. Manual commands have
-  priority over automatic selling.
+  identity. Inventory/menu/tooltip data comes from `watchBotEvents` with
+  `includeInventory`; those events do not render item icons. Background
+  automation never calls the icon-rendering `getInventoryState` RPC. Dropped
+  event resynchronization invalidates cached menus until a new inventory arrives;
+  an unexpectedly closed event stream ends the session for reconnection.
+  Transfers wait for changed slots or a matching server payout (including
+  immediately refilled stacks). The 10-second opening deadline ends once the
+  menu opens; active sales have a separate finite progress budget. Manual
+  commands take priority, close the active menu once, and identify failed sends
+  without automatically repeating a potentially already executed command.
 - World/position changes discard stale sale tasks and use finite retry
   deadlines. Restart announcements pause selling 10 seconds beforehand and
   resume **2 minutes after** the announced restart. The supervisor retains the
@@ -142,6 +155,14 @@ A VPN or firewall can allow Microsoft HTTPS while blocking those game ports.
 Test the same server with the normal Minecraft client and, where appropriate,
 with the VPN disconnected. Do not silently change the user's system VPN or routes.
 
+RPC/network/auth timeouts and temporary service failures do not invalidate saved
+Microsoft accounts or start another device-code sign-in. Only an explicit
+provider rejection (such as `invalid_grant` or a revoked refresh token) permits
+that fallback. `fetch failed` can also mean the shared SoulFire process is
+unavailable/restarting; check its logs, memory and restart count before replacing
+account credentials. A simulation on a development host cannot establish Pi
+capacity or prove why an unavailable production container stopped.
+
 ### Slow ARM resource loading
 
 SoulFire 2.10.6 has a [hard-coded 30-second deadline](https://github.com/soulfiremc-com/SoulFire/blob/2.10.6/mod/src/main/java/com/soulfiremc/mod/mixin/soulfire/lifecycle/MixinMain.java) for the base Minecraft
@@ -197,3 +218,10 @@ The same fixture also passed inside the built Linux ARM64 stack, together with
 website login through Caddy, authenticated SDK access over the private volume/
 network and the complete item catalog. Production Microsoft credentials and
 the actual Bedrock server were not available for a live test.
+
+Set `AFK_SMOKE_REFILL_SALES=1` for the sale regression variant: all three stacks
+are immediately replenished before the next tick, and a real server chat payout
+confirms each transfer. The fixture checks the slot sequence, no AutoSell warnings,
+manual command delivery, teleport/sneak handling, and zero inventory-render/POV
+RPCs during automation. This Java protocol fixture exercises the common scheduler;
+it does not certify a particular external Bedrock server's behavior.

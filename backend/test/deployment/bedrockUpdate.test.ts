@@ -14,7 +14,7 @@ const fs=require('node:fs'),args=process.argv.slice(2);
 fs.appendFileSync(process.env.AFK_UPDATE_LOG,JSON.stringify(args)+'\\n');
 if(args.includes('build')&&process.env.AFK_UPDATE_FAIL==='1')process.exit(3);
 `, { mode: 0o755 });
-  return { directory, log, execute: () => run("bash", [script], { env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, AFK_UPDATE_LOG: log, AFK_UPDATE_FAIL: failBuild ? "1" : "0" } }) };
+  return { directory, log, execute: (args: string[] = []) => run("bash", [script, ...args], { env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, AFK_UPDATE_LOG: log, AFK_UPDATE_FAIL: failBuild ? "1" : "0" } }) };
 }
 it("builds both editions' SoulFire runtime and website before replacing containers", async () => {
   const f=await fixture(); try {
@@ -24,6 +24,19 @@ it("builds both editions' SoulFire runtime and website before replacing containe
     const dockerfile=await readFile(new URL("../../Dockerfile",import.meta.url),"utf8");
     expect(dockerfile).not.toMatch(/cargo|rustup|rust-bot|azalea-bot/); expect(dockerfile).toContain("COPY assets ./assets");
   } finally { await rm(f.directory,{recursive:true,force:true}); }
+});
+it("can recreate the runtime to clear native caches only after all builds succeed", async () => {
+  const f=await fixture(); try {
+    await f.execute(["--recreate"]);
+    const calls=(await readFile(f.log,"utf8")).trim().split("\n").map(line=>JSON.parse(line));
+    expect(calls[0]).toEqual(["compose","build","soulfire","backend","web"]);
+    expect(calls[1]).toContain("--force-recreate");
+    expect(calls.flat()).not.toContain("--volumes");
+  } finally { await rm(f.directory,{recursive:true,force:true}); }
+  const failed=await fixture(true); try {
+    await expect(failed.execute(["--recreate"])).rejects.toMatchObject({code:3});
+    expect((await readFile(failed.log,"utf8")).trim().split("\n")).toHaveLength(1);
+  } finally { await rm(failed.directory,{recursive:true,force:true}); }
 });
 it("leaves running containers untouched after a failed build", async () => {
   const f=await fixture(true); try {

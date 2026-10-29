@@ -3,6 +3,7 @@
 import path from "node:path";
 import { fromJson } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
+import { Code, ConnectError } from "@connectrpc/connect";
 import { AccountTypeCredentials } from "@soulfiremc/sdk/generated/soulfire/common_pb";
 import { BotDesiredState, BotRuntimeState, ClickType } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
 import { QuerySort } from "@soulfiremc/sdk/generated/soulfire/world_pb";
@@ -10,8 +11,9 @@ import { BotActionStatus, BotLifecycleKind } from "@soulfiremc/sdk/generated/sou
 import { protocolOptions, selectProtocol, javaServerProtocol } from "./versions.js";
 import { soulFireInstanceName } from "./instanceName.js";
 import { soulFireRpc } from "./rpc.js";
-import { authenticate, readRemoteAccount, writePrivateJson, type Edition } from "./auth.js";
-import { SoulFireBehaviors, type BehaviorConfig, type GameGateway, type GameInventory, type BotOutput } from "./behaviors.js";
+import { authenticate, isRejectedMicrosoftLogin, readRemoteAccount, writePrivateJson, type Edition } from "./auth.js";
+import { SoulFireBehaviors, type BehaviorConfig, type GameGateway, type BotOutput } from "./behaviors.js";
+import { SoulFireInventory } from "./inventory.js";
 
 export type SoulFireConfig = BehaviorConfig & { host: string; port: number; username: string; auth_type: string; email?: string; edition: Edition;
   cache_dir: string; account_id?: string; version?: string; autosell_pause_after_ms?: number; autosell_resume_after_ms?: number };
@@ -34,7 +36,11 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
       const refreshed = await rpc.auth.refresh({ instanceId, account }, { signal, timeoutMs: 120_000 });
       if (!refreshed.account) throw new Error("Microsoft-Account konnte nicht aktualisiert werden");
       account = refreshed.account;
-    } catch (error) { if (signal.aborted) throw error; account = undefined; }
+    } catch (error) {
+      // An unavailable/overloaded RPC or auth server does not revoke a login.
+      if (signal.aborted || !isRejectedMicrosoftLogin(error)) throw error;
+      account = undefined;
+    }
   }
   if (!account) {
     if (config.auth_type === "offline") {
@@ -78,24 +84,30 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   await setting("bot", "protocol-version", selected.id);
 
   let sneakCheck = 0;
+  const inventory = new SoulFireInventory();
+  let heldButton: string | undefined, heldCrouch: boolean | undefined;
   const gateway: GameGateway = {
-    held: async cfg => { await setting("afk-service", "auto-button", (cfg.auto_button || "off").toUpperCase()); await setting("afk-service", "crouch-enabled", !!cfg.crouch_enabled); },
+    held: async cfg => {
+      const button = (cfg.auto_button || "off").toUpperCase(), crouch = !!cfg.crouch_enabled;
+      if (button !== heldButton) { await setting("afk-service", "auto-button", button); heldButton = button; }
+      if (crouch !== heldCrouch) { await setting("afk-service", "crouch-enabled", crouch); heldCrouch = crouch; }
+    },
     sneak: async () => { await setting("afk-service", "sneak-check", ++sneakCheck); },
     chat: async message => { const result = await rpc.live.sendChat({ ...ids, message }, call()); if (result.result?.status !== BotActionStatus.COMPLETED) throw new Error("Command wurde nicht ausgeführt"); },
-    inventory: async () => {
-      const state = await rpc.bot.getInventoryState(ids, call());
-      const container = state.layout?.regions.filter(r => r.id === "container") ?? [];
-      const player = state.layout?.regions.filter(r => /player_inventory|player_hotbar/.test(r.id)) ?? [];
-      const indices = (regions: typeof container) => regions.flatMap(r => Array.from({ length: r.slotCount }, (_, i) => r.startIndex + i));
-      return { menuId: state.menuId, title: state.layout?.title ?? "", containerSlots: indices(container), playerSlots: indices(player),
-        slots: state.slots.map(slot => ({ ...slot, displayName: slot.displayName || "" })) } satisfies GameInventory;
-    },
+    inventory: async () => inventory.read(),
     click: async (menu, slot, action) => {
       const result = await rpc.bot.clickInventorySlot({ ...ids, expectedMenuId: menu, slot,
         clickType: action === "transfer" ? ClickType.SHIFT_LEFT_CLICK : action === "drop" ? ClickType.DROP_ALL : ClickType.LEFT_CLICK }, call());
       if (!result.success) throw new Error(result.error || "Inventaraktion abgelehnt");
     },
-    close: async menu => { await rpc.bot.closeContainer({ ...ids, expectedMenuId: menu }, call()); },
+    close: async menu => {
+      try { await rpc.bot.closeContainer({ ...ids, expectedMenuId: menu }, call()); }
+      catch (error) {
+        // The server can close/replace the menu before its next stream frame.
+        // Never close that replacement, or let this race discard a command.
+        if (ConnectError.from(error).code !== Code.Aborted) throw error;
+      }
+    },
     openSpawner: async crouch => {
       const player = await rpc.world.getPlayerSnapshot(ids, call());
       if (!player.player?.position) return false;
@@ -119,8 +131,10 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   let stream: Promise<void> | undefined;
   try {
     stream = (async () => {
-      for await (const frame of rpc.live.watchBotEvents({ ...ids, filter: { includeStateDeltas: true, includeChat: true, includeLifecycle: true }, heartbeatIntervalSeconds: 5 }, { signal, timeoutMs: 0 })) {
+      for await (const frame of rpc.live.watchBotEvents({ ...ids, filter: { includeStateDeltas: true, includeInventory: true, includeChat: true, includeLifecycle: true }, heartbeatIntervalSeconds: 5 }, { signal, timeoutMs: 0 })) {
         const event = frame.event;
+        if (event.case === "resyncRequired") { inventory.reset(); position = undefined; behaviors.transition(); }
+        if (event.case === "inventory" && event.value.state) inventory.update(event.value.state);
         if (event.case === "chat") { emit({ type: "chat", sender: event.value.senderName || null, message: event.value.plainText }); behaviors.onChat(event.value.senderName || null, event.value.plainText); }
         if (event.case === "snapshot") {
           if (position && (position.dimension !== event.value.dimension || Math.hypot(position.x - event.value.x, position.y - event.value.y, position.z - event.value.z) > 1)) behaviors.transition();
@@ -135,13 +149,14 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
         if (event.case === "lifecycle") {
           if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_CONNECTED) emit({ type: "login" });
           if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_DISCONNECTED) throw new Error(event.value.message || "Minecraft-Verbindung beendet");
-          if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_DIED) { behaviors.joining(); online = false; await rpc.live.respawn(ids, call()); }
+          if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_DIED) { inventory.reset(); behaviors.joining(); online = false; await rpc.live.respawn(ids, call()); }
           if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_RESPAWNED || event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_SPAWNED) {
             if (!online || event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_RESPAWNED) { online = true; await behaviors.spawned(); emit({ type: "spawn" }); }
           }
         }
         if (event.case === "status" && (event.value.runtimeState === BotRuntimeState.FAILED || event.value.runtimeState === BotRuntimeState.RETRYING)) throw new Error(event.value.lastError || "SoulFire-Verbindung fehlgeschlagen");
       }
+      if (!signal.aborted) throw new Error("SoulFire-Ereignisstream wurde beendet");
     })();
     void stream.catch(error => { if (!signal.aborted) { emit({ type: "connection_failed", error: error instanceof Error ? error.message : "SoulFire-Ereignisstream beendet" }); abort.abort(); } });
     await rpc.bot.setBotsDesiredState({ instanceId, botIds: [botId], desiredState: BotDesiredState.RUNNING }, call());
@@ -160,13 +175,14 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
             case "read_sell_multipliers": behaviors.enqueue("read_sell_multipliers"); break;
           }
         }
+        // Dispatch queued user work before an optional status RPC can wait.
+        if (inventory.ready) await behaviors.tick();
         if (Date.now() - heartbeatAt >= 5000) {
           const state = await rpc.bot.getBotInfo(ids, call());
           if (state.status?.runtimeState === BotRuntimeState.FAILED || state.status?.runtimeState === BotRuntimeState.RETRYING) { emit({ type: "connection_failed", error: state.status.lastError || "Minecraft-Verbindung fehlgeschlagen" }); abort.abort(); return; }
           if (state.liveState) { if (!online) { online = true; await behaviors.spawned(); emit({ type: "spawn" }); } emit({ type: "heartbeat" }); }
           heartbeatAt = Date.now();
         }
-        await behaviors.tick();
       })().catch(error => {
         if (!signal.aborted && Date.now() - lastWarning >= 30_000) { lastWarning = Date.now(); emit({ type: "warning", message: error instanceof Error ? error.message : "SoulFire-Aktion fehlgeschlagen" }); }
       }).finally(() => { busy = false; });

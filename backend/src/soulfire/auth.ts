@@ -9,6 +9,13 @@ export type Edition = "JAVA" | "BEDROCK";
 export type RemoteAccount = { instanceId: string; botId: string };
 export type SignInCode = { verification_uri: string; user_code: string; expires_in: number };
 
+/** SoulFire wraps provider rejections and transport failures alike as INTERNAL.
+ * Only explicit login rejection should trigger another device-code flow. */
+export function isRejectedMicrosoftLogin(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /invalid_grant|interaction_required|login_required|consent_required|AADSTS(?:50173|70000|700082|700084)|(?:refresh[ _-]?token.*(?:expired|revoked|invalid))|(?:(?:expired|revoked|invalid).*refresh[ _-]?token)|^revoked$/i.test(message);
+}
+
 export async function writePrivateJson(file: string, value: unknown): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${randomUUID()}.tmp`;
@@ -71,20 +78,33 @@ export async function legacyLogin(cacheDir: string, edition: Edition, email: str
 
 export async function authenticate(rpc: SoulFireRpc, options: { instanceId: string; edition: Edition; cacheDir: string; email: string | null; offlineName?: string; signal: AbortSignal;
   onCode: (code: SignInCode) => void; onMigrationFailure: () => void }): Promise<MinecraftAccountProto> {
+  let importedAccount: MinecraftAccountProto | undefined;
   try {
     const imported = JSON.parse(await readFile(path.join(options.cacheDir, "imported-account.json"), "utf8"));
     if (imported.edition === options.edition) {
-      const account = fromJson(MinecraftAccountProtoSchema, imported.account);
-      const result = await rpc.auth.refresh({ instanceId: options.instanceId, account }, { signal: options.signal, timeoutMs: 120_000 });
-      if (result.account) return result.account;
+      importedAccount = fromJson(MinecraftAccountProtoSchema, imported.account);
     }
   } catch { if (options.signal.aborted) throw options.signal.reason; }
+  if (importedAccount) {
+    try {
+      const result = await rpc.auth.refresh({ instanceId: options.instanceId, account: importedAccount }, { signal: options.signal, timeoutMs: 120_000 });
+      if (result.account) return result.account;
+      throw new Error("Microsoft-Aktualisierung hat keinen Account geliefert");
+    } catch (error) {
+      if (options.signal.aborted || !isRejectedMicrosoftLogin(error)) throw error;
+      options.onMigrationFailure();
+    }
+  }
   const candidate = await legacyLogin(options.cacheDir, options.edition, options.email);
   if (candidate) {
     try {
       const result = await rpc.auth.refresh({ instanceId: options.instanceId, account: candidate }, { signal: options.signal, timeoutMs: 120_000 });
       if (result.account) return result.account;
-    } catch { if (options.signal.aborted) throw options.signal.reason; options.onMigrationFailure(); }
+      throw new Error("Microsoft-Aktualisierung hat keinen Account geliefert");
+    } catch (error) {
+      if (options.signal.aborted || !isRejectedMicrosoftLogin(error)) throw error;
+      options.onMigrationFailure();
+    }
   }
   for await (const response of rpc.auth.loginDeviceCode({ instanceId: options.instanceId,
     service: options.edition === "JAVA" ? AccountTypeDeviceCode.MICROSOFT_JAVA_DEVICE_CODE : AccountTypeDeviceCode.MICROSOFT_BEDROCK_DEVICE_CODE,

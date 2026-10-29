@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { createPrivateKey, createPublicKey } from "node:crypto";
 import { accountFromMsa, authenticate, legacyLogin, writePrivateJson } from "../../src/soulfire/auth.js";
+import { toJson } from "@bufbuild/protobuf";
+import { MinecraftAccountProtoSchema } from "@soulfiremc/sdk/generated/soulfire/common_pb";
 import type { SoulFireRpc } from "../../src/soulfire/rpc.js";
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))); });
@@ -60,4 +62,24 @@ it("falls back to one device-code login when Microsoft rejects a legacy refresh"
   const onCode = vi.fn(), onMigrationFailure = vi.fn();
   const result = await authenticate(rpc, { instanceId: "instance", edition: "BEDROCK", cacheDir: dir, email: null, signal: new AbortController().signal, onCode, onMigrationFailure });
   expect(result).toBe(account); expect(onCode).toHaveBeenCalledOnce(); expect(onMigrationFailure).toHaveBeenCalledOnce();
+});
+
+it.each(["[deadline_exceeded] the operation timed out", "[unknown] fetch failed", "[internal] Login timed out", "[internal] HTTP 503 Service Unavailable"])("keeps a legacy login on transient failure: %s", async message => {
+  const dir = await directory(); await writePrivateJson(path.join(dir, "user_live.json"), { token: { refresh_token: msa.refreshToken } });
+  const failure = new Error(message), onCode = vi.fn(), onMigrationFailure = vi.fn();
+  const rpc = { auth: { refresh: vi.fn(async () => { throw failure; }), loginDeviceCode: vi.fn() } } as unknown as SoulFireRpc;
+  await expect(authenticate(rpc, { instanceId: "instance", edition: "BEDROCK", cacheDir: dir, email: null,
+    signal: new AbortController().signal, onCode, onMigrationFailure })).rejects.toBe(failure);
+  expect(rpc.auth.loginDeviceCode).not.toHaveBeenCalled(); expect(onMigrationFailure).not.toHaveBeenCalled(); expect(onCode).not.toHaveBeenCalled();
+});
+
+it("does not discard an imported login when its refresh RPC is unavailable", async () => {
+  const dir = await directory();
+  const file = path.join(dir, "imported-account.json");
+  await writePrivateJson(file, { edition: "JAVA", account: toJson(MinecraftAccountProtoSchema, accountFromMsa("JAVA", msa)) });
+  const before = await readFile(file), failure = new Error("fetch failed");
+  const rpc = { auth: { refresh: vi.fn(async () => { throw failure; }), loginDeviceCode: vi.fn() } } as unknown as SoulFireRpc;
+  await expect(authenticate(rpc, { instanceId: "instance", edition: "JAVA", cacheDir: dir, email: null,
+    signal: new AbortController().signal, onCode: vi.fn(), onMigrationFailure: vi.fn() })).rejects.toBe(failure);
+  expect(rpc.auth.loginDeviceCode).not.toHaveBeenCalled(); expect(await readFile(file)).toEqual(before);
 });
