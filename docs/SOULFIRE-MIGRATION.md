@@ -142,6 +142,29 @@ A VPN or firewall can allow Microsoft HTTPS while blocking those game ports.
 Test the same server with the normal Minecraft client and, where appropriate,
 with the VPN disconnected. Do not silently change the user's system VPN or routes.
 
+### Slow ARM resource loading
+
+SoulFire 2.10.6 has a [hard-coded 30-second deadline](https://github.com/soulfiremc-com/SoulFire/blob/2.10.6/mod/src/main/java/com/soulfiremc/mod/mixin/soulfire/lifecycle/MixinMain.java) for the base Minecraft
+resource/model load. On a Raspberry Pi this can expire even while the texture
+atlases are still being created. The controls extension increases only that
+deadline to 300 seconds; the original readiness checks and failure remain.
+The log confirms the effective value with `Initial Minecraft resource load
+timeout: 300 seconds`. A JVM property, `-Dafk.initialClientLoadTimeoutSeconds`,
+can set a value between 30 and 1800 seconds if needed.
+
+Compose allows a 15-minute startup period for downloads and initialization;
+the update script waits up to 20 minutes for the full stack. Healthy services
+are available immediately rather than waiting for those periods to expire.
+If resource loading still fails, inspect `docker logs afk-soulfire`; increasing
+only the Docker healthcheck would not fix the internal JVM deadline.
+
+Validated in an isolated Linux ARM64 container with a test-only Fabric mixin
+holding `isGameLoadFinished()` false for 35 seconds: a 30-second override
+reproduces the reported exception, while the default 300 seconds reaches
+`/health` with `{"healthy":true}`. Normal startup also passes without the test
+mixin. The fixture uses a separate empty data volume; it is not shipped in the
+production image. This simulates a slow load rather than measuring a real Pi.
+
 SoulFire is [AGPL-3.0](https://github.com/soulfiremc-com/SoulFire/blob/2.10.6/LICENSE).
 The input extension's complete source and reproducible build are in `soulfire/`.
 

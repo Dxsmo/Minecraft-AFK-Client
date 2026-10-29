@@ -34,7 +34,7 @@ def main():
         for asset in manifest["assets"]:
             if not asset["path"].endswith(".jar"):
                 continue
-            if "resource" not in asset and asset["name"] not in ["Minecraft client", "net.fabricmc:sponge-mixin:0.17.4+mixin.0.8.7", "com.google.code.gson:gson:2.14.0", "net.lenni0451:LambdaEvents:2.4.2", "org.jspecify:jspecify:1.0.1", "it.unimi.dsi:fastutil:8.5.19"]:
+            if "resource" not in asset and not asset["name"].startswith("org.ow2.asm:") and asset["name"] not in ["Minecraft client", "net.fabricmc:sponge-mixin:0.17.4+mixin.0.8.7", "com.google.code.gson:gson:2.14.0", "net.lenni0451:LambdaEvents:2.4.2", "org.jspecify:jspecify:1.0.1", "it.unimi.dsi:fastutil:8.5.19"]:
                 continue
             target = cache / (asset["sha256"] + ".jar")
             if not target.exists():
