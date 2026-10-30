@@ -8,7 +8,7 @@ export interface WebsiteUpdateResponse {
     date: string;
     title: string;
     introduction: string;
-    items: Array<{ title: string; description: string; hint: string; image: string }>;
+    items: Array<{ title: string; description: string; hint: string }>;
   };
 }
 
@@ -19,7 +19,7 @@ interface UpdatesRun {
   read: () => void;
 }
 
-/** One status read per login/focus; content and images render only on opening.
+/** One status read per login/focus; content renders only on opening.
  * The server owns the announcement ID and persists each user's read marker.
  */
 export function useWebsiteUpdates(userId: string | undefined) {

@@ -86,13 +86,13 @@ async function openAndInspect(page, label) {
   const dialog = page.getByRole('dialog'); await dialog.waitFor();
   await dialog.locator('.updates-feature').last().waitFor();
   assert.equal(await dialog.locator('.updates-feature').count(), 5);
-  await page.waitForFunction(() => [...document.querySelectorAll('.updates-feature img')].every(image => image.complete && image.naturalWidth > 0));
+  assert.equal(await dialog.locator('.updates-feature img, .updates-item-art').count(), 0);
   const bounds = await dialog.boundingBox(), viewport = page.viewportSize();
   assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= viewport.width && bounds.y + bounds.height <= viewport.height);
   assert.ok(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth));
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   // The final feature and close action remain reachable with a short viewport.
-  await dialog.getByText('Kleine Änderungen, besserer Alltag').scrollIntoViewIfNeeded();
+  await dialog.getByText('Kleine Fixes & Verbesserungen').scrollIntoViewIfNeeded();
   await dialog.locator('.updates-content').evaluate(element => { element.scrollTop = 0; });
   await page.screenshot({ path: join(screenshots, `${label}.png`) });
   return dialog;
@@ -127,7 +127,7 @@ try {
   await desktop.page.locator('input[name="username"]').waitFor();
   await login(desktop.page, 'UpdatesBob'); await desktop.page.locator(unread).waitFor();
   await desktop.context.close();
-  results.push('Desktop: unread, lazy images, focus return, reopen, cross-device persistence, shared-browser user switch');
+  results.push('Desktop: unread, text-only categories, focus return, reopen, cross-device persistence, shared-browser user switch');
 
   const bob = await pageFor({ reducedMotion: 'reduce' });
   await login(bob.page, 'UpdatesBob'); await bob.page.locator(unread).waitFor();

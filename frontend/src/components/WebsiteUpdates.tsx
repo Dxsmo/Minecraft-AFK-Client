@@ -57,15 +57,12 @@ export function WebsiteUpdatesDialog({ updates }: { updates: Updates }) {
       {updates.loading && !announcement && <p role="status">Updates werden geladen …</p>}
       {updates.error && <div className="updates-error" role="alert"><p>{updates.error}</p><button type="button" className="btn btn-ghost btn-sm" onClick={updates.retry}>Erneut versuchen</button></div>}
       {announcement && <>
-        <div className="updates-release"><span className="updates-release-dot" aria-hidden="true" />Das große Account-Update <time dateTime={announcement.date}>{new Intl.DateTimeFormat("de-DE", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(announcement.date))}</time></div>
-        <ol className="updates-list">{announcement.items.map((item, index) => <li key={item.title} className="updates-feature">
-          <div className={`updates-item-art updates-item-art-${index}`} aria-hidden="true">
-            <img src={`/api/assets/account-items/${encodeURIComponent(item.image)}.png`} alt="" width="48" height="48" decoding="async" draggable={false} />
-          </div>
+        <div className="updates-release"><span className="updates-release-dot" aria-hidden="true" />Account-Update <time dateTime={announcement.date}>{new Intl.DateTimeFormat("de-DE", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(announcement.date))}</time></div>
+        <ol className="updates-list">{announcement.items.map(item => <li key={item.title} className="updates-feature">
           <div><h3>{item.title}</h3><p>{item.description}</p>{item.hint && <p className="updates-hint">{item.hint}</p>}</div>
         </li>)}</ol>
       </>}
     </div>
-    <footer className="updates-footer"><p>Du kannst die Updates jederzeit über die Glocke nachlesen.</p><button type="button" className="btn btn-primary btn-sm" onClick={updates.close}>Alles klar</button></footer>
+    <footer className="updates-footer"><p>Zum Nachlesen einfach wieder auf die Glocke klicken.</p><button type="button" className="btn btn-primary btn-sm" onClick={updates.close}>Alles klar</button></footer>
   </dialog>, document.body);
 }
