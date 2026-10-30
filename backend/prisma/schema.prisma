@@ -60,6 +60,8 @@ model User {
   lastLoginAt  DateTime?
   // Personal dashboard layout, independent of devices and other users.
   dashboardPreferences String?
+  // Explicit website announcements only; independent of app/build versions.
+  lastSeenWebsiteUpdate String?
 
   sessions              Session[]
   assignments           UserMinecraftAccount[]

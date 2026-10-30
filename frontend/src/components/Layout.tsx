@@ -2,6 +2,8 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { useAuth } from "../lib/useAuth";
 import { Suspense, useEffect, useState } from "react";
+import { useWebsiteUpdates } from "../lib/useWebsiteUpdates";
+import { WebsiteUpdatesDialog, WebsiteVersion } from "./WebsiteUpdates";
 
 type IconName = "notes" | "dashboard" | "users" | "logs" | "settings";
 
@@ -66,6 +68,7 @@ const navItems: { to: string; label: string; icon: IconName; adminOnly: boolean 
 
 export function Layout() {
   const { user, logout } = useAuth();
+  const updates = useWebsiteUpdates(user?.id);
   const [logoutError, setLogoutError] = useState("");
   const [loggingOut, setLoggingOut] = useState(false);
   async function signOut() {
@@ -122,11 +125,7 @@ export function Layout() {
         </nav>
 
         <div className="mt-auto hidden px-1.5 pt-4 sm:block">
-          <span className="version-badge" aria-label="Version V4.2.0">
-            <span className="version-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3ZM4 7.5l8 4.5 8-4.5M12 12v9" /></svg></span>
-            <span className="version-text">V4.2.0</span>
-            <span className="version-spark" aria-hidden="true" />
-          </span>
+          <WebsiteVersion updates={updates} />
         </div>
       </aside>
 
@@ -135,6 +134,7 @@ export function Layout() {
           className="app-header sticky top-0 z-10 flex items-center justify-end gap-3 px-3 py-3 backdrop-blur sm:px-6"
         >
           <LinkBrand />
+          <div className="mobile-only"><WebsiteVersion updates={updates} compact /></div>
           <div className="header-user min-w-0 text-right leading-tight">
             <p className="truncate text-sm font-medium" style={{ color: "var(--text)" }}>
               {user?.username}
@@ -172,6 +172,7 @@ export function Layout() {
           </NavLink>
         ))}
       </nav>
+      {updates.open && <WebsiteUpdatesDialog updates={updates} />}
     </div>
   );
 }
