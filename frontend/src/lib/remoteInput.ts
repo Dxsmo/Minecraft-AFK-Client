@@ -1,4 +1,15 @@
 export type RemoteEvent = { kind: number; code?: number; action?: number; modifiers?: number; x?: number; y?: number; relative?: boolean; key?: string };
+
+/** Combine consecutive pointer samples, preserving clicks and key ordering. */
+export function queueRemoteEvent(events: RemoteEvent[], event: RemoteEvent): void {
+  const previous = events.at(-1);
+  if (event.kind === 3 && previous?.kind === 3 && !!previous.relative === !!event.relative) {
+    if (event.relative) {
+      previous.x = Math.max(-10000, Math.min(10000, (previous.x ?? 0) + (event.x ?? 0)));
+      previous.y = Math.max(-10000, Math.min(10000, (previous.y ?? 0) + (event.y ?? 0)));
+    } else events[events.length - 1] = { ...event };
+  } else events.push({ ...event });
+}
 const keys: Record<string, number> = {
   Space: 32, Quote: 39, Comma: 44, Minus: 45, Period: 46, Slash: 47, Semicolon: 59, Equal: 61,
   BracketLeft: 91, Backslash: 92, BracketRight: 93, Backquote: 96, IntlBackslash: 161,

@@ -1,0 +1,16 @@
+{
+  "nativeH264Decoded": true,
+  "decoderRecovery": true,
+  "lazyControlConnection": true,
+  "keyDownAndUp": true,
+  "inventoryKey": true,
+  "escapeIsLocal": true,
+  "mouseReleasedOutsideImage": true,
+  "releaseOnBlur": true,
+  "nativeErrorPreservedAfterClose": true,
+  "ignoredStartupMouseSamples": 8000,
+  "compactedActiveMouseSamples": 8000,
+  "acknowledgementDelayMs": 500,
+  "maxInputsInFlight": 1,
+  "pageErrors": []
+}

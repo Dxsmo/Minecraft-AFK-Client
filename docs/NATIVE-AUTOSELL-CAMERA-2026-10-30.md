@@ -1,5 +1,7 @@
 # AutoSell direkt im Client und flüssigere Live Cam
 
+Die anschließende Korrektur für überlaufende Steuerungseingaben beim Remote-Start ist im [Bericht zum Eingaberückstau](REMOTE-INPUT-BACKPRESSURE-2026-10-30.md) dokumentiert.
+
 Nachtrag zu [AutoSell/Remote-Fix 1.2.0](AUTOSELL-REMOTE-FIX-2026-10-30.md). SoulFire bleibt auf **2.10.6**, die Controls-Erweiterung ist **1.3.0**. Die Texte der vier Feature-Ankündigungen wurden wie gewünscht angepasst. Die Ankündigungskennung und bereits gelesene Updates bleiben erhalten.
 
 ## Warum der bisherige Fix nicht ausreichte

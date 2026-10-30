@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { glfwKey } from "../../../frontend/src/lib/remoteInput.js";
+import { Code, ConnectError } from "@connectrpc/connect";
+import { glfwKey, queueRemoteEvent, type RemoteEvent } from "../../../frontend/src/lib/remoteInput.js";
 const mocked = vi.hoisted(() => ({ rpc: undefined as any, active: vi.fn(async () => {}) }));
 vi.mock("../../src/soulfire/rpc.js", () => ({ soulFireRpc: () => mocked.rpc }));
 vi.mock("../../src/soulfire/auth.js", () => ({ readRemoteAccount: async () => ({ instanceId: "instance", botId: "bot" }) }));
@@ -44,6 +45,89 @@ it("accepts browser heartbeats during slow preparation and starts native input a
   finish(); await preparing; await tick();
   expect(f.fail).not.toHaveBeenCalled();
   expect(f.rpc.pov.input).toHaveBeenCalledWith(expect.objectContaining({ captured: true, events: [] }), expect.anything());
+});
+it("does not overflow on high-frequency mouse movement while native input takes four seconds", async () => {
+  vi.useFakeTimers(); const f = fixture(); await f.session.start(); await tick();
+  f.rpc.pov.input.mockImplementationOnce(() => new Promise(resolve => setTimeout(() => resolve({}), 4000)));
+  const input = (events: unknown[], inputId?: number) => f.session.input(remoteInputSchema.parse({ type: "input", captured: true, events, inputId }));
+  input([{ kind: 0, code: 87, action: 1 }], 1);
+  for (let i = 0; i < 3000; i++) input([{ kind: 3, relative: true, x: 1, y: -1 }]);
+  input([{ kind: 0, code: 87, action: 0 }], 2);
+  await vi.advanceTimersByTimeAsync(3500);
+  expect(f.fail).not.toHaveBeenCalled();
+  expect(f.send).not.toHaveBeenCalledWith({ type: "inputAck", inputId: 1 });
+  input([]); await vi.advanceTimersByTimeAsync(500); await tick();
+  expect(f.rpc.pov.input.mock.calls.at(-1)![0].events).toEqual([
+    expect.objectContaining({ kind: 3, relative: true, x: 3000, y: -3000 }),
+    expect.objectContaining({ kind: 0, code: 87, action: 0 }),
+  ]);
+  expect(f.send).toHaveBeenCalledWith({ type: "inputAck", inputId: 1 });
+  expect(f.send).toHaveBeenCalledWith({ type: "inputAck", inputId: 2 });
+  expect(f.fail).not.toHaveBeenCalled();
+});
+it("compacts pre-start pointer input, preserving the click position before the following movement", async () => {
+  const f = fixture(); let finish!: () => void;
+  mocked.active.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  const preparing = f.session.start(); await tick();
+  for (let i = 0; i < 1000; i++) f.session.input(remoteInputSchema.parse({ type: "input", captured: true, events: [{ kind: 3, x: i / 1000, y: .25 }] }));
+  f.session.input(remoteInputSchema.parse({ type: "input", inputId: 1, captured: true, events: [
+    { kind: 2, code: 0, action: 1 }, { kind: 3, x: .5, y: .5 }, { kind: 2, code: 0, action: 0 },
+  ] }));
+  finish(); await preparing; await tick();
+  expect(f.fail).not.toHaveBeenCalled();
+  expect(f.rpc.pov.input.mock.calls[0][0].events).toEqual([
+    expect.objectContaining({ kind: 3, x: .999, y: .25 }), expect.objectContaining({ kind: 2, action: 1 }),
+    expect.objectContaining({ kind: 3, x: .5, y: .5 }), expect.objectContaining({ kind: 2, action: 0 }),
+  ]);
+});
+it("retries an acknowledgement dropped by video backpressure without replaying the native keys", async () => {
+  const f = fixture(); await f.session.start(); await tick();
+  f.send.mockReturnValueOnce(false);
+  const input = remoteInputSchema.parse({ type: "input", inputId: 1, captured: true, events: [{ kind: 0, code: 69, action: 1 }] });
+  f.session.input(input); await tick();
+  f.session.input(remoteInputSchema.parse({ type: "input", captured: true, events: [] })); await tick();
+  expect(f.send.mock.calls.filter(([message]) => message.type === "inputAck")).toHaveLength(2);
+  expect(f.rpc.pov.input.mock.calls.flatMap(([request]) => request.events)).toHaveLength(1);
+});
+it("rejects duplicate input IDs and releases native keys", async () => {
+  const f = fixture(); await f.session.start(); await tick();
+  const input = remoteInputSchema.parse({ type: "input", inputId: 1, captured: true, events: [{ kind: 0, code: 87, action: 1 }] });
+  f.session.input(input); await tick(); f.session.input(input); await tick();
+  expect(f.fail).toHaveBeenCalledWith(expect.stringContaining("Reihenfolge"));
+  await f.session.stop(); expect(mocked.active).toHaveBeenLastCalledWith("fixture", false);
+});
+it.each([
+  [Code.DeadlineExceeded, "nicht rechtzeitig verarbeitet"],
+  [Code.Unavailable, "Eingabeverbindung zum Minecraft-Client"],
+])("reports a native input failure (%s) and restores automation", async (code, message) => {
+  const f = fixture(); await f.session.start(); await tick();
+  f.rpc.pov.input.mockRejectedValueOnce(new ConnectError("native fixture failure", code));
+  f.session.input(remoteInputSchema.parse({ type: "input", inputId: 1, captured: true, events: [{ kind: 0, code: 87, action: 0 }] }));
+  await tick();
+  expect(f.fail).toHaveBeenCalledWith(expect.stringContaining(message));
+  await f.session.stop(); expect(mocked.active).toHaveBeenLastCalledWith("fixture", false);
+});
+it("keeps a finite limit for actual key/click floods and releases the account", async () => {
+  const f = fixture(); let finish!: () => void;
+  mocked.active.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  const preparing = f.session.start(); await tick();
+  const input = remoteInputSchema.parse({ type: "input", captured: true, events: Array.from({ length: 128 }, () => ({ kind: 0, code: 87, action: 1 })) });
+  f.session.input(input); f.session.input(input); f.session.input(input); await tick();
+  expect(f.fail).toHaveBeenCalledWith(expect.stringContaining("Tastatur- oder Klick"));
+  finish(); await preparing;
+  expect(mocked.active).toHaveBeenLastCalledWith("fixture", false);
+});
+it("compacts browser mouse samples while retaining relative movement and mouse button order", () => {
+  const events: RemoteEvent[] = [];
+  for (let i = 0; i < 8000; i++) queueRemoteEvent(events, { kind: 3, relative: true, x: 1, y: -1 });
+  queueRemoteEvent(events, { kind: 2, code: 0, action: 1 });
+  queueRemoteEvent(events, { kind: 3, relative: false, x: .3, y: .2 });
+  queueRemoteEvent(events, { kind: 3, relative: false, x: .7, y: .8 });
+  queueRemoteEvent(events, { kind: 2, code: 0, action: 0 });
+  expect(events).toEqual([
+    { kind: 3, relative: true, x: 8000, y: -8000 }, { kind: 2, code: 0, action: 1 },
+    { kind: 3, relative: false, x: .7, y: .8 }, { kind: 2, code: 0, action: 0 },
+  ]);
 });
 it("reports a finite startup error when no frame arrives, even if the browser keeps sending heartbeats", async () => {
   vi.useFakeTimers(); const f = fixture();

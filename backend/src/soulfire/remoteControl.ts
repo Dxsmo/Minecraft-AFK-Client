@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
+import { Code, ConnectError } from "@connectrpc/connect";
 import { config } from "../config/config.js";
+import { logger } from "../logging/logger.js";
 import { readRemoteAccount } from "./auth.js";
 import { soulFireRpc } from "./rpc.js";
 import { setRemoteControl } from "./remoteState.js";
@@ -19,6 +21,7 @@ const eventSchema = z.object({
 }, "Invalid input event");
 export const remoteInputSchema = z.object({
   type: z.literal("input"), captured: z.boolean(), events: z.array(eventSchema).max(128), requestKeyFrame: z.boolean().optional(),
+  inputId: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
 }).strict();
 export type RemoteInput = z.infer<typeof remoteInputSchema>;
 type Message = Record<string, unknown>;
@@ -43,6 +46,8 @@ export class RemoteControlSession {
   private sending = false;
   private active = false;
   private starting = true;
+  private receivedInputId = 0;
+  private acknowledgedInputId = 0;
 
   constructor(readonly accountId: string, private send: (message: Message) => boolean,
     private fail: (message: string) => void) {}
@@ -90,9 +95,23 @@ export class RemoteControlSession {
   input(input: RemoteInput): void {
     if (this.stopped) return;
     this.lastInput = Date.now(); this.captured = input.captured;
-    this.pending.push(...input.events);
+    if (input.inputId !== undefined) {
+      if (input.inputId <= this.receivedInputId) {
+        this.fail("Die Reihenfolge der Steuerungseingaben ist ungültig. Bitte erneut verbinden."); void this.stop(); return;
+      }
+      this.receivedInputId = input.inputId;
+    }
+    for (const event of input.events) {
+      const previous = this.pending.at(-1);
+      if (event.kind === 3 && previous?.kind === 3 && previous.relative === event.relative) {
+        if (event.relative) {
+          previous.x = Math.max(-10000, Math.min(10000, previous.x + event.x));
+          previous.y = Math.max(-10000, Math.min(10000, previous.y + event.y));
+        } else this.pending[this.pending.length - 1] = { ...event };
+      } else this.pending.push({ ...event });
+    }
     this.keyFrame ||= !!input.requestKeyFrame;
-    if (this.pending.length > 256) { this.fail("Die Verbindung ist zu langsam. Steuerung wurde freigegeben."); void this.stop(); return; }
+    if (this.pending.length > 256) { this.fail("Zu viele unbearbeitete Tastatur- oder Klick-Eingaben. Steuerung wurde freigegeben; bitte erneut verbinden."); void this.stop(); return; }
     void this.flush();
   }
 
@@ -102,14 +121,26 @@ export class RemoteControlSession {
     try {
       do {
         const events = this.pending.splice(0, 128), requestKeyFrame = this.keyFrame; this.keyFrame = false;
+        const inputId = this.pending.length ? 0 : this.receivedInputId;
         await this.rpc.pov.input({ sessionId: this.sessionId, inputToken: this.token, sequence: ++this.sequence,
           captured: this.captured, events, requestKeyFrame, width: 480, height: 270, escape: false, audioEnabled: false },
           // Native input itself waits up to 5s for the game thread. A shorter
           // browser-side deadline used to kill otherwise valid slow starts.
           { signal: this.abort.signal, timeoutMs: 6000 });
+        if (this.stopped) return;
+        // Acknowledge actual native processing, rather than receipt by the
+        // website. Browsers can then pace input to a busy Minecraft client.
+        if (inputId > this.acknowledgedInputId && this.send({ type: "inputAck", inputId })) this.acknowledgedInputId = inputId;
       } while (!this.stopped && (this.pending.length || this.keyFrame));
     } catch (error) {
-      if (!this.stopped) { this.fail("Die Eingabeverbindung wurde unterbrochen. Steuerung wurde freigegeben."); void this.stop(); }
+      if (!this.stopped) {
+        logger.warn({ err: error, accountId: this.accountId, queuedInputs: this.pending.length }, "Remote input failed");
+        const failure = ConnectError.from(error);
+        this.fail(failure.code === Code.DeadlineExceeded || /timed out|timeout|deadline/i.test(failure.rawMessage)
+          ? "Der Minecraft-Client hat die Steuerungseingaben nicht rechtzeitig verarbeitet. Steuerung wurde freigegeben; bitte SoulFire-Auslastung prüfen."
+          : "Die Eingabeverbindung zum Minecraft-Client wurde unterbrochen. Steuerung wurde freigegeben; bitte erneut verbinden.");
+        void this.stop();
+      }
     } finally { this.sending = false; }
   }
 

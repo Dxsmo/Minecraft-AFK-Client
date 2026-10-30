@@ -29,22 +29,31 @@ try {
     document.exitPointerLock = () => { locked = null; queueMicrotask(() => document.dispatchEvent(new Event('pointerlockchange'))); };
   });
   await page.routeWebSocket('**/ws/accounts/*/control', socket => {
-    const entry = { inputs: [], closed: false }; controls.push(entry);
-    let index = 0, timer;
+    const entry = { inputs: [], closed: false, maxInputsInFlight: 0 }; controls.push(entry);
+    let index = 0, timer, starting;
+    const pending = new Set(), acknowledgements = new Set();
     socket.onMessage(data => {
       const body = JSON.parse(data.toString()); entry.inputs.push(body);
       if (body.type === 'start' && controlFailure) {
         socket.send(JSON.stringify({ type: 'error', message: 'Native encoder unavailable (synthetic fixture)' }));
         socket.close({ code: 1011, reason: 'Control unavailable' }); return;
       }
-      if (body.type === 'start') timer = setInterval(() => {
+      if (body.type === 'input' && body.inputId) {
+        pending.add(body.inputId); entry.maxInputsInFlight = Math.max(entry.maxInputsInFlight, pending.size);
+        const ack = setTimeout(() => {
+          acknowledgements.delete(ack); pending.delete(body.inputId);
+          if (!entry.closed) socket.send(JSON.stringify({ type: 'inputAck', inputId: body.inputId }));
+        }, 500);
+        acknowledgements.add(ack);
+      }
+      if (body.type === 'start') starting = setTimeout(() => { timer = setInterval(() => {
         const source = video[index % video.length];
         socket.send(JSON.stringify({ ...source, screenOpen: forceGui || source.screenOpen, timestamp: index++ * 66667 }));
-      }, 70);
+      }, 70); timer.unref(); }, controls.length === 1 ? 1500 : 0);
       timer?.unref();
-      if (body.type === 'stop') { clearInterval(timer); socket.close(); }
+      if (body.type === 'stop') { clearTimeout(starting); clearInterval(timer); socket.close(); }
     });
-    socket.onClose(() => { clearInterval(timer); entry.closed = true; });
+    socket.onClose(() => { clearTimeout(starting); clearInterval(timer); for (const ack of acknowledgements) clearTimeout(ack); entry.closed = true; });
   });
   await page.goto(process.env.UI_URL || 'http://127.0.0.1:4173');
   await page.locator('#login-username').fill('CameraFixture');
@@ -57,16 +66,27 @@ try {
   assert.equal(controls.length, 0);
   await image.click();
   await page.getByRole('region', { name: 'Fernsteuerung', exact: true }).waitFor();
+  await page.evaluate(() => {
+    for (let i = 0; i < 8000; i++) window.dispatchEvent(new MouseEvent('mousemove', { movementX: 1, movementY: 0, bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW', key: 'w', bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW', key: 'w', bubbles: true }));
+  });
+  await page.waitForTimeout(200);
+  assert.equal(controls[0].inputs.flatMap(message => message.events || []).length, 0, 'No input before the first decoded frame');
   await page.getByText('Fernsteuerung wird verbunden…', { exact: true }).waitFor({ state: 'hidden' });
   assert.equal(controls.length, 1);
   const previousFrames = await page.evaluate(() => { window.__decoder.close(); window.__decoderError(new Error("fixture decoder reset")); return window.__decoded; });
   await page.waitForFunction(previous => window.__decoded > previous, previousFrames);
   await page.keyboard.down('w'); await page.waitForTimeout(100); await page.keyboard.up('w');
   await page.keyboard.press('e'); await page.waitForTimeout(100);
+  await page.evaluate(() => {
+    for (let i = 0; i < 8000; i++) window.dispatchEvent(new MouseEvent('mousemove', { movementX: 1, movementY: 0, bubbles: true }));
+  });
+  await page.waitForTimeout(700);
   forceGui = true; await page.waitForTimeout(150);
   const box = await page.getByLabel('Minecraft fernsteuern', { exact: true }).boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down(); await page.mouse.move(1, 1); await page.mouse.up(); await page.waitForTimeout(100);
+  await page.mouse.down(); await page.mouse.move(1, 1); await page.mouse.up(); await page.waitForTimeout(1100);
 
   await page.keyboard.press('Escape');
   await image.waitFor({ state: 'visible' });
@@ -79,6 +99,8 @@ try {
   assert.ok(events.some(event => event.kind === 2 && event.action === 0));
   assert.ok(!events.some(event => event.code === 256));
   assert.ok(controls[0].closed && controls[0].inputs.some(input => input.type === 'stop'));
+  assert.ok(controls.every(control => control.maxInputsInFlight <= 1));
+  assert.ok(controls[0].inputs.flatMap(input => input.events || []).filter(event => event.kind === 3).length < 20, 'Mouse samples were not compacted');
   await image.click();
   await page.getByRole('region', { name: 'Fernsteuerung', exact: true }).waitFor();
   await page.evaluate(() => dispatchEvent(new Event('blur')));
@@ -91,5 +113,6 @@ try {
   await page.keyboard.press('Escape'); await image.waitFor({ state: 'visible' });
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ nativeH264Decoded: true, decoderRecovery: true, lazyControlConnection: true, keyDownAndUp: true, inventoryKey: true,
-    escapeIsLocal: true, mouseReleasedOutsideImage: true, releaseOnBlur: true, nativeErrorPreservedAfterClose: true, pageErrors: errors }, null, 2));
+    escapeIsLocal: true, mouseReleasedOutsideImage: true, releaseOnBlur: true, nativeErrorPreservedAfterClose: true,
+    ignoredStartupMouseSamples: 8000, compactedActiveMouseSamples: 8000, acknowledgementDelayMs: 500, maxInputsInFlight: controls[0].maxInputsInFlight, pageErrors: errors }, null, 2));
 } finally { await browser.close(); }

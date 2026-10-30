@@ -1,0 +1,38 @@
+{
+  "browserToNative": true,
+  "droppedItems": 1500,
+  "preparationDelayMs": 4000,
+  "preparationDelayApplied": true,
+  "inputDelayMs": 3000,
+  "inputDelayApplied": true,
+  "mousePressure": true,
+  "maxInputsInFlight": 1,
+  "inputBatches": 154,
+  "startsMs": [
+    4887,
+    237
+  ],
+  "starts": 2,
+  "h264Frames": 149,
+  "liveFps": 4.460852176588217,
+  "remoteFps": [
+    14.988758431176617,
+    14.988758431176617
+  ],
+  "cameraSellPeriodsMs": [
+    2059,
+    2021
+  ],
+  "transfers": 252,
+  "cameraPixels": {
+    "width": 480,
+    "height": 270,
+    "colors": 807
+  },
+  "movement": true,
+  "inventoryOpenClose": true,
+  "escapeAndRestart": true,
+  "autoSellPausedDuringRemote": true,
+  "autoSellResumed": true,
+  "failures": []
+}

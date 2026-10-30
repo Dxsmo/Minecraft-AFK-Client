@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { glfwKey, modifiers, type RemoteEvent } from "../lib/remoteInput";
+import { glfwKey, modifiers, queueRemoteEvent, type RemoteEvent } from "../lib/remoteInput";
 
 export function RemoteControlPanel({ accountId, onExit }: { accountId: string; onExit: () => void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -18,6 +18,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
     let decoderFailures = 0;
     let startup: ReturnType<typeof setTimeout> | undefined;
     let events: RemoteEvent[] = [], open = false, intentionalUnlock = false;
+    let interactive = false, inputId = 0, inFlightInputId = 0, keyFrameRequested = false;
     const buttons = new Set<number>();
     function release() {
       if (disposed) return;
@@ -29,14 +30,27 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
       exit.current();
     }
     stop.current = release;
+    function failControl(message: string) {
+      if (disposed || failed) return;
+      failed = true; interactive = false; events = []; clearTimeout(startup); setError(message);
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "stop" }));
+      socket?.close();
+      if (document.pointerLockElement) { intentionalUnlock = true; document.exitPointerLock(); }
+    }
     function send(requestKeyFrame = false) {
-      if (disposed || socket?.readyState !== WebSocket.OPEN) return;
-      socket.send(JSON.stringify({ type: "input", captured: true, events: events.splice(0, 128), requestKeyFrame }));
+      keyFrameRequested ||= requestKeyFrame;
+      if (disposed || failed || socket?.readyState !== WebSocket.OPEN) return;
+      if (inFlightInputId || socket.bufferedAmount > 64 * 1024 || (!events.length && !keyFrameRequested)) return;
+      inFlightInputId = ++inputId;
+      socket.send(JSON.stringify({ type: "input", captured: true, events: events.splice(0, 128), requestKeyFrame: keyFrameRequested, inputId }));
+      keyFrameRequested = false;
     }
     function queue(event: RemoteEvent) {
-      if (disposed || failed) return;
-      if (events.length >= 128) send();
-      events.push(event);
+      if (disposed || failed || !interactive) return;
+      queueRemoteEvent(events, event);
+      if (events.length > 256) {
+        failControl("Der Minecraft-Client kommt mit den Eingaben nicht hinterher. Bitte Steuerung beenden und erneut verbinden.");
+      }
     }
     function lock() {
       if (disposed || open || document.pointerLockElement) return;
@@ -49,10 +63,14 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
       socket.send(JSON.stringify({ type: "start", csrfToken: match ? decodeURIComponent(match[1]) : "" }));
     };
     socket.onmessage = event => {
-      if (disposed) return;
+      if (disposed || failed) return;
       try {
         const frame = JSON.parse(event.data);
-        if (frame.type === "error") { failed = true; clearTimeout(startup); setError(frame.message || "Fernsteuerung nicht verfügbar."); return; }
+        if (frame.type === "error") { failControl(frame.message || "Fernsteuerung nicht verfügbar."); return; }
+        if (frame.type === "inputAck") {
+          if (frame.inputId === inFlightInputId) { inFlightInputId = 0; send(); }
+          return;
+        }
         if (frame.type !== "video" || typeof frame.data !== "string" || frame.data.length > 4 * 1024 * 1024) return;
         if (open !== frame.screenOpen) {
           open = !!frame.screenOpen; setScreenOpen(open);
@@ -63,15 +81,12 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
           codec = frame.codec; waitForKey = true;
           decoder = new VideoDecoder({
             output: video => {
-              try { if (!disposed && canvas.current) { clearTimeout(startup); decoderFailures = 0; canvas.current.getContext("2d")?.drawImage(video, 0, 0, 640, 360); setReady(true); } }
+              try { if (!disposed && !failed && canvas.current) { clearTimeout(startup); decoderFailures = 0; canvas.current.getContext("2d")?.drawImage(video, 0, 0, 640, 360); interactive = true; setReady(true); } }
               finally { video.close(); }
             },
             error: () => {
               if (++decoderFailures >= 3) {
-                failed = true; clearTimeout(startup);
-                setError("Dein Browser kann das Steuerungsbild nicht dekodieren. Bitte einen aktuellen Chrome oder Edge versuchen.");
-                if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "stop" }));
-                socket.close(); return;
+                failControl("Dein Browser kann das Steuerungsbild nicht dekodieren. Bitte einen aktuellen Chrome oder Edge versuchen."); return;
               }
               waitForKey = true; codec = ""; send(true);
             },
@@ -83,7 +98,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
         if (frame.keyFrame) waitForKey = false;
         const data = Uint8Array.from(atob(frame.data), char => char.charCodeAt(0));
         decoder.decode(new EncodedVideoChunk({ type: frame.keyFrame ? "key" : "delta", timestamp: frame.timestamp, data }));
-      } catch { failed = true; setError("Das Videobild konnte nicht verarbeitet werden. Bitte Steuerung beenden und erneut öffnen."); }
+      } catch { failControl("Das Videobild konnte nicht verarbeitet werden. Bitte Steuerung beenden und erneut öffnen."); }
     };
     socket.onclose = event => {
       if (disposed) return;
@@ -99,6 +114,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
       if (event.code === "Escape" || event.key === "Escape") { event.preventDefault(); event.stopPropagation(); release(); return; }
       if (disposed || failed) return;
       event.preventDefault(); event.stopPropagation();
+      if (!interactive || (event.type === "keydown" && event.repeat && !open)) return;
       const code = glfwKey(event.code);
       if (code !== undefined) {
         const down = event.type === "keydown";
@@ -109,7 +125,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
       }
     }
     function mouse(event: MouseEvent) {
-      if (disposed || failed) return;
+      if (disposed || failed || !interactive) return;
       const buttonCode = event.button === 1 ? 2 : event.button === 2 ? 1 : 0;
       // Dragging out of the picture must still release the original button.
       if (event.type === "mouseup" && buttons.delete(event.button)) {
@@ -130,7 +146,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
       }
     }
     function wheel(event: WheelEvent) {
-      if (disposed || failed || (!document.pointerLockElement && event.target !== canvas.current)) return;
+      if (disposed || failed || !interactive || (!document.pointerLockElement && event.target !== canvas.current)) return;
       event.preventDefault(); queue({ kind: 4, x: -Math.sign(event.deltaX), y: -Math.sign(event.deltaY) });
     }
     const lockChanged = () => {
@@ -146,14 +162,14 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
     window.addEventListener("blur", release);
     document.addEventListener("pointerlockchange", lockChanged); document.addEventListener("visibilitychange", hidden);
     document.addEventListener("contextmenu", contextMenu);
-    const inputTimer = setInterval(() => { if (events.length) send(); }, 25);
-    const heartbeat = setInterval(() => send(), 500);
+    const inputTimer = setInterval(() => send(), 50);
+    const heartbeat = setInterval(() => {
+      if (!disposed && !failed && socket.readyState === WebSocket.OPEN && socket.bufferedAmount <= 64 * 1024)
+        socket.send(JSON.stringify({ type: "input", captured: true, events: [] }));
+    }, 500);
     startup = setTimeout(() => {
       if (disposed || failed) return;
-      failed = true;
-      setError("Es kommt kein Steuerungsbild an. Bitte die Verbindung und SoulFire-Auslastung prüfen und erneut versuchen.");
-      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "stop" }));
-      socket.close();
+      failControl("Es kommt kein Steuerungsbild an. Bitte die Verbindung und SoulFire-Auslastung prüfen und erneut versuchen.");
     }, 30_000);
     lock();
     return () => {

@@ -73,12 +73,19 @@ const wait = async predicate => {
 let app, browser, account, ids;
 const originalFetch = globalThis.fetch;
 const preparationDelayMs = Number(process.env.AFK_REMOTE_RPC_DELAY_MS || 0);
+const inputDelayMs = Number(process.env.AFK_REMOTE_INPUT_DELAY_MS || 0);
+const mousePressure = process.env.AFK_REMOTE_MOUSE_PRESSURE === '1';
 let delayNextPreparation = false, preparationDelayApplied = false;
+let delayNextInput = false, inputDelayApplied = false;
 globalThis.fetch = async (input, init) => {
   const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
   if (delayNextPreparation && url.pathname.endsWith('/UpdateBotConfigEntry')) {
     delayNextPreparation = false; preparationDelayApplied = true;
     await new Promise(resolve => setTimeout(resolve, preparationDelayMs));
+  }
+  if (delayNextInput && url.pathname.endsWith('/Input')) {
+    delayNextInput = false; inputDelayApplied = true;
+    await new Promise(resolve => setTimeout(resolve, inputDelayMs));
   }
   return originalFetch(input, init);
 };
@@ -104,13 +111,21 @@ try {
   browser = await chromium.launch({ headless: true, channel: 'chrome' });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.on('pageerror', error => failures.push(error.message));
-  const remoteFrames = [], controlClosed = [], cameraFrames = [];
+  const remoteFrames = [], controlClosed = [], cameraFrames = [], inputMessages = [];
+  let maxInputsInFlight = 0;
   page.on('websocket', ws => {
     if (ws.url().endsWith('/camera')) ws.on('framereceived', frame => {
       const message = JSON.parse(String(frame.payload)); if (message.type === 'frame') cameraFrames.push({ at: Date.now(), image: message.image });
     });
     if (ws.url().endsWith('/control')) {
-    ws.on('framereceived', frame => { const message = JSON.parse(String(frame.payload)); if (message.type === 'video') remoteFrames.push({ ...message, at: Date.now() }); else if (message.type === 'error') failures.push(message.message); });
+    const inFlight = new Set();
+    ws.on('framesent', frame => {
+      const message = JSON.parse(String(frame.payload));
+      if (message.type !== 'input') return;
+      inputMessages.push(message);
+      if (message.inputId) { inFlight.add(message.inputId); maxInputsInFlight = Math.max(maxInputsInFlight, inFlight.size); }
+    });
+    ws.on('framereceived', frame => { const message = JSON.parse(String(frame.payload)); if (message.type === 'video') remoteFrames.push({ ...message, at: Date.now() }); else if (message.type === 'inputAck') inFlight.delete(message.inputId); else if (message.type === 'error') failures.push(message.message); });
     ws.on('close', () => controlClosed.push(Date.now()));
   } });
   await page.goto(origin);
@@ -137,11 +152,23 @@ try {
     delayNextPreparation = run === 0 && preparationDelayMs > 0;
     const started = Date.now(); await image.click();
     await page.getByRole('region', { name: 'Fernsteuerung', exact: true }).waitFor();
+    if (mousePressure && run === 0) {
+      await page.waitForFunction(() => !!document.pointerLockElement);
+      const before = inputMessages.flatMap(message => message.events).length;
+      await page.evaluate(() => { for (let i = 0; i < 6000; i++) window.dispatchEvent(new MouseEvent('mousemove', { movementX: 1, movementY: 1, bubbles: true })); });
+      await page.waitForTimeout(200);
+      assert.equal(inputMessages.flatMap(message => message.events).length, before, 'Input must stay inactive while the first image is loading');
+    }
     await page.getByText('Fernsteuerung wird verbunden…', { exact: true }).waitFor({ state: 'hidden', timeout: 35000 });
     assert.deepEqual(failures, []); durations.push(Date.now() - started);
     await wait(() => remoteFrames.length > 1);
+    delayNextInput = run === 0 && inputDelayMs > 0;
+    if (mousePressure) await page.evaluate(() => {
+      window.__remotePressure = setInterval(() => { for (let i = 0; i < 20; i++) window.dispatchEvent(new MouseEvent('mousemove', { movementX: i % 2 ? 1 : -1, movementY: 0, bubbles: true })); }, 20);
+    });
     const remoteStart = Date.now(), remoteBefore = remoteFrames.length, pausedSales = sales.length;
     await new Promise(resolve => setTimeout(resolve, 4000));
+    if (mousePressure) await page.evaluate(() => clearInterval(window.__remotePressure));
     remoteFps.push((remoteFrames.length - remoteBefore) * 1000 / (Date.now() - remoteStart));
     assert.ok(remoteFps.at(-1) >= 2, `Remote camera too slow: ${remoteFps.at(-1)}fps`);
     assert.equal(sales.length, pausedSales, 'Native selling must pause during remote control');
@@ -157,7 +184,9 @@ try {
   assert.ok(!actions.includes('stop_sneaking') || actions.includes('start_sneaking'));
   assert.deepEqual(failures, []);
   assert.equal(preparationDelayApplied, preparationDelayMs > 0);
-  console.log(JSON.stringify({ browserToNative: true, droppedItems, preparationDelayMs, preparationDelayApplied, startsMs: durations, starts: durations.length, h264Frames: remoteFrames.length,
+  assert.equal(inputDelayApplied, inputDelayMs > 0);
+  assert.ok(maxInputsInFlight <= 1, `Input backpressure failed: ${maxInputsInFlight} batches in flight`);
+  console.log(JSON.stringify({ browserToNative: true, droppedItems, preparationDelayMs, preparationDelayApplied, inputDelayMs, inputDelayApplied, mousePressure, maxInputsInFlight, inputBatches: inputMessages.filter(message => message.inputId).length, startsMs: durations, starts: durations.length, h264Frames: remoteFrames.length,
     liveFps, remoteFps, cameraSellPeriodsMs, transfers, cameraPixels: { width: pixels.width, height: pixels.height, colors: colors.size },
     movement: true, inventoryOpenClose: true, escapeAndRestart: true, autoSellPausedDuringRemote: true, autoSellResumed: true, failures }, null, 2));
 } finally {
