@@ -9,24 +9,24 @@ export const websiteUpdate = {
   introduction: "Hier die letzten Änderungen – kurz zusammengefasst.",
   items: [
     {
-      title: "Neue Engine: SoulFire",
-      description: "Java und Bedrock laufen jetzt mit SoulFire. Damit können wir noch einiges Neues einbauen. Beim Umstieg kann’s auch mal haken – sag Bescheid, wenn dir ein Bug auffällt.",
+      title: "Neue Engine",
+      description: "Der AFK-Client wurde auf eine neue Engine umgestellt, die viele neue Features ermöglicht. Dadurch können aber auch neue Bugs auftreten – sagt also Bescheid, wenn ihr welche findet.",
       hint: "",
     },
     {
-      title: "Knapp 1.500 Items als Account-Bild",
-      description: "Such dir ein Minecraft-Item als Bild für deinen Account aus. Alles ist alphabetisch sortiert und mit der Suche findest du schnell was Passendes.",
-      hint: "Einfach aufs Plus oder dein aktuelles Account-Bild klicken.",
+      title: "Account-Icon",
+      description: "Ihr könnt jedem Minecraft-Account ein Icon zuweisen, damit eure Account-Liste übersichtlicher wird. Klickt dafür links beim Account aufs Plus oder auf das vorhandene Bild und wählt ein neues Icon aus. Ein eigenes Bild müsst ihr dafür nicht hochladen: Es stehen euch rund 1.500 Minecraft-Blöcke und -Items zur Auswahl.",
+      hint: "",
     },
     {
       title: "Live Cam & Remote Control",
-      description: "Du kannst jetzt sehen, was dein Account sieht, und ihn auch selbst steuern. Einfach ins Live-Bild klicken. Mit Escape bist du wieder raus.",
-      hint: "Account öffnen → Live Cam. Lädt erst, wenn du den Tab öffnest.",
+      description: "Neu ist auch die Live Cam. Ihr findet sie beim jeweiligen Minecraft-Account im Reiter „Live Cam“ und könnt dort live sehen, was euer Account ingame sieht. Für kleinere Anpassungen könnt ihr ihn auch selbst steuern: Klickt dafür einfach auf das Bild in der Live Cam.",
+      hint: "Mit Escape verlasst ihr die Remote Control wieder.",
     },
     {
-      title: "Maustaste dauerhaft halten",
-      description: "Links- oder Rechtsklick lassen sich jetzt dauerhaft gedrückt halten. Läuft auch nach Teleports und Reconnects weiter.",
-      hint: "Account → Einstellungen → Auto button.",
+      title: "Dauer-Button",
+      description: "Den neuen Auto button findet ihr in den Einstellungen eures jeweiligen Minecraft-Accounts. Dort könnt ihr aktivieren, dass der Account durchgehend entweder die linke oder die rechte Maustaste gedrückt hält – ohne Pausen.",
+      hint: "",
     },
     {
       title: "Kleine Fixes & Verbesserungen",

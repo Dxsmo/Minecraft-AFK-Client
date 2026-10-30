@@ -14,7 +14,7 @@ vi.mock("../../src/soulfire/versions.js", () => ({
   protocolOptions: vi.fn(async () => [{ id: "RELEASE|47", displayName: "1.8.8", keywords: ["1.8.8"] }]),
   selectProtocol: vi.fn(() => ({ id: "RELEASE|47" })),
 }));
-const { runSoulFire, SELL_ALL_PLAYER_SLOTS } = await import("../../src/soulfire/session.js");
+const { runSoulFire } = await import("../../src/soulfire/session.js");
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0)) await close(); vi.useRealTimers(); });
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -72,17 +72,21 @@ async function fixture() {
     begin: () => { running = runSoulFire(config, emit, abort, queue); return running; }, end: async () => { deliver!(undefined); await flush(); await running; } };
 }
 
-it("uses icon-free inventory events for selling and gives commands priority over the active sale", async () => {
+it("delegates selling to the native client and suspends it before manual commands", async () => {
   const f = await fixture(); await f.start();
   expect(f.rpc.live.watchBotEvents.mock.calls[0][0].filter.includeInventory).toBe(true);
-  await vi.advanceTimersByTimeAsync(2000); expect(f.rpc.live.sendChat).not.toHaveBeenCalled();
-  await f.frame("inventory", { state: f.inventory() });
-  await vi.advanceTimersByTimeAsync(100); expect(f.rpc.live.sendChat).toHaveBeenCalledWith(expect.objectContaining({ message: "/sell" }), expect.anything());
+  expect(f.rpc.bot.updateBotConfigEntry).toHaveBeenCalledWith(expect.objectContaining({ key: "native-auto-sell",
+    value: expect.objectContaining({ kind: { case: "stringValue", value: JSON.stringify({ enabled: true, intervalMs: 60000, command: "/sell" }) } }) }), expect.anything());
+  await vi.advanceTimersByTimeAsync(2100);
+  expect(f.rpc.live.sendChat).not.toHaveBeenCalled();
   await f.frame("inventory", { state: f.inventory("sell", "Items verkaufen") });
-  await vi.advanceTimersByTimeAsync(100); expect(f.rpc.bot.clickInventorySlot).toHaveBeenCalledWith(expect.objectContaining({ slot: SELL_ALL_PLAYER_SLOTS, expectedMenuId: "sell" }), expect.anything());
   f.queue.push({ type: "chat", text: "/homes" }); await vi.advanceTimersByTimeAsync(100);
+  const suspension = f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === "sell-manual-until").at(-1)![0].value.kind.value;
+  expect(suspension).toBeGreaterThanOrEqual(Date.now() + 4900);
+  expect(suspension).toBeLessThanOrEqual(Date.now() + 5000);
   expect(f.rpc.live.sendChat).toHaveBeenLastCalledWith(expect.objectContaining({ message: "/homes" }), expect.anything());
   expect(f.rpc.bot.closeContainer).toHaveBeenCalledTimes(1);
+  expect(f.rpc.bot.clickInventorySlot).not.toHaveBeenCalled();
   expect(f.rpc.bot.getInventoryState).not.toHaveBeenCalled();
 });
 
@@ -151,7 +155,7 @@ it("does not let an idle status RPC block selling or manual commands, and does n
   await f.start(); await f.frame("inventory", { state: f.inventory() });
   await vi.advanceTimersByTimeAsync(6000);
   expect(f.rpc.bot.getBotInfo).toHaveBeenCalledOnce();
-  expect(f.rpc.live.sendChat).toHaveBeenCalledWith(expect.objectContaining({ message: "/sell" }), expect.anything());
+  expect(f.rpc.bot.updateBotConfigEntry).toHaveBeenCalledWith(expect.objectContaining({ key: "sell-lease-until" }), expect.anything());
   f.queue.push({ type: "chat", text: "/homes" }); await vi.advanceTimersByTimeAsync(100);
   expect(f.rpc.live.sendChat).toHaveBeenLastCalledWith(expect.objectContaining({ message: "/homes" }), expect.anything());
   const previous = f.emit.mock.calls.filter(([event]) => event.type === "heartbeat").length;
@@ -169,28 +173,39 @@ it("retains failure detection through the separate idle health check", async () 
   expect(f.emit).toHaveBeenCalledWith({ type: "connection_failed", error: "fixture disconnected" });
 });
 
-it("transfers a whole sale in one native call and closes after its first progress event", async () => {
-  const f = await fixture(); await f.start(); await f.frame("inventory", { state: f.inventory() });
-  await vi.advanceTimersByTimeAsync(2100);
-  const state = f.inventory("sell", "Items verkaufen"); state.slots.push({ ...state.slots[0], slot: 3 });
-  await f.frame("inventory", { state });
-  expect(f.rpc.bot.clickInventorySlot).toHaveBeenLastCalledWith(expect.objectContaining({ slot: SELL_ALL_PLAYER_SLOTS }), expect.anything());
-  state.slots = state.slots.filter(slot => slot.slot !== 2); await f.frame("inventory", { state });
-  expect(f.rpc.bot.clickInventorySlot).toHaveBeenCalledTimes(1);
-  expect(f.rpc.bot.closeContainer).toHaveBeenCalledWith(expect.objectContaining({ expectedMenuId: "sell" }), expect.anything());
+it("renews native selling even when no inventory snapshots arrive or telemetry resynchronizes", async () => {
+  const f = await fixture(); f.config.autosell_interval_seconds = .5;
+  await f.start();
+  const leases = () => f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === "sell-lease-until");
+  expect(leases()).toHaveLength(1);
+  await f.frame("resyncRequired", { reason: "consumer burst" });
+  await vi.advanceTimersByTimeAsync(5100);
+  expect(leases()).toHaveLength(2);
+  await f.frame("resyncRequired", { reason: "consumer burst" });
+  await vi.advanceTimersByTimeAsync(5100);
+  expect(leases()).toHaveLength(3);
+  expect(f.rpc.bot.getInventoryState).not.toHaveBeenCalled();
+  expect(f.rpc.bot.clickInventorySlot).not.toHaveBeenCalled();
+  expect(f.rpc.live.sendChat).not.toHaveBeenCalled();
+  expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "warning" }));
 });
 
-it("recovers a burst-induced stream resync without resetting the sell interval or losing the active menu", async () => {
-  const f = await fixture(); f.config.autosell_interval_seconds = .5;
-  await f.start(); await f.frame("inventory", { state: f.inventory() }); await vi.advanceTimersByTimeAsync(2100);
-  await f.frame("inventory", { state: f.inventory("sell", "Items verkaufen") });
-  await f.frame("chat", { senderName: "", plainText: "[HugoSMP] +$121,60 (Basis: $64, Bonus: +$57,60 durch 1.9x)" });
-  await f.frame("resyncRequired", { reason: "consumer burst" });
-  await f.frame("inventory", { state: f.inventory("sell", "Items verkaufen") });
+it("retries failed lease renewals while keeping manual commands responsive", async () => {
+  const f = await fixture(); await f.start();
+  f.rpc.bot.updateBotConfigEntry.mockImplementationOnce(async () => { throw new Error("temporary RPC outage"); });
+  await vi.advanceTimersByTimeAsync(5100);
+  f.queue.push({ type: "chat", text: "/homes" }); await vi.advanceTimersByTimeAsync(100);
+  expect(f.rpc.live.sendChat).toHaveBeenLastCalledWith(expect.objectContaining({ message: "/homes" }), expect.anything());
+  await vi.advanceTimersByTimeAsync(1100);
+  expect(f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === "sell-lease-until")).toHaveLength(3);
+});
+
+it("passes restart pause windows to native selling", async () => {
+  const f = await fixture(); await f.start();
+  f.queue.push({ type: "pause_autosell", autosell_pause_after_ms: 1000, autosell_resume_after_ms: 121000 });
   await vi.advanceTimersByTimeAsync(100);
-  expect(f.rpc.bot.closeContainer).toHaveBeenCalledWith(expect.objectContaining({ expectedMenuId: "sell" }), expect.anything());
-  await f.frame("inventory", { state: f.inventory() });
-  await vi.advanceTimersByTimeAsync(500);
-  expect(f.rpc.live.sendChat.mock.calls.filter(([request]) => request.message === "/sell").length).toBeGreaterThanOrEqual(2);
-  expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "warning" }));
+  const setting = (key: string) => f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === key).at(-1)![0].value.kind.value;
+  expect(setting("sell-pause-from")).toBeGreaterThanOrEqual(Date.now() + 900);
+  expect(setting("sell-pause-from")).toBeLessThanOrEqual(Date.now() + 1000);
+  expect(setting("sell-pause-until") - setting("sell-pause-from")).toBe(120000);
 });

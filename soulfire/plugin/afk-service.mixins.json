@@ -8,7 +8,10 @@
     "HeldMouseMixin",
     "StartupTimeoutMixin",
     "BlockedCommandMixin",
-    "SellBatchMixin"
+    "SellBatchMixin",
+    "CameraFrameMixin",
+    "CameraItemsMixin",
+    "CameraItemCopiesMixin"
   ],
   "injectors": {
     "defaultRequire": 1

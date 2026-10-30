@@ -1,5 +1,7 @@
 # AutoSell bei vielen Items und Start der Fernsteuerung
 
+Dieser Bericht beschreibt Controls 1.2.0. Der anschließende Wechsel auf native Verkaufszyklen und die gemeinsame Kamera-/Verkaufsprüfung sind im [Nachtrag zu 1.3.0](NATIVE-AUTOSELL-CAMERA-2026-10-30.md) beschrieben.
+
 SoulFire bleibt auf 2.10.6 gepinnt; die eigene Controls-Erweiterung ist jetzt **1.2.0**. Keine neue Update-Ankündigung: Die Kennung der Glocke bleibt unverändert.
 
 ## Ursache und Änderung

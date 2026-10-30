@@ -7,6 +7,8 @@ export type BehaviorConfig = { crouch_enabled?: boolean; auto_button?: "off" | "
 export type GameSlot = { slot: number; itemId: string; count: number; displayName: string; tooltipLines: string[] };
 export type GameInventory = { menuId: string; title: string; containerSlots: number[]; playerSlots: number[]; slots: GameSlot[] };
 export interface GameGateway {
+  nativeAutosell?: boolean;
+  suspendSell?(durationMs: number): Promise<void>;
   remote?(active: boolean): Promise<void>;
   held(config: BehaviorConfig): Promise<void>;
   sneak(): Promise<void>;
@@ -141,7 +143,7 @@ export class SoulFireBehaviors {
     if (now < this.readyAt) return;
     if (this.foreground) { await this.tickForeground(now); return; }
     if (!this.cfg.autosell_enabled || now < this.manualUntil) return;
-    await this.tickSell(now);
+    if (!this.game.nativeAutosell) await this.tickSell(now);
   }
 
   private creditReady(now: number): boolean {
@@ -158,10 +160,16 @@ export class SoulFireBehaviors {
   }
 
   private async runCommand(command: { type: string; text?: string }): Promise<void> {
+    await this.game.suspendSell?.(5000);
     const generation = this.generation;
     this.sell = null;
     this.foreground = null;
-    const inventory = await this.game.inventory();
+    const inventory = await this.game.inventory().catch(error => {
+      // Typed commands need no inventory snapshot. Keep menu-dependent tasks
+      // strict, but don't discard /home etc. during a telemetry resync.
+      if (this.game.nativeAutosell && command.type === "chat") return { menuId: "", containerSlots: [] };
+      throw error;
+    });
     if (inventory.containerSlots.length) await this.game.close(inventory.menuId);
     this.manualUntil = this.clock() + 5000;
     if (command.type === "read_sell_multipliers") {

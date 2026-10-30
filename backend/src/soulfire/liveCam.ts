@@ -6,7 +6,7 @@ import { readRemoteAccount } from "./auth.js";
 import { soulFireRpc } from "./rpc.js";
 import type { BotPovFrame } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
 
-export const LIVE_CAM_OPTIONS = { width: 640, height: 360, maxDistance: 48, intervalMs: 400, includeHud: true, includeHands: true } as const;
+export const LIVE_CAM_OPTIONS = { width: 480, height: 270, maxDistance: 32, intervalMs: 150, includeHud: true, includeHands: true } as const;
 export type CameraFrame = { type: "frame"; image: string };
 type Viewer = { frame: (frame: CameraFrame) => void; loading?: () => void; error: (error: unknown) => void };
 type Stream = { viewers: Set<Viewer>; abort: AbortController; done: Promise<void> };

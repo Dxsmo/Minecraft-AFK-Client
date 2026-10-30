@@ -8,6 +8,8 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
+import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.JumpInsnNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 
@@ -22,6 +24,10 @@ public final class StartupMixinPlugin implements IMixinConfigPlugin {
 
   @Override
   public void postApply(String target, ClassNode node, String mixin, IMixinInfo info) {
+    if (mixin.equals("de.afkservice.mixin.CameraFrameMixin")) {
+      progressiveCamera(node);
+      return;
+    }
     if (!mixin.equals("de.afkservice.mixin.StartupTimeoutMixin")) return;
     long seconds = Math.max(30L, Math.min(1800L,
         Long.getLong("afk.initialClientLoadTimeoutSeconds", 300L)));
@@ -53,6 +59,40 @@ public final class StartupMixinPlugin implements IMixinConfigPlugin {
       throw new IllegalStateException("Expected one SoulFire 2.10.6 resource deadline, found " + changed);
     }
     System.out.println("[afk-service] Initial Minecraft resource load timeout: " + seconds + " seconds");
+  }
+
+  /** Use the interactive renderer's existing single-frame exit, including its normal cleanup. */
+  private static void progressiveCamera(ClassNode node) {
+    int changed = 0;
+    for (var method : node.methods) {
+      if (!method.name.equals("renderWorld")) continue;
+      for (var instruction : method.instructions.toArray()) {
+        if (!(instruction instanceof MethodInsnNode call) || !call.owner.equals(node.name)
+            || !call.name.equals("finishFrame") || call.getOpcode() != Opcodes.INVOKESTATIC) continue;
+        var field = next(call);
+        var bound = next(field);
+        var condition = next(bound);
+        var exit = next(condition);
+        if (!(field instanceof FieldInsnNode viewport) || !viewport.name.equals("INTERACTIVE_VIEWPORT")
+            || !(bound instanceof MethodInsnNode check) || !check.name.equals("isBound")
+            || !(condition instanceof JumpInsnNode branch) || branch.getOpcode() != Opcodes.IFEQ
+            || !(exit instanceof JumpInsnNode jump) || jump.getOpcode() != Opcodes.GOTO) continue;
+        var hook = new InsnList();
+        hook.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "de/afkservice/CameraBudget", "progressive", "()Z", false));
+        hook.add(new JumpInsnNode(Opcodes.IFNE, jump.label));
+        method.instructions.insert(call, hook);
+        changed++;
+      }
+    }
+    if (changed != 1) throw new IllegalStateException("Expected one SoulFire 2.10.6 camera frame exit, found " + changed);
+    System.out.println("[afk-service] Progressive live camera enabled");
+  }
+
+  private static AbstractInsnNode next(AbstractInsnNode instruction) {
+    if (instruction == null) return null;
+    var next = instruction.getNext();
+    while (next != null && next.getOpcode() < 0) next = next.getNext();
+    return next;
   }
 
   private static AbstractInsnNode previous(AbstractInsnNode instruction) {

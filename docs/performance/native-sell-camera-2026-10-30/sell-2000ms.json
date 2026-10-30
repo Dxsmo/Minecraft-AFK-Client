@@ -1,0 +1,33 @@
+{
+  "controllers": 2,
+  "soakSeconds": 0,
+  "droppedItemsPerClient": 1500,
+  "sellStacks": 36,
+  "sellInterval": 2,
+  "salePeriodsMs": [
+    2041,
+    2002,
+    2054,
+    2045,
+    2001
+  ],
+  "streamResyncs": 70,
+  "rpcDurations": [
+    {
+      "method": "SendChat",
+      "ms": 33
+    }
+  ],
+  "extraNodeProcesses": 0,
+  "javaAutoDetection": false,
+  "nativeRightUse": true,
+  "nativeLeftMining": true,
+  "noUnsneak": true,
+  "viewDistance": 2,
+  "confirmedSales": 216,
+  "refilledSlotsConfirmed": true,
+  "manualCommandDelivered": true,
+  "inventoryRpcCalls": 0,
+  "povRenderRpcCalls": 0,
+  "independentStop": true
+}

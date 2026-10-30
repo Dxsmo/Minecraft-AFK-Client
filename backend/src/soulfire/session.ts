@@ -73,7 +73,7 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   await setting("auto-reconnect", "enabled", false);
   await setting("auto-respawn", "enabled", false);
   await setting("afk-service", "remote-control", false);
-  await setting("client-settings", "render-distance", 6);
+  await setting("client-settings", "render-distance", 2);
   await setting("bot", "restore-on-reboot", false);
   const versions = await protocolOptions(rpc, instanceId);
   const advertised = config.edition === "JAVA" && !config.version
@@ -90,8 +90,20 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
 
   let sneakCheck = 0;
   const inventory = new SoulFireInventory();
-  let heldButton: string | undefined, heldCrouch: boolean | undefined;
+  let heldButton: string | undefined, heldCrouch: boolean | undefined, nativeSellConfig: string | undefined;
+  let nativeSellEnabled = false, nextSellLease = 0, sellLeaseBusy = false;
+  const renewSellLease = async () => {
+    await rpc.bot.updateBotConfigEntry({ ...ids, namespace: "afk-service", key: "sell-lease-until", value: fromJson(ValueSchema, Date.now() + 15_000) }, { signal, timeoutMs: 3000 });
+    nextSellLease = Date.now() + 5000;
+  };
+  const nativeSellPause = async (afterMs: number, resumeMs: number) => {
+    const now = Date.now();
+    await setting("afk-service", "sell-pause-from", resumeMs ? now + afterMs : 0);
+    await setting("afk-service", "sell-pause-until", resumeMs ? now + resumeMs : 0);
+  };
   const gateway: GameGateway = {
+    nativeAutosell: true,
+    suspendSell: async duration => { if (nativeSellEnabled) await setting("afk-service", "sell-manual-until", Date.now() + duration); },
     remote: async active => {
       await setting("afk-service", "remote-control", active);
       heldButton = undefined; heldCrouch = undefined;
@@ -100,6 +112,10 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
       const button = (cfg.auto_button || "off").toUpperCase(), crouch = !!cfg.crouch_enabled;
       if (button !== heldButton) { await setting("afk-service", "auto-button", button); heldButton = button; }
       if (crouch !== heldCrouch) { await setting("afk-service", "crouch-enabled", crouch); heldCrouch = crouch; }
+      const sellConfig = JSON.stringify({ enabled: !!cfg.autosell_enabled, intervalMs: Math.max(250, (cfg.autosell_interval_seconds ?? 60) * 1000), command: (cfg.autosell_command || "/sell").trim() });
+      nativeSellEnabled = !!cfg.autosell_enabled;
+      if (sellConfig !== nativeSellConfig) { await setting("afk-service", "native-auto-sell", sellConfig); nativeSellConfig = sellConfig; }
+      if (nativeSellEnabled && Date.now() >= nextSellLease) await renewSellLease();
     },
     sneak: async () => { await setting("afk-service", "sneak-check", ++sneakCheck); },
     chat: async message => { const result = await rpc.live.sendChat({ ...ids, message }, call()); if (result.result?.status !== BotActionStatus.COMPLETED) throw new Error("Command wurde nicht ausgeführt"); },
@@ -149,6 +165,8 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   const behaviors = new SoulFireBehaviors(config, gateway, emit);
   behaviors.pause(config.autosell_pause_after_ms ?? 0, config.autosell_resume_after_ms ?? 0);
   await gateway.held(config);
+  await setting("afk-service", "sell-manual-until", 0);
+  await nativeSellPause(config.autosell_pause_after_ms ?? 0, config.autosell_resume_after_ms ?? 0);
   const unregisterRemote = registerRemoteControl(accountKey, active => behaviors.remote(active));
   let online = false, busy = false, statusBusy = false, heartbeatAt = 0, lastStatusAt = -Infinity, lastWarning = 0;
   let position: { x: number; y: number; z: number; dimension: string } | undefined;
@@ -199,6 +217,10 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
     const step = () => {
       if (signal.aborted) return;
       const now = Date.now();
+      if (nativeSellEnabled && !sellLeaseBusy && now >= nextSellLease) {
+        sellLeaseBusy = true; nextSellLease = now + 5000;
+        void renewSellLease().catch(() => { nextSellLease = Date.now() + 1000; }).finally(() => { sellLeaseBusy = false; });
+      }
       // Idle clients still need a health check, but its RPC cannot hold the
       // automation lock. Frequent game-state frames make this poll unnecessary.
       if (!statusBusy && now - heartbeatAt >= 5000 && now - lastStatusAt >= 5000) {
@@ -219,14 +241,18 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
           const command = queued.shift()!;
           switch (command.type) {
             case "configure": await behaviors.configure(command); break;
-            case "pause_autosell": behaviors.pause(command.autosell_pause_after_ms ?? 0, command.autosell_resume_after_ms ?? 0); break;
+            case "pause_autosell":
+              behaviors.pause(command.autosell_pause_after_ms ?? 0, command.autosell_resume_after_ms ?? 0);
+              await nativeSellPause(command.autosell_pause_after_ms ?? 0, command.autosell_resume_after_ms ?? 0); break;
             case "check_crouch": behaviors.checkSneak(); break;
             case "chat": behaviors.enqueue("chat", command.text); break;
             case "clean_spawner": behaviors.enqueue("clean_spawner"); break;
             case "read_sell_multipliers": behaviors.enqueue("read_sell_multipliers"); break;
           }
         }
-        if (inventory.ready) await behaviors.tick();
+        // Native selling and manual commands must keep working even when
+        // inventory telemetry is dropped under load. The client owns the GUI.
+        if (inventory.ready || gateway.nativeAutosell) await behaviors.tick();
       })().catch(error => {
         if (!signal.aborted && Date.now() - lastWarning >= 30_000) { lastWarning = Date.now(); emit({ type: "warning", message: error instanceof Error ? error.message : "SoulFire-Aktion fehlgeschlagen" }); }
       }).finally(() => {

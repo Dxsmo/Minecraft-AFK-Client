@@ -19,6 +19,7 @@ import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
 public final class SoulFireControls implements ModInitializer {
   private static final Map<BotConnection, Integer> CHECKS = Collections.synchronizedMap(new WeakHashMap<>());
   private static final Map<BotConnection, Boolean> REMOTE = Collections.synchronizedMap(new WeakHashMap<>());
+  private static final Map<BotConnection, Boolean> VISUALS = Collections.synchronizedMap(new WeakHashMap<>());
   @Override
   public void onInitialize() {
     SoulFireAPI.registerListener(BotPreTickEvent.class, SoulFireControls::tick);
@@ -30,6 +31,14 @@ public final class SoulFireControls implements ModInitializer {
     if (settings == null) return;
     var mc = bot.minecraft();
     if (mc.player == null || mc.level == null || mc.gameMode == null) return;
+    if (VISUALS.put(bot, true) == null) {
+      mc.options.graphicsPreset().set(net.minecraft.client.GraphicsPreset.FAST);
+      mc.options.cloudStatus().set(net.minecraft.client.CloudStatus.OFF);
+      mc.options.particles().set(net.minecraft.server.level.ParticleStatus.MINIMAL);
+      mc.options.entityShadows().set(false);
+      mc.options.renderDistance().set(2);
+    }
+    NativeAutoSell.tick(bot);
     boolean remote = flag(settings, "remote-control");
     var previousRemote = REMOTE.put(bot, remote);
     if (remote) {

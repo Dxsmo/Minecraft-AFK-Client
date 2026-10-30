@@ -64,7 +64,7 @@ export class RemoteControlSession {
       }, 500);
       this.stream = (async () => {
         let awaitKey = true;
-        for await (const frame of this.rpc.pov.watch({ ...ids, sessionId: this.sessionId, width: 640, height: 360, maxFps: 15, codecs: ["h264"] }, { signal: this.abort.signal, timeoutMs: 0 })) {
+        for await (const frame of this.rpc.pov.watch({ ...ids, sessionId: this.sessionId, width: 480, height: 270, maxFps: 15, codecs: ["h264"] }, { signal: this.abort.signal, timeoutMs: 0 })) {
           if (this.stopped) return;
           if (frame.inputToken && !this.token) { this.token = frame.inputToken; void this.flush(); }
           if (!frame.data.length) continue;
@@ -103,7 +103,7 @@ export class RemoteControlSession {
       do {
         const events = this.pending.splice(0, 128), requestKeyFrame = this.keyFrame; this.keyFrame = false;
         await this.rpc.pov.input({ sessionId: this.sessionId, inputToken: this.token, sequence: ++this.sequence,
-          captured: this.captured, events, requestKeyFrame, width: 640, height: 360, escape: false, audioEnabled: false },
+          captured: this.captured, events, requestKeyFrame, width: 480, height: 270, escape: false, audioEnabled: false },
           // Native input itself waits up to 5s for the game thread. A shorter
           // browser-side deadline used to kill otherwise valid slow starts.
           { signal: this.abort.signal, timeoutMs: 6000 });

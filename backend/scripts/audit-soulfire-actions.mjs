@@ -74,7 +74,7 @@ server.on('playerJoin', client => {
 try {
   await once(server, 'listening');
   send({ host, port: server.socketServer.address().port, username: `Audit_${randomUUID().slice(0, 6)}`, auth_type: 'offline', edition: 'JAVA',
-    cache_dir: root, account_id: accountId, crouch_enabled: true, auto_button: 'off',
+    cache_dir: root, account_id: accountId, version: '1.8.8', crouch_enabled: true, auto_button: 'off',
     spawner_type: 'cow', spawner_drop_items: ['minecraft:beef', 'minecraft:leather'], spawner_sell_items: ['minecraft:bone'] });
   await wait(() => events.some(event => event.type === 'spawn'));
   send({ type: 'read_sell_multipliers' }); await wait(() => events.some(event => event.type === 'sell_multipliers'));
@@ -108,7 +108,7 @@ try {
     assert.equal(upstreams, 1);
     const png = Buffer.from(frames[0][0].image, 'base64');
     assert.deepEqual([...png.subarray(0, 8)], [137,80,78,71,13,10,26,10]);
-    assert.equal(png.readUInt32BE(16), 640); assert.equal(png.readUInt32BE(20), 360);
+    assert.equal(png.readUInt32BE(16), 480); assert.equal(png.readUInt32BE(20), 270);
     const beforeWorldChange = frames.map(target => target.length);
     clients[0].write('respawn', { dimension: -1, difficulty: 1, gamemode: 0, levelType: 'flat' });
     await new Promise(resolve => setTimeout(resolve, 150));
@@ -167,7 +167,7 @@ try {
 
   } finally { clearInterval(heartbeat); await remote.stop(); await rm(mappingDir, { recursive: true, force: true }); }
   console.log(JSON.stringify({ nativeRemoteControl: { h264Frames: video.length, movement: true, mouseLook: true, inventory: true, afkBlocked: true, released: true },
-    nativeCamera: { width: 640, height: 360, sharedUpstreams: upstreams, viewerFrames: frames.map(target => target.length), stoppedAfterLastViewer: cameraClosed, survivedWorldChange: true },
+    nativeCamera: { width: 480, height: 270, sharedUpstreams: upstreams, viewerFrames: frames.map(target => target.length), stoppedAfterLastViewer: cameraClosed, survivedWorldChange: true },
     sneakPreserved: true, nativeMultipliers: multipliers.length, nativeSpawnerDrop: true, nativeSpawnerSell: true,
     retainedStackPerItem: true, retainedForeignItems: true, manualCommandOrder: true, warnings: 0 }, null, 2));
 } catch (error) {

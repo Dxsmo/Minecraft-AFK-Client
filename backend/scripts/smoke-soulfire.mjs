@@ -10,7 +10,8 @@ import os from 'node:os';
 import { once } from 'node:events';
 import { createSoulFireController } from '../dist/soulfire/controller.js';
 import { soulFireRpc } from '../dist/soulfire/rpc.js';
-import { fromBinary } from '@bufbuild/protobuf';
+import { fromBinary, fromJson } from '@bufbuild/protobuf';
+import { ValueSchema } from '@bufbuild/protobuf/wkt';
 import { BotEventSchema } from '@soulfiremc/sdk/generated/soulfire/bot_live_pb';
 const require = createRequire(import.meta.url);
 const mc = require(process.env.MINECRAFT_PROTOCOL_MODULE || 'minecraft-protocol');
@@ -23,6 +24,11 @@ assert.ok(Number.isFinite(soakSeconds)&&soakSeconds>=0&&soakSeconds<=300);
 const refillSales=process.env.AFK_SMOKE_REFILL_SALES==='1';
 const sellStacks=Number(process.env.AFK_SMOKE_SELL_STACKS||3), sellInterval=Number(process.env.AFK_SMOKE_INTERVAL_SECONDS||2);
 const droppedItems=Number(process.env.AFK_SMOKE_DROPPED_ITEMS||0);
+const dropInventory=process.env.AFK_SMOKE_DROP_INVENTORY==='1';
+const nativeChecks=process.env.AFK_SMOKE_NATIVE_CHECKS==='1';
+const dropFirstMenu=process.env.AFK_SMOKE_DROP_FIRST_MENU==='1';
+let droppedInventoryFrames=0;
+let lostMenuReplies=0;
 assert.ok(Number.isInteger(droppedItems)&&droppedItems>=0&&droppedItems<=10000);
 assert.ok(Number.isInteger(sellStacks)&&sellStacks>=1&&sellStacks<=36);
 assert.ok(sellInterval>=0.25&&sellInterval<=3600);
@@ -38,10 +44,15 @@ globalThis.fetch=async(input,init)=>{
     pending=Buffer.concat([pending,chunk]);
     while(pending.length>=5 && pending.length>=5+pending.readUInt32BE(1)) {
       const size=pending.readUInt32BE(1),flags=pending[0];
-      if(flags===0 && fromBinary(BotEventSchema,pending.subarray(5,5+size)).event.case==='resyncRequired') streamResyncs++;
+      const event=flags===0 ? fromBinary(BotEventSchema,pending.subarray(5,5+size)).event.case : undefined;
+      if(event==='resyncRequired')streamResyncs++;
+      if(dropInventory) {
+        if(event==='inventory')droppedInventoryFrames++;
+        else controller.enqueue(pending.subarray(0,5+size));
+      }
       pending=pending.subarray(5+size);
     }
-    controller.enqueue(chunk);
+    if(!dropInventory)controller.enqueue(chunk);
   }})),{status:response.status,headers:response.headers});
 };
 let teleports=0;
@@ -62,6 +73,7 @@ server.on('playerJoin', client=>{
     }else client.write('set_slot',{windowId:data.windowId,slot:data.slot,item:empty});
   });
   client.on('chat',data=>{if(data.message==='/sell') {
+    if(dropFirstMenu && lostMenuReplies===0){lostMenuReplies++;return;}
     client.write('open_window',{windowId:1,inventoryType:'minecraft:chest',windowTitle:JSON.stringify({text:'Items verkaufen'}),slotCount:27});
     client.write('window_items',{windowId:1,items:saleItems()});
   }});
@@ -105,13 +117,37 @@ try {
   assert.ok(!sneak.some(packet=>packet.data.actionId==='stop_sneaking'));
   assert.ok(!packets.some(packet=>packet.name===names[1]&&packet.type==='entity_action'&&packet.data.actionId==='start_sneaking'));
   assert.ok(packets.some(packet=>packet.name===names[0]&&packet.type==='block_place'));
-  for(const name of names) assert.ok(packets.some(packet=>packet.name===name&&packet.type==='settings'&&packet.data.viewDistance===6));
+  for(const name of names) assert.ok(packets.some(packet=>packet.name===name&&packet.type==='settings'&&packet.data.viewDistance===2));
   assert.ok(!events.flat().some(event=>event.type==='connection_failed'));
   assert.ok(!events.flat().some(event=>event.type==='warning'&&event.message.startsWith('AutoSell:')),'Confirmed sales must not time out');
   if(refillSales)assert.deepEqual(packets.filter(packet=>packet.type==='window_click').slice(0,Math.min(3,sellStacks)).map(packet=>packet.data.slot),stockSlots.slice(0,3));
   const saleCommands=packets.filter(packet=>packet.type==='chat'&&packet.data.message==='/sell').map(packet=>packet.at);
   const salePeriodsMs=saleCommands.slice(1).map((at,i)=>at-saleCommands[i]);
   if(process.env.AFK_SMOKE_MAX_PERIOD_MS){const ordered=[...salePeriodsMs].sort((a,b)=>a-b);assert.ok(ordered.length>=3);assert.ok(ordered[Math.floor(ordered.length/2)]<=Number(process.env.AFK_SMOKE_MAX_PERIOD_MS),`Sell intervals too slow: ${JSON.stringify(salePeriodsMs)}; stream resyncs=${streamResyncs}; RPC=${JSON.stringify(rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)))}`);}
+  if(nativeChecks) {
+    const count=()=>packets.filter(packet=>packet.type==='chat'&&packet.data.message==='/sell').length;
+    const configure=(enabled,command='/sell')=>controllers[0].stdin.write(JSON.stringify({type:'configure',crouch_enabled:true,auto_button:'right',autosell_enabled:enabled,autosell_interval_seconds:sellInterval,autosell_command:command})+'\n');
+    configure(false); await new Promise(resolve=>setTimeout(resolve,300)); let before=count();
+    await new Promise(resolve=>setTimeout(resolve,2500)); assert.equal(count(),before,'Disabled native sale still ran');
+    configure(true); await waitFor(()=>count()>before);
+    controllers[0].stdin.write('{"type":"pause_autosell","autosell_pause_after_ms":0,"autosell_resume_after_ms":3500}\n');
+    await new Promise(resolve=>setTimeout(resolve,300)); before=count();
+    await new Promise(resolve=>setTimeout(resolve,2500)); assert.equal(count(),before,'Native restart pause was ignored');
+    await waitFor(()=>count()>before);
+    configure(true,'/AFK'); await new Promise(resolve=>setTimeout(resolve,300));
+    await new Promise(resolve=>setTimeout(resolve,2500));
+    assert.ok(!packets.some(packet=>packet.type==='chat'&&/^\/afk$/i.test(packet.data.message)),'Blocked command reached server');
+    configure(true); before=count(); await waitFor(()=>count()>before);
+    const rpc=soulFireRpc(),original=rpc.bot.updateBotConfigEntry;
+    const ids=JSON.parse(await readFile(path.join(root,'0','soulfire.json'),'utf8'));
+    rpc.bot.updateBotConfigEntry=(request,...options)=>request.key==='sell-lease-until'?Promise.resolve({}):original(request,...options);
+    try {
+      await original({...ids,namespace:'afk-service',key:'sell-lease-until',value:fromJson(ValueSchema,Date.now()-1)});
+      await new Promise(resolve=>setTimeout(resolve,300)); before=count();
+      await new Promise(resolve=>setTimeout(resolve,2500)); assert.equal(count(),before,'Expired website lease did not stop native automation');
+    } finally {rpc.bot.updateBotConfigEntry=original;}
+    await waitFor(()=>count()>before);
+  }
   controllers[0].stdin.write('{"type":"chat","text":"/homes"}\n');
   await waitFor(()=>packets.some(packet=>packet.name===names[0]&&packet.type==='chat'&&packet.data.message==='/homes'));
   const inventoryRpcCalls=rpcCalls.filter(method=>method.endsWith('/GetInventoryState')).length;
@@ -123,7 +159,7 @@ try {
   const before=events[1].filter(event=>event.type==='heartbeat').length;
   const stopped=once(controllers[0],'close');controllers[0].stdin.write('{"type":"disconnect"}\n');await stopped;
   await waitFor(()=>events[1].filter(event=>event.type==='heartbeat').length>before);
-  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:6,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
+  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
 } catch (error) {
   console.error(JSON.stringify({events,packetTypes:packets.map(p=>({name:p.name,type:p.type,data:p.type==='entity_action'?p.data:undefined}))}));
   const rpc=soulFireRpc();

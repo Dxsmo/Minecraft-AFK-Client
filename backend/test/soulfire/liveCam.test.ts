@@ -40,7 +40,7 @@ it("does not render without viewers and shares one bounded render stream per acc
   f.feeds.get("java")!(f.frame("next")); await tick();
   expect(one.frame).toHaveBeenCalledOnce(); expect(two.frame).toHaveBeenCalledTimes(2);
   stopTwo(); await tick(); expect(f.stopped).toEqual(["java"]);
-  expect(LIVE_CAM_OPTIONS).toMatchObject({ width: 640, height: 360, maxDistance: 48, intervalMs: 400 });
+  expect(LIVE_CAM_OPTIONS).toMatchObject({ width: 480, height: 270, maxDistance: 32, intervalMs: 150 });
 });
 
 it("keeps Java and Bedrock views separate and stops only the account whose viewer leaves", async () => {

@@ -1,0 +1,19 @@
+{
+  "soulfire": "2.10.6",
+  "controls": "1.3.0",
+  "backendTests": 477,
+  "testFiles": 50,
+  "backendBuild": true,
+  "frontendBuild": true,
+  "frontendLint": true,
+  "dockerImages": [
+    "soulfire",
+    "backend",
+    "web"
+  ],
+  "nativeRuntimeStartup": true,
+  "hardware": "M3 Pro / Linux ARM64 via Docker Desktop; software Vulkan llvmpipe",
+  "gameProtocolFixture": "Java 1.8.8; offline; no real Microsoft accounts",
+  "productionPiTested": false,
+  "realBedrockLoginTested": false
+}
