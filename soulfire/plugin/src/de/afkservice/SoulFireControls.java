@@ -26,7 +26,7 @@ public final class SoulFireControls implements ModInitializer {
   private static void tick(BotPreTickEvent event) {
     var bot = event.connection();
     var settings = bot.settingsSource().stem().settings().get("afk-service");
-    if (settings == null) return;
+    if (settings == null || flag(settings, "remote-control")) return;
     var mc = bot.minecraft();
     if (mc.player == null || mc.level == null || mc.gameMode == null) return;
     boolean crouch = flag(settings, "crouch-enabled");
@@ -65,7 +65,7 @@ public final class SoulFireControls implements ModInitializer {
    * held setting even there; only an explicit setting change may release it. */
   public static boolean forcedDown(BotConnection bot, KeyMapping mapping) {
     var settings = bot.settingsSource().stem().settings().get("afk-service");
-    if (settings == null) return false;
+    if (settings == null || flag(settings, "remote-control")) return false;
     var keys = bot.minecraft().options;
     return (mapping == keys.keyShift && flag(settings, "crouch-enabled"))
       || (mapping == keys.keyAttack && "LEFT".equals(text(settings, "auto-button", "OFF")))
@@ -74,7 +74,7 @@ public final class SoulFireControls implements ModInitializer {
 
   public static boolean heldPointer(BotConnection bot) {
     var settings = bot.settingsSource().stem().settings().get("afk-service");
-    return settings != null && !"OFF".equals(text(settings, "auto-button", "OFF"))
+    return settings != null && !flag(settings, "remote-control") && !"OFF".equals(text(settings, "auto-button", "OFF"))
       && bot.minecraft().gui.screen() == null;
   }
 

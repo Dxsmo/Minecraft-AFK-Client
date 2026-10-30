@@ -9,6 +9,7 @@ import { authorizeSocket } from "./authorization.js";
 import { prisma } from "../database/prisma.js";
 import type { SessionContext } from "../auth/session.js";
 import type { ClientStatusSnapshot } from "../minecraft/types.js";
+import { RemoteControlSession, remoteInputSchema } from "../soulfire/remoteControl.js";
 import { LiveCamStreams } from "../soulfire/liveCam.js";
 
 function batchLiveEvents(socket: import("ws").WebSocket, connection: NonNullable<ReturnType<typeof authorizeSocket>>) {
@@ -37,6 +38,52 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
   const cameras = new LiveCamStreams();
   app.addHook("onClose", () => cameras.close());
 
+  app.get("/ws/accounts/:id/control", { websocket: true }, (socket, req) => {
+    const { id: accountId } = req.params as { id: string };
+    const connection = authorizeSocket(socket, req, { accountId });
+    if (!connection) return;
+    const { run, send, subscribe } = connection;
+    run(() => {}); // Reject an unassigned account before any input arrives.
+    let remote: RemoteControlSession | undefined;
+    let controllerUserId: string | undefined;
+    let count = 0, windowStart = Date.now();
+    subscribe(() => {
+      void (async () => {
+        await remote?.stop();
+        if (controllerUserId) await recordAuditLog({ userId: controllerUserId, action: "ACCOUNT_REMOTE_STOP", targetType: "MinecraftAccount", targetId: accountId });
+      })().catch(error => req.log.warn({ err: error, accountId }, "Remote cleanup failed"));
+    });
+    socket.on("message", (raw, binary) => {
+      if (Date.now() - windowStart >= 1000) { count = 0; windowStart = Date.now(); }
+      if (binary || Buffer.byteLength(raw as Buffer) > 32768 || ++count > 80) { socket.close(4429, "Input limit"); return; }
+      let body: any;
+      try { body = JSON.parse(raw.toString()); } catch { socket.close(4400, "Invalid input"); return; }
+      run(async session => {
+        if (body?.type === "stop") { await remote?.stop(); socket.close(1000, "Control released"); return; }
+        if (body?.type === "start" && !remote) {
+          if (body.csrfToken !== session.csrfToken) { socket.close(4403, "Invalid CSRF"); return; }
+          if (clientManager.get(accountId)?.getStatus().status !== "ONLINE") { socket.close(4409, "Account offline"); return; }
+          controllerUserId = session.user.id;
+          await recordAuditLog({ userId: controllerUserId, action: "ACCOUNT_REMOTE_START", targetType: "MinecraftAccount", targetId: accountId });
+          if (socket.readyState !== socket.OPEN) return;
+          remote = new RemoteControlSession(accountId, message => {
+            if (socket.readyState !== socket.OPEN || socket.bufferedAmount > 512 * 1024) return false;
+            send(message); return true;
+          }, message => { send({ type: "error", message }); socket.close(1011, "Control unavailable"); });
+          try { await remote.start(); }
+          catch (error) { send({ type: "error", message: error instanceof Error ? error.message : "Fernsteuerung nicht verfügbar." }); socket.close(1011); }
+          return;
+        }
+        const input = remoteInputSchema.safeParse(body);
+        if (!remote || !input.success) { socket.close(4400, "Invalid input"); return; }
+        remote.input(input.data);
+      });
+    });
+    subscribe(clientManager.onStatusEvent(status => {
+      if (status.id === accountId && status.status !== "ONLINE") socket.close(1000, "Account offline");
+    }));
+  });
+
   app.get("/ws/accounts/:id/camera", { websocket: true }, (socket, req) => {
     const { id: accountId } = req.params as { id: string };
     const connection = authorizeSocket(socket, req, { accountId });
@@ -52,6 +99,7 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
       // Drop frames for slow clients instead of queuing renders or image data.
       let pending = false;
       subscribe(cameras.subscribe(accountId, {
+        loading: () => run(() => send({ type: "loading" })),
         frame: frame => {
           if (pending || socket.readyState !== socket.OPEN || socket.bufferedAmount > 512 * 1024) return;
           pending = true;

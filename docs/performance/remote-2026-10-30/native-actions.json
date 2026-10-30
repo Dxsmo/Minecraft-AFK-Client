@@ -1,0 +1,29 @@
+{
+  "nativeRemoteControl": {
+    "h264Frames": 12,
+    "movement": true,
+    "mouseLook": true,
+    "inventory": true,
+    "afkBlocked": true,
+    "released": true
+  },
+  "nativeCamera": {
+    "width": 640,
+    "height": 360,
+    "sharedUpstreams": 1,
+    "viewerFrames": [
+      4,
+      4
+    ],
+    "stoppedAfterLastViewer": true,
+    "survivedWorldChange": true
+  },
+  "sneakPreserved": true,
+  "nativeMultipliers": 9,
+  "nativeSpawnerDrop": true,
+  "nativeSpawnerSell": true,
+  "retainedStackPerItem": true,
+  "retainedForeignItems": true,
+  "manualCommandOrder": true,
+  "warnings": 0
+}

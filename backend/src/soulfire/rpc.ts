@@ -7,6 +7,7 @@ import { BotService } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
 import { BotLiveService } from "@soulfiremc/sdk/generated/soulfire/bot_live_pb";
 import { MCAuthService } from "@soulfiremc/sdk/generated/soulfire/mc-auth_pb";
 import { SdkService } from "@soulfiremc/sdk/generated/soulfire/sdk_pb";
+import { PovService } from "@soulfiremc/sdk/generated/soulfire/pov_pb";
 import { WorldService } from "@soulfiremc/sdk/generated/soulfire/world_pb";
 
 export const SOULFIRE_VERSION = "2.10.6";
@@ -31,7 +32,7 @@ export function soulFireRpc() {
     instance: createClient(InstanceService, transport), bot: createClient(BotService, transport),
     live: createClient(BotLiveService, transport), auth: createClient(MCAuthService, transport),
     sdk: createClient(SdkService, transport),
-    world: createClient(WorldService, transport),
+    world: createClient(WorldService, transport), pov: createClient(PovService, transport),
   };
 }
 export type SoulFireRpc = ReturnType<typeof soulFireRpc>;

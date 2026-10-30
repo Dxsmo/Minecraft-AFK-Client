@@ -144,3 +144,37 @@ it("accepts the plugin menu even when vanilla reports a rejected interaction", a
   expect(f.rpc.live.interactBlock).toHaveBeenCalledOnce();
   expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "warning", message: expect.stringContaining("kein erreichbarer") }));
 });
+
+it("does not let an idle status RPC block selling or manual commands, and does not mask freezes", async () => {
+  const f = await fixture();
+  f.rpc.bot.getBotInfo.mockImplementation(async () => new Promise(() => {}));
+  await f.start(); await f.frame("inventory", { state: f.inventory() });
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(f.rpc.bot.getBotInfo).toHaveBeenCalledOnce();
+  expect(f.rpc.live.sendChat).toHaveBeenCalledWith(expect.objectContaining({ message: "/sell" }), expect.anything());
+  f.queue.push({ type: "chat", text: "/homes" }); await vi.advanceTimersByTimeAsync(100);
+  expect(f.rpc.live.sendChat).toHaveBeenLastCalledWith(expect.objectContaining({ message: "/homes" }), expect.anything());
+  const previous = f.emit.mock.calls.filter(([event]) => event.type === "heartbeat").length;
+  await f.frame("heartbeat", {});
+  expect(f.emit.mock.calls.filter(([event]) => event.type === "heartbeat").length).toBe(previous);
+  await f.frame("inventory", { state: f.inventory() });
+  expect(f.emit.mock.calls.filter(([event]) => event.type === "heartbeat").length).toBe(previous + 1);
+});
+
+it("retains failure detection through the separate idle health check", async () => {
+  const f = await fixture(); await f.start();
+  f.rpc.bot.getBotInfo.mockResolvedValueOnce({ status: { runtimeState: BotRuntimeState.FAILED, lastError: "fixture disconnected" } } as any);
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(f.abort.signal.aborted).toBe(true);
+  expect(f.emit).toHaveBeenCalledWith({ type: "connection_failed", error: "fixture disconnected" });
+});
+
+it("continues acknowledged transfers immediately instead of adding 100ms per stack", async () => {
+  const f = await fixture(); await f.start(); await f.frame("inventory", { state: f.inventory() });
+  await vi.advanceTimersByTimeAsync(2100);
+  const state = f.inventory("sell", "Items verkaufen"); state.slots.push({ ...state.slots[0], slot: 3 });
+  await f.frame("inventory", { state });
+  expect(f.rpc.bot.clickInventorySlot).toHaveBeenLastCalledWith(expect.objectContaining({ slot: 2 }), expect.anything());
+  state.slots = state.slots.filter(slot => slot.slot !== 2); await f.frame("inventory", { state });
+  expect(f.rpc.bot.clickInventorySlot).toHaveBeenLastCalledWith(expect.objectContaining({ slot: 3 }), expect.anything());
+});

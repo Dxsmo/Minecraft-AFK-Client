@@ -1,0 +1,24 @@
+{
+  "controllers": 2,
+  "soakSeconds": 0,
+  "sellStacks": 36,
+  "sellInterval": 2,
+  "salePeriodsMs": [
+    2546,
+    2005,
+    2038,
+    3917
+  ],
+  "extraNodeProcesses": 0,
+  "javaAutoDetection": true,
+  "nativeRightUse": true,
+  "nativeLeftMining": true,
+  "noUnsneak": true,
+  "viewDistance": 6,
+  "confirmedSales": 151,
+  "refilledSlotsConfirmed": true,
+  "manualCommandDelivered": true,
+  "inventoryRpcCalls": 0,
+  "povRenderRpcCalls": 0,
+  "independentStop": true
+}

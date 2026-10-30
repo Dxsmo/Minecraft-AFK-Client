@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+
+const RemoteControlPanel = lazy(() => import("./RemoteControlPanel").then(module => ({ default: module.RemoteControlPanel })));
 
 type CameraState = "loading" | "live" | "error";
 
 export function LiveCamPanel({ accountId, online }: { accountId: string; online: boolean }) {
+  const [remote, setRemote] = useState(false);
   const image = useRef<HTMLImageElement>(null);
   const [visible, setVisible] = useState(() => document.visibilityState === "visible");
   const [state, setState] = useState<CameraState>("loading");
@@ -10,14 +13,16 @@ export function LiveCamPanel({ accountId, online }: { accountId: string; online:
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
-    const changed = () => setVisible(document.visibilityState === "visible");
+    const changed = () => { setVisible(document.visibilityState === "visible"); if (document.hidden) setRemote(false); };
     document.addEventListener("visibilitychange", changed);
     return () => document.removeEventListener("visibilitychange", changed);
   }, []);
 
+  useEffect(() => { if (!online) setRemote(false); }, [online]);
+
   useEffect(() => {
     const img = image.current;
-    if (!online || !visible) return;
+    if (!online || !visible || remote) return;
     let disposed = false;
     let socket: WebSocket | undefined;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -36,6 +41,8 @@ export function LiveCamPanel({ accountId, online }: { accountId: string; online:
           if (message.type === "frame" && typeof message.image === "string" && message.image.length <= 2 * 1024 * 1024) {
             clearTimeout(firstFrame);
             if (img) img.src = `data:image/png;base64,${message.image}`;
+          } else if (message.type === "loading") {
+            setState("loading"); setError("");
           } else if (message.type === "error") {
             setError("Die Live Cam konnte nicht geladen werden. Die Verbindung wird erneut versucht."); setState("error");
           }
@@ -60,12 +67,16 @@ export function LiveCamPanel({ accountId, online }: { accountId: string; online:
       socket?.close();
       img?.removeAttribute("src");
     };
-  }, [accountId, online, visible, attempt]);
+  }, [accountId, online, visible, attempt, remote]);
 
   const message = !online ? "Der Account ist offline. Die Live Cam startet, sobald er verbunden ist."
     : !visible ? "Die Übertragung pausiert, solange dieser Browser-Tab nicht sichtbar ist."
     : state === "error" ? error : "Live Cam wird geladen…";
   const live = online && visible && state === "live";
+
+  if (remote && online) return <Suspense fallback={<div className="card p-8 text-center">Fernsteuerung wird geladen…</div>}>
+    <RemoteControlPanel accountId={accountId} onExit={() => setRemote(false)} />
+  </Suspense>;
 
   return (
     <section className="card overflow-hidden" aria-label="Live Cam">
@@ -76,8 +87,9 @@ export function LiveCamPanel({ accountId, online }: { accountId: string; online:
           {live ? "Live" : !online ? "Offline" : !visible ? "Pausiert" : "Verbinden…"}
         </span>
       </div>
+      {live && <p className="px-4 py-2 text-xs" style={{ color: "var(--text-muted)" }}>Ins Bild klicken zum Fernsteuern · Esc zum Beenden</p>}
       <div className="relative aspect-video w-full bg-black">
-        <img ref={image} alt="Liveansicht des Minecraft-Accounts" className="h-full w-full object-contain" hidden={!live}
+        <img ref={image} alt="Liveansicht des Minecraft-Accounts" className="h-full w-full cursor-pointer object-contain" hidden={!live} onClick={() => setRemote(true)} title="Klicken zum Fernsteuern"
           onLoad={() => setState("live")} />
         {!live && <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-5 text-center">
           {online && visible && state === "loading" && <span className="spinner" />}

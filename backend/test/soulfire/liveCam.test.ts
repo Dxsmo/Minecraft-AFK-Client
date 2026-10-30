@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { Code, ConnectError } from "@connectrpc/connect";
 import { LiveCamStreams, LIVE_CAM_OPTIONS } from "../../src/soulfire/liveCam.js";
 import type { BotPovFrame } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
 
@@ -25,7 +26,7 @@ function fixture() {
   const frame = (image = "synthetic-png") => ({ render: { imageMimeType: "image/png", imageBase64: image } }) as BotPovFrame;
   return { manager, source, feeds, stopped, frame };
 }
-const viewer = () => ({ frame: vi.fn(), error: vi.fn() });
+const viewer = () => ({ frame: vi.fn(), loading: vi.fn(), error: vi.fn() });
 
 it("does not render without viewers and shares one bounded render stream per account", async () => {
   const f = fixture(), one = viewer(), two = viewer();
@@ -65,7 +66,11 @@ it("does not forward invalid or oversized images and reports upstream failures t
   f.feeds.get("java")!({ render: { imageMimeType: "text/html", imageBase64: "invalid" } } as BotPovFrame); await tick();
   f.feeds.get("java")!(f.frame("x".repeat(2 * 1024 * 1024 + 1))); await tick();
   expect(subscriber.frame).not.toHaveBeenCalled();
-  f.feeds.get("java")!(undefined); await tick(); expect(subscriber.error).toHaveBeenCalledOnce();
+  f.feeds.get("java")!(undefined); await tick(); expect(subscriber.error).not.toHaveBeenCalled();
+  expect(subscriber.loading).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(f.source).toHaveBeenCalledTimes(2), { timeout: 1500 });
+  f.feeds.get("java")!(f.frame("after-teleport")); await tick();
+  expect(subscriber.frame).toHaveBeenCalledWith({ type: "frame", image: "after-teleport" });
 });
 
 it("isolates a failing viewer and its error handler without stopping another viewer", async () => {
@@ -75,4 +80,11 @@ it("isolates a failing viewer and its error handler without stopping another vie
   f.feeds.get("java")!(f.frame()); await tick(); expect(good.frame).toHaveBeenCalledTimes(1);
   f.feeds.get("java")!(f.frame()); await tick(); expect(good.frame).toHaveBeenCalledTimes(2);
   expect(broken.frame).toHaveBeenCalledTimes(1); expect(f.stopped).toEqual([]);
+});
+
+it("does not retry invalidated camera authorization", async () => {
+  const source = vi.fn(async function* () { throw new ConnectError("revoked", Code.PermissionDenied); yield {} as BotPovFrame; });
+  const manager = new LiveCamStreams(source); managers.push(manager);
+  const recipient = viewer(); manager.subscribe("java", recipient); await tick();
+  expect(recipient.error).toHaveBeenCalledOnce(); expect(source).toHaveBeenCalledOnce();
 });

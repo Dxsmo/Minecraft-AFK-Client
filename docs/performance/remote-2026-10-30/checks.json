@@ -1,0 +1,20 @@
+{
+  "backendFiles": 49,
+  "backendTests": 466,
+  "backendFailures": 0,
+  "frontendBuild": "passed",
+  "frontendLint": "passed",
+  "dockerBuilds": [
+    "backend",
+    "web",
+    "soulfire"
+  ],
+  "architecture": "linux/arm64",
+  "nativeSoulFire": "2.10.6",
+  "controlsPlugin": "1.1.0",
+  "liveBedrockKickReproduced": false,
+  "missingInformation": [
+    "Exact repeated AutoSell log message",
+    "Exact Bedrock teleport disconnect reason and packet exception"
+  ]
+}

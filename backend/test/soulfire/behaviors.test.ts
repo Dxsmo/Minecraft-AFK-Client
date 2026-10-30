@@ -58,6 +58,52 @@ describe("common SoulFire automation", () => {
     f.advance(100); await f.engine.tick(); expect(f.game.inventory).toHaveBeenCalledTimes(reads);
   });
 
+  it.each([0.25, 0.5, 1, 2])("keeps a %ss sell interval across repeated cycles without a 1.5s command floor", async interval => {
+    const f = fixture({ autosell_enabled: true, autosell_interval_seconds: interval });
+    let cycle = 0;
+    vi.mocked(f.game.chat).mockImplementation(async () => { f.sellMenu(`sale-${++cycle}`); });
+    vi.mocked(f.game.click).mockImplementation(async () => { f.inventory({ slots: [] }); });
+    vi.mocked(f.game.close).mockImplementation(async () => { f.inventory({ menuId: "player", containerSlots: [], slots: [] }); });
+    await f.engine.spawned(); f.advance(2000);
+    for (let i = 0; i < 12; i++) {
+      if (i) { f.advance(interval * 1000 - 1); await f.engine.tick(); expect(f.game.chat).toHaveBeenCalledTimes(i); f.advance(1); }
+      for (let tick = 0; tick < 4; tick++) await f.engine.tick();
+      expect(f.game.chat).toHaveBeenCalledTimes(i + 1);
+    }
+    expect(f.game.click).toHaveBeenCalledTimes(12); expect(f.emit).not.toHaveBeenCalled();
+  });
+
+  it("measures the next sale from dispatch instead of adding the command RPC latency", async () => {
+    const f = fixture({ autosell_enabled: true, autosell_interval_seconds: 2 });
+    vi.mocked(f.game.chat).mockImplementation(async () => { f.advance(500); f.sellMenu(); });
+    vi.mocked(f.game.click).mockImplementation(async () => { f.inventory({ slots: [] }); });
+    vi.mocked(f.game.close).mockImplementation(async () => { f.inventory({ menuId: "player", containerSlots: [], slots: [] }); });
+    await f.engine.spawned(); f.advance(2000);
+    for (let i = 0; i < 4; i++) await f.engine.tick();
+    f.advance(1499); await f.engine.tick(); expect(f.game.chat).toHaveBeenCalledTimes(1);
+    f.advance(1); await f.engine.tick(); expect(f.game.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a failed sale without adding a 1.5s cooldown", async () => {
+    const f = fixture({ autosell_enabled: true, autosell_interval_seconds: 0.25 });
+    await f.engine.spawned(); f.advance(2000); await f.engine.tick();
+    f.advance(10000); await f.engine.tick(); await f.engine.tick();
+    expect(f.game.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it("pauses automation during remote control and resumes the configured input afterwards", async () => {
+    const f = fixture({ autosell_enabled: true, autosell_interval_seconds: 2, crouch_enabled: true, auto_button: "right" });
+    await f.engine.spawned(); f.advance(2000); await f.engine.tick(); f.sellMenu(); await f.engine.tick();
+    await f.engine.remote(true);
+    vi.mocked(f.game.chat).mockClear(); vi.mocked(f.game.click).mockClear(); vi.mocked(f.game.sneak).mockClear();
+    f.advance(30000); await f.engine.tick();
+    expect(f.game.chat).not.toHaveBeenCalled(); expect(f.game.click).not.toHaveBeenCalled(); expect(f.game.sneak).not.toHaveBeenCalled();
+    f.inventory({ menuId: "player", containerSlots: [], slots: [] });
+    await f.engine.remote(false); await f.engine.tick();
+    expect(f.game.chat).toHaveBeenCalledExactlyOnceWith("/sell");
+    expect(f.game.held).toHaveBeenLastCalledWith(expect.objectContaining({ auto_button: "right", crouch_enabled: true }));
+  });
+
   it("waits for content in a newly opened empty sale menu before closing it", async () => {
     const f = fixture({ autosell_enabled: true }); await f.engine.spawned(); f.advance(2000); await f.engine.tick();
     f.sellMenu(); f.inventory({ slots: [] }); await f.engine.tick();
@@ -158,13 +204,15 @@ describe("common SoulFire automation", () => {
     expect(f.game.click).not.toHaveBeenCalled(); expect(f.game.close).not.toHaveBeenCalled();
   });
 
-  it("preempts automatic selling for manual commands and honors the command budget", async () => {
+  it("preempts automatic selling and keeps the separate manual command budget", async () => {
     const f = fixture({ autosell_enabled: true }); await f.engine.spawned(); f.advance(2000); await f.engine.tick(); f.sellMenu(); await f.engine.tick();
     f.engine.enqueue("chat", "/home base"); await f.engine.tick();
     expect(f.game.close).toHaveBeenCalledWith("sell-1"); expect(f.game.chat).toHaveBeenLastCalledWith("/home base");
     f.inventory({ containerSlots: [], menuId: "player" });
-    f.engine.enqueue("chat", "/first"); f.engine.enqueue("chat", "/second"); await f.engine.tick(); await f.engine.tick();
-    expect(f.game.chat).not.toHaveBeenCalledWith("/second"); f.advance(1500); await f.engine.tick(); expect(f.game.chat).toHaveBeenLastCalledWith("/second");
+    f.engine.enqueue("chat", "/first"); f.engine.enqueue("chat", "/second"); f.engine.enqueue("chat", "/third");
+    await f.engine.tick(); await f.engine.tick(); await f.engine.tick();
+    expect(f.game.chat).toHaveBeenCalledWith("/second"); expect(f.game.chat).not.toHaveBeenCalledWith("/third");
+    f.advance(1500); await f.engine.tick(); expect(f.game.chat).toHaveBeenLastCalledWith("/third");
   });
 
   it("closes the active sale menu only once before dispatching a manual command", async () => {

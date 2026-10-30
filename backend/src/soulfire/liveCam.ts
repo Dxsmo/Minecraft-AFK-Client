@@ -1,4 +1,6 @@
 import path from "node:path";
+import { Code, ConnectError } from "@connectrpc/connect";
+import { setTimeout as delay } from "node:timers/promises";
 import { config } from "../config/config.js";
 import { readRemoteAccount } from "./auth.js";
 import { soulFireRpc } from "./rpc.js";
@@ -6,7 +8,7 @@ import type { BotPovFrame } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
 
 export const LIVE_CAM_OPTIONS = { width: 640, height: 360, maxDistance: 48, intervalMs: 400, includeHud: true, includeHands: true } as const;
 export type CameraFrame = { type: "frame"; image: string };
-type Viewer = { frame: (frame: CameraFrame) => void; error: (error: unknown) => void };
+type Viewer = { frame: (frame: CameraFrame) => void; loading?: () => void; error: (error: unknown) => void };
 type Stream = { viewers: Set<Viewer>; abort: AbortController; done: Promise<void> };
 type FrameSource = (accountId: string, signal: AbortSignal) => AsyncIterable<BotPovFrame>;
 
@@ -33,21 +35,33 @@ export class LiveCamStreams {
       // Wait for a cancelled stream before reopening the same account.
       current.done = Promise.resolve(previous).then(async () => {
         if (current.abort.signal.aborted) return;
-        for await (const frame of this.source(accountId, current.abort.signal)) {
-          if (current.abort.signal.aborted) return;
-          const render = frame.render;
-          if (!render || render.imageMimeType !== "image/png" || !render.imageBase64 || render.imageBase64.length > 2 * 1024 * 1024) continue;
-          const message: CameraFrame = { type: "frame", image: render.imageBase64 };
-          for (const recipient of current.viewers) {
-            try { recipient.frame(message); }
-            catch (error) {
-              current.viewers.delete(recipient);
-              try { recipient.error(error); } catch { /* A broken viewer cannot stop the others. */ }
+        while (!current.abort.signal.aborted && current.viewers.size) {
+          try {
+            for await (const frame of this.source(accountId, current.abort.signal)) {
+              if (current.abort.signal.aborted) return;
+              const render = frame.render;
+              if (!render || render.imageMimeType !== "image/png" || !render.imageBase64 || render.imageBase64.length > 2 * 1024 * 1024) continue;
+              const message: CameraFrame = { type: "frame", image: render.imageBase64 };
+              for (const recipient of current.viewers) {
+                try { recipient.frame(message); }
+                catch (error) {
+                  current.viewers.delete(recipient);
+                  try { recipient.error(error); } catch { /* A broken viewer cannot stop the others. */ }
+                }
+              }
+              if (!current.viewers.size) { current.abort.abort(); return; }
             }
+            if (!current.abort.signal.aborted) throw new Error("Camera stream ended");
+          } catch (error) {
+            if (current.abort.signal.aborted) return;
+            const code = ConnectError.from(error).code;
+            if ([Code.Unauthenticated, Code.PermissionDenied, Code.InvalidArgument, Code.Unimplemented].includes(code)) throw error;
+            // Teleports briefly remove the player's level/chunks. Keep browser
+            // viewers attached and reopen only this account's upstream stream.
+            for (const recipient of current.viewers) { try { recipient.loading?.(); } catch { /* Isolate a closed viewer. */ } }
+            await delay(1000, undefined, { signal: current.abort.signal });
           }
-          if (!current.viewers.size) { current.abort.abort(); return; }
         }
-        if (!current.abort.signal.aborted) throw new Error("Camera stream ended");
       }).catch(error => {
         if (!current.abort.signal.aborted) for (const recipient of current.viewers) {
           try { recipient.error(error); } catch { /* Keep notifying other viewers. */ }

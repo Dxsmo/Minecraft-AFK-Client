@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { isSlashCommand } from "./slashCommands.js";
+import { isSlashCommand, isBlockedAfkCommand, AFK_BLOCK_MESSAGE } from "./slashCommands.js";
 import { parseSellEarning } from "./sellEarnings.js";
 import {
   parseWorldRestartSeconds, WORLD_RESTART_SELL_LEAD_MS, WORLD_RESTART_SELL_COOLDOWN_MS,
@@ -173,6 +173,10 @@ export class MinecraftClient extends EventEmitter {
   }
 
   sendCommand(command: string): boolean {
+    if (isBlockedAfkCommand(command)) {
+      this.emitConsole("WARNING", AFK_BLOCK_MESSAGE);
+      return true; // Locally handled; no command reaches the game server.
+    }
     if (!isSlashCommand(command)) {
       this.emitConsole("ERROR", "Nur Slash-Befehle mit / am Anfang sind erlaubt");
       return false;

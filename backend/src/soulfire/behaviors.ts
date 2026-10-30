@@ -1,3 +1,4 @@
+import { isBlockedAfkCommand, AFK_BLOCK_MESSAGE } from "../minecraft/slashCommands.js";
 import { readMultiplier, tooltipText } from "../minecraft/sellMultipliers.js";
 import { parseSellEarning } from "../minecraft/sellEarnings.js";
 
@@ -6,6 +7,7 @@ export type BehaviorConfig = { crouch_enabled?: boolean; auto_button?: "off" | "
 export type GameSlot = { slot: number; itemId: string; count: number; displayName: string; tooltipLines: string[] };
 export type GameInventory = { menuId: string; title: string; containerSlots: number[]; playerSlots: number[]; slots: GameSlot[] };
 export interface GameGateway {
+  remote?(active: boolean): Promise<void>;
   held(config: BehaviorConfig): Promise<void>;
   sneak(): Promise<void>;
   chat(text: string): Promise<void>;
@@ -27,6 +29,7 @@ const teleportSuccess = (text: string) => /^(?:<(?:HugoSMP)>|\[HugoSMP\])?\s*(?:
 export class SoulFireBehaviors {
   private cfg: BehaviorConfig;
   private online = false;
+  private remoteActive = false;
   private readyAt = 0;
   private nextSell = 0;
   private pauseStart = 0;
@@ -39,7 +42,6 @@ export class SoulFireBehaviors {
   private foreground: Foreground | null = null;
   private commandCredits = 3;
   private creditAt = 0;
-  private lastCommandAt = -Infinity;
   private lastFailure = -Infinity;
   private generation = 0;
 
@@ -51,6 +53,15 @@ export class SoulFireBehaviors {
     await this.game.held(this.cfg);
     if (!config.autosell_enabled) await this.cancelSell();
     if (changed) this.nextSell = this.clock();
+  }
+
+  async remote(active: boolean): Promise<void> {
+    this.remoteActive = active;
+    const owned = this.sell?.menu ?? this.foreground?.menu;
+    this.resetTasks();
+    if (owned) await this.closeOwned(owned);
+    await this.game.remote?.(active);
+    if (!active) { await this.game.held(this.cfg); this.nextSell = this.clock(); }
   }
 
   async spawned(): Promise<void> {
@@ -107,7 +118,7 @@ export class SoulFireBehaviors {
 
   async tick(): Promise<void> {
     const now = this.clock();
-    if (!this.online) return;
+    if (!this.online || this.remoteActive) return;
     while (this.sneakChecks.length && this.sneakChecks[0] <= now) { this.sneakChecks.shift(); this.checkSneak(); }
     if (this.cfg.crouch_enabled && now >= this.nextSneak) {
       try { await this.game.sneak(); this.nextSneak = now + 30 * 60_000; }
@@ -139,9 +150,10 @@ export class SoulFireBehaviors {
     return this.commandCredits >= 1;
   }
 
-  private async dispatch(text: string): Promise<void> {
+  private async dispatch(text: string, automatic = false): Promise<void> {
+    if (isBlockedAfkCommand(text)) { this.emit({ type: "warning", message: AFK_BLOCK_MESSAGE }); throw new Error("/afk ist gesperrt"); }
     await this.game.chat(text);
-    this.commandCredits--; this.lastCommandAt = this.clock();
+    if (!automatic) this.commandCredits--;
   }
 
   private async runCommand(command: { type: string; text?: string }): Promise<void> {
@@ -182,21 +194,21 @@ export class SoulFireBehaviors {
       return;
     }
     if (!this.sell) {
-      if (now < this.nextSell || now - this.lastCommandAt < 1500 || !this.creditReady(now)) return;
+      if (now < this.nextSell) return;
       const sale: Sell = { requested: now, opened: null, menu: null, targets: null, pending: null };
       this.sell = sale;
-      try { await this.dispatch((this.cfg.autosell_command || "/sell").trim()); }
+      try { await this.dispatch((this.cfg.autosell_command || "/sell").trim(), true); }
       catch (error) { if (this.sell === sale) { this.sell = null; this.nextSell = this.clock() + 5000; } throw error; }
       if (this.sell !== sale || generation !== this.generation) return;
       sale.requested = this.clock();
-      this.nextSell = sale.requested + Math.max(1500, (this.cfg.autosell_interval_seconds ?? 60) * 1000);
+      this.nextSell = now + Math.max(250, (this.cfg.autosell_interval_seconds ?? 60) * 1000);
       return;
     }
     const sale = this.sell;
     if (sale.opened === null && now - sale.requested >= 10_000) { await this.failSell("Verkaufsmenü hat nicht rechtzeitig geantwortet"); return; }
     if (sale.opened !== null && now - sale.opened >= 120_000) { await this.failSell("Zeitlimit für diesen Verkauf erreicht"); return; }
     if (!inventory.containerSlots.length) {
-      if (sale.menu) { this.sell = null; this.nextSell = Math.max(this.nextSell, now + 500); }
+      if (sale.menu) { this.sell = null; this.nextSell = Math.max(this.nextSell, now); }
       return;
     }
     if (!sellTitle(inventory.title)) { this.sell = null; return; }
@@ -312,7 +324,7 @@ export class SoulFireBehaviors {
   }
 
   private async failSell(reason: string): Promise<void> {
-    await this.cancelSell(); this.nextSell = this.clock() + 1500;
+    await this.cancelSell(); this.nextSell = this.clock();
     if (this.clock() - this.lastFailure >= 30_000) { this.lastFailure = this.clock(); this.emit({ type: "warning", message: `AutoSell: ${reason}; versuche es weiter` }); }
   }
 }

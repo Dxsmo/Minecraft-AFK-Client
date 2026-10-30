@@ -9,7 +9,7 @@ COPY plugin ./plugin
 RUN --mount=type=cache,target=/build/cache python3 build-plugin.py --soulfire-jar SoulFireDedicated.jar --output afk-service-controls.jar --cache /build/cache
 
 FROM eclipse-temurin:25-jre-noble
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl libstdc++6 libatomic1 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl libstdc++6 libatomic1 libva-drm2 libva2 libdrm2 && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/SoulFireDedicated.jar /opt/soulfire/SoulFireDedicated.jar
 COPY --from=builder /build/afk-service-controls.jar /opt/soulfire/afk-service-controls.jar
 COPY entrypoint.sh /opt/soulfire/entrypoint.sh

@@ -3,6 +3,13 @@
   "package": "de.afkservice.mixin",
   "plugin": "de.afkservice.StartupMixinPlugin",
   "compatibilityLevel": "JAVA_25",
-  "mixins": ["HeldKeyMixin", "HeldMouseMixin", "StartupTimeoutMixin"],
-  "injectors": { "defaultRequire": 1 }
+  "mixins": [
+    "HeldKeyMixin",
+    "HeldMouseMixin",
+    "StartupTimeoutMixin",
+    "BlockedCommandMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
 }

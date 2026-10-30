@@ -672,6 +672,15 @@ describe("MinecraftClient (SoulFire adapter) state machine", () => {
     expect(JSON.parse(written.trim())).toEqual({ type: "chat", text: "/gamemode creative" });
   });
 
+  it.each(["/afk", "/AFK", "/afk on", "/essentials:afk", "/minecraft:AFK test"])("blocks %s locally without sending a game command", async command => {
+    const client = makeClient(), events: any[] = []; client.on("console", event => events.push(event));
+    client.connect(); lastChild().send({ type: "spawn" }); await tick();
+    lastChild().stdin.write.mockClear(); events.length = 0;
+    expect(client.sendCommand(command)).toBe(true);
+    expect(lastChild().stdin.write).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1); expect(events[0].message).toContain("Stars zu farmen");
+  });
+
   it("intercepts only exact /desmo and prints all nine results without sending them to Minecraft", async () => {
     const client = makeClient();
     const events: any[] = [];

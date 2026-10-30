@@ -1,0 +1,96 @@
+{
+  "fixture": {
+    "accounts": 100,
+    "storedLogs": 20000,
+    "storedEarnings": 100000
+  },
+  "checks": [
+    "authenticated account isolation and CSRF",
+    "held controls, automation settings, offline command errors, image catalog and permissions",
+    "log cursor pagination, cent sums, all graph ranges and live SoulFire version catalog",
+    "note CRUD, revision conflicts, sharing, read-only grants and private-note isolation",
+    "persistent dashboard preferences, IP-ban CRUD and last-admin protection",
+    "independent Java/Bedrock creation and deletion, session revocation, audit trail and system status"
+  ],
+  "requests": 138,
+  "load": {
+    "requests": 80,
+    "concurrency": 8,
+    "p50Ms": 12.035292000000027,
+    "p95Ms": 32.810833,
+    "maxMs": 35.39816700000006
+  },
+  "expectedFailures": [
+    {
+      "method": "GET",
+      "path": "/users",
+      "status": 403
+    },
+    {
+      "method": "GET",
+      "path": "/minecraft/accounts/audit-099",
+      "status": 404
+    },
+    {
+      "method": "PATCH",
+      "path": "/minecraft/accounts/audit-000",
+      "status": 403
+    },
+    {
+      "method": "POST",
+      "path": "/minecraft/accounts/audit-000/command",
+      "status": 409
+    },
+    {
+      "method": "GET",
+      "path": "/minecraft/accounts/audit-099/image",
+      "status": 404
+    },
+    {
+      "method": "PATCH",
+      "path": "/notes/cmvuikzao000eph2qwgtweekx",
+      "status": 409
+    },
+    {
+      "method": "PATCH",
+      "path": "/notes/cmvuikzao000eph2qwgtweekx",
+      "status": 403
+    },
+    {
+      "method": "GET",
+      "path": "/notes/audit-private-note",
+      "status": 404
+    },
+    {
+      "method": "PATCH",
+      "path": "/users/cmvuihprp0000n63gwop5jshv",
+      "status": 400
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me",
+      "status": 401
+    },
+    {
+      "method": "GET",
+      "path": "/audit-logs?limit=-1",
+      "status": 400
+    },
+    {
+      "method": "GET",
+      "path": "/audit-logs?limit=nope",
+      "status": 400
+    },
+    {
+      "method": "GET",
+      "path": "/audit-logs?limit=1000000",
+      "status": 400
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me",
+      "status": 401
+    }
+  ],
+  "unexpectedFailures": 0
+}

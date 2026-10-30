@@ -1,7 +1,7 @@
 // Native RPC/game-packet regression using temporary offline accounts only.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,10 +11,12 @@ import { soulFireRpc } from '../dist/soulfire/rpc.js';
 const require = createRequire(import.meta.url);
 const mc = require(process.env.MINECRAFT_PROTOCOL_MODULE || 'minecraft-protocol');
 assert.ok(process.env.SOULFIRE_URL, 'Select an isolated SoulFire service');
+const accountId = `actions-${randomUUID()}`;
 const root = await mkdtemp(path.join(tmpdir(), 'afk-actions-'));
 const host = process.env.MINECRAFT_FIXTURE_HOST || '127.0.0.1';
 const server = mc.createServer({ host: host === '127.0.0.1' ? host : '0.0.0.0', port: 0, version: '1.8.8', 'online-mode': false });
 const empty = { blockId: -1 }, events = [], clicks = [], commands = [], clients = [];
+let movementPackets = 0, lastZ = 0.5, lastYaw = 0;
 const controller = createSoulFireController();
 let pending = '', spawnerOpen = false, stock;
 const sneakActions = [];
@@ -36,6 +38,9 @@ controller.stdout.on('data', data => {
 });
 server.on('playerJoin', client => {
   clients.push(client);
+  client.on('position', data => { movementPackets++; lastZ = data.z; });
+  client.on('position_look', data => { movementPackets++; lastZ = data.z; lastYaw = data.yaw; });
+  client.on('look', data => { lastYaw = data.yaw; });
   client.on('entity_action', action => sneakActions.push(action.actionId));
   client.on('chat', ({ message }) => {
     commands.push(message);
@@ -69,7 +74,7 @@ server.on('playerJoin', client => {
 try {
   await once(server, 'listening');
   send({ host, port: server.socketServer.address().port, username: `Audit_${randomUUID().slice(0, 6)}`, auth_type: 'offline', edition: 'JAVA',
-    cache_dir: root, account_id: `actions-${randomUUID()}`, crouch_enabled: true, auto_button: 'off',
+    cache_dir: root, account_id: accountId, crouch_enabled: true, auto_button: 'off',
     spawner_type: 'cow', spawner_drop_items: ['minecraft:beef', 'minecraft:leather'], spawner_sell_items: ['minecraft:bone'] });
   await wait(() => events.some(event => event.type === 'spawn'));
   send({ type: 'read_sell_multipliers' }); await wait(() => events.some(event => event.type === 'sell_multipliers'));
@@ -104,11 +109,65 @@ try {
     const png = Buffer.from(frames[0][0].image, 'base64');
     assert.deepEqual([...png.subarray(0, 8)], [137,80,78,71,13,10,26,10]);
     assert.equal(png.readUInt32BE(16), 640); assert.equal(png.readUInt32BE(20), 360);
+    const beforeWorldChange = frames.map(target => target.length);
+    clients[0].write('respawn', { dimension: -1, difficulty: 1, gamemode: 0, levelType: 'flat' });
+    await new Promise(resolve => setTimeout(resolve, 150));
+    clients[0].write('respawn', { dimension: 0, difficulty: 1, gamemode: 0, levelType: 'flat' });
+    const freshChunk = Buffer.alloc(8192 + 2048 + 2048 + 256); freshChunk.fill(255, 10240, 12288);
+    clients[0].write('map_chunk', { x: 0, z: 0, groundUp: true, bitMap: 1, chunkData: freshChunk });
+    for (let x = 0; x < 5; x++) for (let z = 0; z < 5; z++) clients[0].write('block_change', { location: { x, y: 63, z }, type: 16 });
+    clients[0].write('position', { x: 0.5, y: 64, z: 0.5, yaw: 0, pitch: 30, flags: 0 });
+    await wait(() => frames.every((target, i) => target.length >= beforeWorldChange[i] + 2));
     stopFirst(); assert.equal(cameraClosed, false);
     stopSecond(); await wait(() => cameraClosed);
     assert.equal(upstreams, 1);
   } finally { stopFirst(); stopSecond(); await camera.close(); }
-  console.log(JSON.stringify({ nativeCamera: { width: 640, height: 360, sharedUpstreams: upstreams, viewerFrames: frames.map(target => target.length), stoppedAfterLastViewer: cameraClosed },
+  const { config: websiteConfig } = await import('../dist/config/config.js');
+  const { RemoteControlSession } = await import('../dist/soulfire/remoteControl.js');
+  const mappingDir = path.join(websiteConfig.dataDir, 'bot-cache', accountId);
+  await mkdir(mappingDir, { recursive: true }); await writeFile(path.join(mappingDir, 'soulfire.json'), JSON.stringify(ids));
+  const video = [], remoteErrors = [];
+  const remote = new RemoteControlSession(accountId, message => { video.push(message); return true; }, error => remoteErrors.push(error));
+  let heartbeat;
+  try {
+    await remote.start();
+    heartbeat = setInterval(() => remote.input({ type: 'input', captured: true, events: [] }), 500);
+    await wait(() => { assert.deepEqual(remoteErrors, []); return video.length >= 2; });
+    assert.ok(video.some(frame => frame.keyFrame && frame.codec.startsWith('avc1.')));
+    assert.ok(!JSON.stringify(video).includes('inputToken'));
+    const before = lastZ;
+    remote.input({ type: 'input', captured: true, events: [{ kind: 0, code: 87, action: 1, modifiers: 0, x: 0, y: 0, relative: false, key: 'w' }] });
+    await wait(() => lastZ > before + 0.05);
+    remote.input({ type: 'input', captured: true, events: [
+      { kind: 0, code: 87, action: 0, modifiers: 0, x: 0, y: 0, relative: false, key: 'w' },
+      { kind: 0, code: 69, action: 1, modifiers: 0, x: 0, y: 0, relative: false, key: 'e' },
+      { kind: 0, code: 69, action: 0, modifiers: 0, x: 0, y: 0, relative: false, key: 'e' },
+    ] });
+    await wait(() => video.some(frame => frame.screenOpen));
+    remote.input({ type: 'input', captured: true, events: [
+      { kind: 0, code: 69, action: 1, modifiers: 0, x: 0, y: 0, relative: false, key: 'e' },
+      { kind: 0, code: 69, action: 0, modifiers: 0, x: 0, y: 0, relative: false, key: 'e' },
+    ] });
+    const openAt = video.length;
+    await wait(() => video.slice(openAt).some(frame => !frame.screenOpen));
+    const yawBefore = lastYaw;
+    remote.input({ type: 'input', captured: true, events: [{ kind: 3, code: 0, action: 0, modifiers: 0, x: 60, y: 0, relative: true }] });
+    await wait(() => Math.abs(lastYaw - yawBefore) > 1);
+    // Opening the command chat and typing /afk must be blocked natively too.
+    const key = (code, action, logical) => ({ kind: 0, code, action, modifiers: 0, x: 0, y: 0, relative: false, key: logical });
+    remote.input({ type: 'input', captured: true, events: [key(47, 1, '/'), key(47, 0, '/')] });
+    await new Promise(resolve => setTimeout(resolve, 150));
+    remote.input({ type: 'input', captured: true, events: [
+      ...[97,102,107].map(code => ({ kind: 1, code, action: 0, modifiers: 0, x: 0, y: 0, relative: false })),
+      key(257, 1, 'Enter'), key(257, 0, 'Enter'),
+    ] });
+    await new Promise(resolve => setTimeout(resolve, 250));
+    assert.ok(!commands.some(command => /^\/afk/i.test(command)));
+    if (process.env.AFK_REMOTE_VIDEO_FILE) await writeFile(process.env.AFK_REMOTE_VIDEO_FILE, JSON.stringify(video.slice(0, 10)));
+
+  } finally { clearInterval(heartbeat); await remote.stop(); await rm(mappingDir, { recursive: true, force: true }); }
+  console.log(JSON.stringify({ nativeRemoteControl: { h264Frames: video.length, movement: true, mouseLook: true, inventory: true, afkBlocked: true, released: true },
+    nativeCamera: { width: 640, height: 360, sharedUpstreams: upstreams, viewerFrames: frames.map(target => target.length), stoppedAfterLastViewer: cameraClosed, survivedWorldChange: true },
     sneakPreserved: true, nativeMultipliers: multipliers.length, nativeSpawnerDrop: true, nativeSpawnerSell: true,
     retainedStackPerItem: true, retainedForeignItems: true, manualCommandOrder: true, warnings: 0 }, null, 2));
 } catch (error) {

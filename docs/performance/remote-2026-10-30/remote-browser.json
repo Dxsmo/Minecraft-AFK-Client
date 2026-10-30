@@ -1,0 +1,11 @@
+{
+  "nativeH264Decoded": true,
+  "decoderRecovery": true,
+  "lazyControlConnection": true,
+  "keyDownAndUp": true,
+  "inventoryKey": true,
+  "escapeIsLocal": true,
+  "mouseReleasedOutsideImage": true,
+  "releaseOnBlur": true,
+  "pageErrors": []
+}
