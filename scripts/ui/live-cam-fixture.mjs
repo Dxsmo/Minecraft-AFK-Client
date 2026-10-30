@@ -35,6 +35,7 @@ export async function installLiveCamFixture(page, cameras) {
     if (socket.url().endsWith('/camera')) {
       const entry = { url: socket.url(), frames: 0, closed: false }; cameras.push(entry);
       timer = setInterval(() => { entry.frames++; socket.send(JSON.stringify({ type: 'frame', image })); }, 100);
+      timer.unref(); // Browser teardown need not emit the fixture's close event.
       socket.onClose(() => { clearInterval(timer); entry.closed = true; });
       return;
     } else if (socket.url().endsWith('/dashboard')) socket.send(JSON.stringify({ type: 'statuses', statuses: accounts.map(account => account.live) }));

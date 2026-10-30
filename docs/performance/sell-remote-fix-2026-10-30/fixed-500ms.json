@@ -1,0 +1,261 @@
+{
+  "controllers": 2,
+  "soakSeconds": 0,
+  "droppedItemsPerClient": 1500,
+  "sellStacks": 36,
+  "sellInterval": 0.5,
+  "salePeriodsMs": [
+    503,
+    502,
+    604,
+    504,
+    504,
+    505,
+    504,
+    425,
+    503,
+    503,
+    503,
+    505,
+    504,
+    504,
+    501,
+    2810,
+    505
+  ],
+  "streamResyncs": 34,
+  "rpcDurations": [
+    {
+      "method": "SendChat",
+      "ms": 89
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 89
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 78
+    },
+    {
+      "method": "SendChat",
+      "ms": 88
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 88
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 84
+    },
+    {
+      "method": "SendChat",
+      "ms": 76
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 89
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 87
+    },
+    {
+      "method": "SendChat",
+      "ms": 89
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 15
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 59
+    },
+    {
+      "method": "SendChat",
+      "ms": 90
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 91
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 82
+    },
+    {
+      "method": "SendChat",
+      "ms": 91
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 90
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 86
+    },
+    {
+      "method": "SendChat",
+      "ms": 92
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 91
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 86
+    },
+    {
+      "method": "SendChat",
+      "ms": 92
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 90
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 86
+    },
+    {
+      "method": "SendChat",
+      "ms": 13
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 90
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 86
+    },
+    {
+      "method": "SendChat",
+      "ms": 12
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 89
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 86
+    },
+    {
+      "method": "SendChat",
+      "ms": 12
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 88
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 86
+    },
+    {
+      "method": "SendChat",
+      "ms": 12
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 90
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 86
+    },
+    {
+      "method": "SendChat",
+      "ms": 13
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 89
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 85
+    },
+    {
+      "method": "SendChat",
+      "ms": 12
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 89
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 86
+    },
+    {
+      "method": "SendChat",
+      "ms": 13
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 91
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 86
+    },
+    {
+      "method": "SendChat",
+      "ms": 10
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 89
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 7
+    },
+    {
+      "method": "SendChat",
+      "ms": 97
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 89
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 87
+    },
+    {
+      "method": "SendChat",
+      "ms": 88
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 89
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 87
+    },
+    {
+      "method": "SendChat",
+      "ms": 8
+    }
+  ],
+  "extraNodeProcesses": 0,
+  "javaAutoDetection": false,
+  "nativeRightUse": true,
+  "nativeLeftMining": true,
+  "noUnsneak": true,
+  "viewDistance": 6,
+  "confirmedSales": 648,
+  "refilledSlotsConfirmed": true,
+  "manualCommandDelivered": true,
+  "inventoryRpcCalls": 0,
+  "povRenderRpcCalls": 0,
+  "independentStop": true
+}

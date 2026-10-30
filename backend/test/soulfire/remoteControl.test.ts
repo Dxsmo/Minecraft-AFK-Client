@@ -20,7 +20,7 @@ it("forwards ordered input without exposing native capabilities or Escape", asyn
   const f = fixture(); await f.session.start(); await tick();
   expect(JSON.stringify(f.send.mock.calls)).not.toContain("native-private-capability");
   f.session.input(remoteInputSchema.parse({ type: "input", captured: true, events: [{ kind: 0, code: 87, action: 1 }] }));
-  await tick(); expect(f.rpc.pov.input).toHaveBeenCalledWith(expect.objectContaining({ inputToken: "native-private-capability", escape: false, sequence: 1n }), expect.anything());
+  await tick(); expect(f.rpc.pov.input).toHaveBeenLastCalledWith(expect.objectContaining({ inputToken: "native-private-capability", escape: false, sequence: 2n }), expect.anything());
   await f.session.stop(); expect(mocked.active.mock.calls).toEqual([["fixture", true], ["fixture", false]]);
 });
 it("allows only one controller per account and restores on disconnect", async () => {
@@ -30,7 +30,32 @@ it("allows only one controller per account and restores on disconnect", async ()
 });
 it("releases a silent browser even while the native stream stays open", async () => {
   vi.useFakeTimers(); const f = fixture(); await f.session.start(); await tick();
-  await vi.advanceTimersByTimeAsync(3500); await tick();
+  await vi.advanceTimersByTimeAsync(5500); await tick();
+  expect(mocked.active).toHaveBeenLastCalledWith("fixture", false);
+});
+it("accepts browser heartbeats during slow preparation and starts native input as soon as the capability arrives", async () => {
+  vi.useFakeTimers(); const f = fixture(); let finish!: () => void;
+  mocked.active.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  const preparing = f.session.start(); await tick();
+  for (let i = 0; i < 10; i++) {
+    await vi.advanceTimersByTimeAsync(500);
+    f.session.input(remoteInputSchema.parse({ type: "input", captured: true, events: [] }));
+  }
+  finish(); await preparing; await tick();
+  expect(f.fail).not.toHaveBeenCalled();
+  expect(f.rpc.pov.input).toHaveBeenCalledWith(expect.objectContaining({ captured: true, events: [] }), expect.anything());
+});
+it("reports a finite startup error when no frame arrives, even if the browser keeps sending heartbeats", async () => {
+  vi.useFakeTimers(); const f = fixture();
+  f.rpc.pov.watch.mockImplementation(async function* (_request: unknown, options: { signal: AbortSignal }) {
+    await new Promise<void>(resolve => options.signal.addEventListener("abort", () => resolve(), { once: true }));
+  });
+  await f.session.start();
+  for (let i = 0; i < 50; i++) {
+    f.session.input(remoteInputSchema.parse({ type: "input", captured: true, events: [] }));
+    await vi.advanceTimersByTimeAsync(500);
+  }
+  await tick(); expect(f.fail).toHaveBeenCalledWith(expect.stringContaining("kein Steuerungsbild"));
   expect(mocked.active).toHaveBeenLastCalledWith("fixture", false);
 });
 it("validates input size, coordinates, key codes and reserves Escape for leaving control", () => {

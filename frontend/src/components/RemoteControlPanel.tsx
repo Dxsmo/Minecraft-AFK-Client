@@ -15,11 +15,14 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
     }
     let disposed = false, failed = false, socket: WebSocket;
     let decoder: VideoDecoder | undefined, codec = "", waitForKey = true;
+    let decoderFailures = 0;
+    let startup: ReturnType<typeof setTimeout> | undefined;
     let events: RemoteEvent[] = [], open = false, intentionalUnlock = false;
     const buttons = new Set<number>();
     function release() {
       if (disposed) return;
       disposed = true;
+      clearTimeout(startup);
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "stop" }));
       socket?.close(); if (decoder?.state !== "closed") decoder?.close();
       if (document.pointerLockElement) document.exitPointerLock();
@@ -49,7 +52,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
       if (disposed) return;
       try {
         const frame = JSON.parse(event.data);
-        if (frame.type === "error") { failed = true; setError(frame.message || "Fernsteuerung nicht verfügbar."); return; }
+        if (frame.type === "error") { failed = true; clearTimeout(startup); setError(frame.message || "Fernsteuerung nicht verfügbar."); return; }
         if (frame.type !== "video" || typeof frame.data !== "string" || frame.data.length > 4 * 1024 * 1024) return;
         if (open !== frame.screenOpen) {
           open = !!frame.screenOpen; setScreenOpen(open);
@@ -60,12 +63,20 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
           codec = frame.codec; waitForKey = true;
           decoder = new VideoDecoder({
             output: video => {
-              try { if (!disposed && canvas.current) { canvas.current.getContext("2d")?.drawImage(video, 0, 0, 640, 360); setReady(true); } }
+              try { if (!disposed && canvas.current) { clearTimeout(startup); decoderFailures = 0; canvas.current.getContext("2d")?.drawImage(video, 0, 0, 640, 360); setReady(true); } }
               finally { video.close(); }
             },
-            error: () => { waitForKey = true; codec = ""; send(true); },
+            error: () => {
+              if (++decoderFailures >= 3) {
+                failed = true; clearTimeout(startup);
+                setError("Dein Browser kann das Steuerungsbild nicht dekodieren. Bitte einen aktuellen Chrome oder Edge versuchen.");
+                if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "stop" }));
+                socket.close(); return;
+              }
+              waitForKey = true; codec = ""; send(true);
+            },
           });
-          decoder.configure({ codec, optimizeForLatency: true, hardwareAcceleration: "prefer-software" });
+          decoder.configure({ codec, optimizeForLatency: true });
         }
         if (decoder.decodeQueueSize > 4) { waitForKey = true; send(true); return; }
         if (waitForKey && !frame.keyFrame) return;
@@ -74,9 +85,14 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
         decoder.decode(new EncodedVideoChunk({ type: frame.keyFrame ? "key" : "delta", timestamp: frame.timestamp, data }));
       } catch { failed = true; setError("Das Videobild konnte nicht verarbeitet werden. Bitte Steuerung beenden und erneut öffnen."); }
     };
-    socket.onclose = () => {
+    socket.onclose = event => {
       if (disposed) return;
-      failed = true; setError("Die Fernsteuerung wurde beendet. Du kannst zur Live Cam zurückkehren.");
+      failed = true; clearTimeout(startup);
+      const reason = event.code === 4401 || event.code === 4403 ? "Deine Sitzung oder der Zugriff auf den Account ist abgelaufen. Bitte erneut anmelden."
+        : event.code === 4409 ? "Der Account ist nicht mehr online."
+        : event.code === 4429 ? "Die Eingabeverbindung kommt nicht hinterher. Bitte erneut versuchen."
+        : "Die Fernsteuerung wurde beendet. Du kannst zur Live Cam zurückkehren.";
+      setError(previous => previous || reason);
       if (document.pointerLockElement) { intentionalUnlock = true; document.exitPointerLock(); }
     };
     function key(event: KeyboardEvent) {
@@ -132,9 +148,16 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
     document.addEventListener("contextmenu", contextMenu);
     const inputTimer = setInterval(() => { if (events.length) send(); }, 25);
     const heartbeat = setInterval(() => send(), 500);
+    startup = setTimeout(() => {
+      if (disposed || failed) return;
+      failed = true;
+      setError("Es kommt kein Steuerungsbild an. Bitte die Verbindung und SoulFire-Auslastung prüfen und erneut versuchen.");
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "stop" }));
+      socket.close();
+    }, 30_000);
     lock();
     return () => {
-      disposed = true; clearInterval(inputTimer); clearInterval(heartbeat);
+      disposed = true; clearInterval(inputTimer); clearInterval(heartbeat); clearTimeout(startup);
       window.removeEventListener("keydown", key, true); window.removeEventListener("keyup", key, true);
       for (const type of ["mousemove", "mousedown", "mouseup"] as const) window.removeEventListener(type, mouse, true);
       window.removeEventListener("wheel", wheel, true); window.removeEventListener("blur", release);

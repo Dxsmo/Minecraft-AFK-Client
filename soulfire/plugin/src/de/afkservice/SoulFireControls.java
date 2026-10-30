@@ -18,6 +18,7 @@ import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
  * video stream, synthetic release cycles, or network roundtrips per tick. */
 public final class SoulFireControls implements ModInitializer {
   private static final Map<BotConnection, Integer> CHECKS = Collections.synchronizedMap(new WeakHashMap<>());
+  private static final Map<BotConnection, Boolean> REMOTE = Collections.synchronizedMap(new WeakHashMap<>());
   @Override
   public void onInitialize() {
     SoulFireAPI.registerListener(BotPreTickEvent.class, SoulFireControls::tick);
@@ -26,9 +27,22 @@ public final class SoulFireControls implements ModInitializer {
   private static void tick(BotPreTickEvent event) {
     var bot = event.connection();
     var settings = bot.settingsSource().stem().settings().get("afk-service");
-    if (settings == null || flag(settings, "remote-control")) return;
+    if (settings == null) return;
     var mc = bot.minecraft();
     if (mc.player == null || mc.level == null || mc.gameMode == null) return;
+    boolean remote = flag(settings, "remote-control");
+    var previousRemote = REMOTE.put(bot, remote);
+    if (remote) {
+      // Release configured input once, before native POV takes over. Later
+      // remote key presses must not be overwritten by the automation tick.
+      if (!Boolean.TRUE.equals(previousRemote)) {
+        bot.controlState().shift(false);
+        mc.options.keyShift.setDown(false);
+        mc.options.keyAttack.setDown(false);
+        mc.options.keyUse.setDown(false);
+      }
+      return;
+    }
     boolean crouch = flag(settings, "crouch-enabled");
     bot.controlState().shift(crouch);
     mc.options.keyShift.setDown(crouch);

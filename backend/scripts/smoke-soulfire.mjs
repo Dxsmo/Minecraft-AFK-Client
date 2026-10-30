@@ -10,6 +10,8 @@ import os from 'node:os';
 import { once } from 'node:events';
 import { createSoulFireController } from '../dist/soulfire/controller.js';
 import { soulFireRpc } from '../dist/soulfire/rpc.js';
+import { fromBinary } from '@bufbuild/protobuf';
+import { BotEventSchema } from '@soulfiremc/sdk/generated/soulfire/bot_live_pb';
 const require = createRequire(import.meta.url);
 const mc = require(process.env.MINECRAFT_PROTOCOL_MODULE || 'minecraft-protocol');
 assert.ok(process.env.SOULFIRE_URL, 'Use an explicitly selected isolated SoulFire service');
@@ -20,11 +22,28 @@ assert.ok(Number.isInteger(clientCount)&&clientCount>=2&&clientCount<=8);
 assert.ok(Number.isFinite(soakSeconds)&&soakSeconds>=0&&soakSeconds<=300);
 const refillSales=process.env.AFK_SMOKE_REFILL_SALES==='1';
 const sellStacks=Number(process.env.AFK_SMOKE_SELL_STACKS||3), sellInterval=Number(process.env.AFK_SMOKE_INTERVAL_SECONDS||2);
+const droppedItems=Number(process.env.AFK_SMOKE_DROPPED_ITEMS||0);
+assert.ok(Number.isInteger(droppedItems)&&droppedItems>=0&&droppedItems<=10000);
 assert.ok(Number.isInteger(sellStacks)&&sellStacks>=1&&sellStacks<=36);
 assert.ok(sellInterval>=0.25&&sellInterval<=3600);
 const stockSlots=Array.from({length:sellStacks},(_,i)=>(sellStacks<=9?54:27)+i);
-const rpcCalls=[], originalFetch=globalThis.fetch;
-globalThis.fetch=(input,init)=>{rpcCalls.push(new URL(typeof input==='string'||input instanceof URL?input:input.url).pathname);return originalFetch(input,init);};
+const rpcCalls=[], rpcDurations=[], originalFetch=globalThis.fetch;
+let streamResyncs=0;
+globalThis.fetch=async(input,init)=>{
+  const method=new URL(typeof input==='string'||input instanceof URL?input:input.url).pathname;
+  rpcCalls.push(method); const started=Date.now(); const response=await originalFetch(input,init);
+  if(!method.endsWith('/WatchBotEvents')) {rpcDurations.push({method:method.split('/').at(-1),ms:Date.now()-started});return response;}
+  let pending=Buffer.alloc(0);
+  return new Response(response.body.pipeThrough(new TransformStream({transform(chunk,controller){
+    pending=Buffer.concat([pending,chunk]);
+    while(pending.length>=5 && pending.length>=5+pending.readUInt32BE(1)) {
+      const size=pending.readUInt32BE(1),flags=pending[0];
+      if(flags===0 && fromBinary(BotEventSchema,pending.subarray(5,5+size)).event.case==='resyncRequired') streamResyncs++;
+      pending=pending.subarray(5+size);
+    }
+    controller.enqueue(chunk);
+  }})),{status:response.status,headers:response.headers});
+};
 let teleports=0;
 const server=mc.createServer({ host:process.env.MINECRAFT_FIXTURE_HOST ? '0.0.0.0' : '127.0.0.1', port:0, version:'1.8.8', 'online-mode':false, motd:'AFK isolated smoke fixture', maxPlayers:clientCount });
 const timers=[];
@@ -57,6 +76,11 @@ server.on('playerJoin', client=>{
   client.write('update_health',{health:20,food:10,foodSaturation:0});
   client.write('set_slot',{windowId:0,slot:36,item:{blockId:260,itemCount:64,itemDamage:0}});
   client.write('held_item_slot',{slot:0});
+  for(let index=0;index<droppedItems;index++) {
+    const entityId=1000+index;
+    client.write('spawn_entity',{entityId,type:2,x:Math.round((0.5+(index%20)/20)*32),y:64*32,z:Math.round((0.5+Math.floor(index/20)%20/20)*32),pitch:0,yaw:0,objectData:1,velocity:{x:0,y:0,z:0}});
+    client.write('entity_metadata',{entityId,metadata:[{key:10,type:5,value:{blockId:260,itemCount:64,itemDamage:0}}]});
+  }
   timers.push(setTimeout(()=>{client.write('position',{x:2.5,y:64,z:0.5,yaw:0,pitch:30,flags:0});teleports++;},10000));
 });
 const waitFor=async check=>{const deadline=Date.now()+15000;while(!check()){const failure=events.flat().find(event=>event.type==='connection_failed');if(failure)throw new Error(failure.error);assert.ok(Date.now()<deadline,'SoulFire smoke check timed out');await new Promise(resolve=>setTimeout(resolve,100));}};
@@ -66,7 +90,7 @@ try {
   for(let i=0;i<clientCount;i++) {
     const controller=createSoulFireController();controllers.push(controller);events.push([]);
     let buffered='';controller.stdout.on('data',data=>{buffered+=data.toString();let end;while((end=buffered.indexOf('\n'))>=0){events[i].push(JSON.parse(buffered.slice(0,end)));buffered=buffered.slice(end+1);}});
-    controller.stdin.write(JSON.stringify({host:process.env.MINECRAFT_FIXTURE_HOST || '127.0.0.1',port,username:names[i],auth_type:'offline',edition:'JAVA',account_id:`smoke-${randomUUID()}`,cache_dir:path.join(root,String(i)),version:'',crouch_enabled:i===0,auto_button:i===0?'right':i===1?'left':'off',autosell_enabled:i===0,autosell_interval_seconds:sellInterval})+'\n');
+    controller.stdin.write(JSON.stringify({host:process.env.MINECRAFT_FIXTURE_HOST || '127.0.0.1',port,username:names[i],auth_type:'offline',edition:'JAVA',account_id:`smoke-${randomUUID()}`,cache_dir:path.join(root,String(i)),version:process.env.AFK_SMOKE_VERSION||'',crouch_enabled:i===0,auto_button:i===0?'right':i===1?'left':'off',autosell_enabled:i===0,autosell_interval_seconds:sellInterval})+'\n');
   }
   await waitFor(()=>events.every(list=>list.some(event=>event.type==='spawn')));
   await waitFor(()=>packets.some(packet=>packet.name===names[1]&&packet.type==='block_dig'));
@@ -87,7 +111,7 @@ try {
   if(refillSales)assert.deepEqual(packets.filter(packet=>packet.type==='window_click').slice(0,Math.min(3,sellStacks)).map(packet=>packet.data.slot),stockSlots.slice(0,3));
   const saleCommands=packets.filter(packet=>packet.type==='chat'&&packet.data.message==='/sell').map(packet=>packet.at);
   const salePeriodsMs=saleCommands.slice(1).map((at,i)=>at-saleCommands[i]);
-  if(process.env.AFK_SMOKE_MAX_PERIOD_MS){const ordered=[...salePeriodsMs].sort((a,b)=>a-b);assert.ok(ordered.length>=3);assert.ok(ordered[Math.floor(ordered.length/2)]<=Number(process.env.AFK_SMOKE_MAX_PERIOD_MS),`Sell intervals too slow: ${JSON.stringify(salePeriodsMs)}`);}
+  if(process.env.AFK_SMOKE_MAX_PERIOD_MS){const ordered=[...salePeriodsMs].sort((a,b)=>a-b);assert.ok(ordered.length>=3);assert.ok(ordered[Math.floor(ordered.length/2)]<=Number(process.env.AFK_SMOKE_MAX_PERIOD_MS),`Sell intervals too slow: ${JSON.stringify(salePeriodsMs)}; stream resyncs=${streamResyncs}; RPC=${JSON.stringify(rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)))}`);}
   controllers[0].stdin.write('{"type":"chat","text":"/homes"}\n');
   await waitFor(()=>packets.some(packet=>packet.name===names[0]&&packet.type==='chat'&&packet.data.message==='/homes'));
   const inventoryRpcCalls=rpcCalls.filter(method=>method.endsWith('/GetInventoryState')).length;
@@ -99,7 +123,7 @@ try {
   const before=events[1].filter(event=>event.type==='heartbeat').length;
   const stopped=once(controllers[0],'close');controllers[0].stdin.write('{"type":"disconnect"}\n');await stopped;
   await waitFor(()=>events[1].filter(event=>event.type==='heartbeat').length>before);
-  console.log(JSON.stringify({controllers:clientCount,soakSeconds,sellStacks,sellInterval,salePeriodsMs,extraNodeProcesses:0,javaAutoDetection:true,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:6,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
+  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:6,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
 } catch (error) {
   console.error(JSON.stringify({events,packetTypes:packets.map(p=>({name:p.name,type:p.type,data:p.type==='entity_action'?p.data:undefined}))}));
   const rpc=soulFireRpc();

@@ -35,6 +35,7 @@ export class RemoteControlSession {
   private restoring?: Promise<void>;
   private stream?: Promise<void>;
   private heartbeat?: ReturnType<typeof setInterval>;
+  private startup?: ReturnType<typeof setTimeout>;
   private lastInput = Date.now();
   private pending: RemoteInput["events"] = [];
   private captured = true;
@@ -50,22 +51,26 @@ export class RemoteControlSession {
     if (owners.has(this.accountId)) throw new Error("Dieser Account wird bereits ferngesteuert.");
     owners.set(this.accountId, this);
     try {
+      this.startup = setTimeout(() => {
+        this.fail("SoulFire liefert kein Steuerungsbild. Bitte Auslastung und SoulFire-Logs prüfen und erneut versuchen."); void this.stop();
+      }, 25_000);
       this.active = true;
       await setRemoteControl(this.accountId, true);
       if (this.stopped) { await this.restore(); return; }
       const ids = await readRemoteAccount(path.join(config.dataDir, "bot-cache", this.accountId));
       if (!ids) throw new Error("Der Account ist nicht verbunden.");
       this.heartbeat = setInterval(() => {
-        if (Date.now() - this.lastInput > 3000) { this.fail("Die Steuerung wurde wegen einer unterbrochenen Eingabeverbindung freigegeben."); void this.stop(); }
+        if (Date.now() - this.lastInput > 5000) { this.fail("Die Steuerung wurde wegen einer unterbrochenen Eingabeverbindung freigegeben."); void this.stop(); }
       }, 500);
       this.stream = (async () => {
         let awaitKey = true;
         for await (const frame of this.rpc.pov.watch({ ...ids, sessionId: this.sessionId, width: 640, height: 360, maxFps: 15, codecs: ["h264"] }, { signal: this.abort.signal, timeoutMs: 0 })) {
           if (this.stopped) return;
-          if (frame.inputToken) this.token = frame.inputToken;
+          if (frame.inputToken && !this.token) { this.token = frame.inputToken; void this.flush(); }
           if (!frame.data.length) continue;
           if (awaitKey && !frame.keyFrame) continue;
           if (frame.keyFrame) awaitKey = false;
+          clearTimeout(this.startup);
           const sent = this.send({ type: "video", codec: frame.codec, keyFrame: frame.keyFrame,
             timestamp: Number(frame.timestampUs), width: frame.width, height: frame.height,
             screenOpen: frame.screenOpen, data: Buffer.from(frame.data).toString("base64") });
@@ -99,7 +104,9 @@ export class RemoteControlSession {
         const events = this.pending.splice(0, 128), requestKeyFrame = this.keyFrame; this.keyFrame = false;
         await this.rpc.pov.input({ sessionId: this.sessionId, inputToken: this.token, sequence: ++this.sequence,
           captured: this.captured, events, requestKeyFrame, width: 640, height: 360, escape: false, audioEnabled: false },
-          { signal: this.abort.signal, timeoutMs: 2000 });
+          // Native input itself waits up to 5s for the game thread. A shorter
+          // browser-side deadline used to kill otherwise valid slow starts.
+          { signal: this.abort.signal, timeoutMs: 6000 });
       } while (!this.stopped && (this.pending.length || this.keyFrame));
     } catch (error) {
       if (!this.stopped) { this.fail("Die Eingabeverbindung wurde unterbrochen. Steuerung wurde freigegeben."); void this.stop(); }
@@ -113,7 +120,7 @@ export class RemoteControlSession {
 
   async stop(): Promise<void> {
     if (this.stopped) { await this.restoring; return; }
-    this.stopped = true; clearInterval(this.heartbeat);
+    this.stopped = true; clearInterval(this.heartbeat); clearTimeout(this.startup);
     // Cancelling Watch releases native keyboard/mouse state and its control
     // lease immediately. Escape is never forwarded to Minecraft.
     this.abort.abort(); this.pending = [];

@@ -1,0 +1,92 @@
+{
+  "controllers": 2,
+  "soakSeconds": 0,
+  "droppedItemsPerClient": 1500,
+  "sellStacks": 36,
+  "sellInterval": 2,
+  "salePeriodsMs": [
+    1937,
+    2089,
+    2013,
+    3730
+  ],
+  "streamResyncs": 7,
+  "rpcDurations": [
+    {
+      "method": "SendChat",
+      "ms": 92
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 89
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 79
+    },
+    {
+      "method": "SendChat",
+      "ms": 14
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 91
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 86
+    },
+    {
+      "method": "SendChat",
+      "ms": 89
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 90
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 87
+    },
+    {
+      "method": "SendChat",
+      "ms": 89
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 89
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 87
+    },
+    {
+      "method": "SendChat",
+      "ms": 91
+    },
+    {
+      "method": "ClickInventorySlot",
+      "ms": 90
+    },
+    {
+      "method": "CloseContainer",
+      "ms": 86
+    },
+    {
+      "method": "SendChat",
+      "ms": 89
+    }
+  ],
+  "extraNodeProcesses": 0,
+  "javaAutoDetection": false,
+  "nativeRightUse": true,
+  "nativeLeftMining": true,
+  "noUnsneak": true,
+  "viewDistance": 6,
+  "confirmedSales": 180,
+  "refilledSlotsConfirmed": true,
+  "manualCommandDelivered": true,
+  "inventoryRpcCalls": 0,
+  "povRenderRpcCalls": 0,
+  "independentStop": true
+}

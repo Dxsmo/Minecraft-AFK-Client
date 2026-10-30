@@ -36,10 +36,11 @@ vi.mock("../../src/soulfire/versions.js", async importOriginal => {
   ]) };
 });
 const remoteCalls: Array<{ id: string; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; input: ReturnType<typeof vi.fn> }> = [];
+let remotePreparation: Promise<void> | undefined;
 vi.mock("../../src/soulfire/remoteControl.js", async importOriginal => {
   const actual = await importOriginal<typeof import("../../src/soulfire/remoteControl.js")>();
   return { ...actual, RemoteControlSession: class {
-    start = vi.fn(async () => {}); stop = vi.fn(async () => {}); input = vi.fn();
+    start = vi.fn(async () => { await remotePreparation; }); stop = vi.fn(async () => {}); input = vi.fn();
     constructor(id: string) { remoteCalls.push({ id, start: this.start, stop: this.stop, input: this.input }); }
   } };
 });
@@ -459,4 +460,21 @@ it("requires CSRF before remote control and releases control after account permi
   own.ws.send(JSON.stringify({ type: "input", captured: true, events: [] }));
   expect((await own.closed)[0]).toBe(4401);
   await waitFor(() => remoteCalls[0].stop.mock.calls.length === 1);
+});
+
+it("keeps input heartbeats and Stop responsive while native remote preparation is pending", async () => {
+  let finish!: () => void;
+  remotePreparation = new Promise<void>(resolve => { finish = resolve; });
+  try {
+    const own = await socket(`/ws/accounts/${accounts[0].id}/control`);
+    own.ws.send(JSON.stringify({ type: "start", csrfToken: sessions[0].csrfToken }));
+    await waitFor(() => remoteCalls.length === 1 && remoteCalls[0].start.mock.calls.length === 1);
+    for (let count = 1; count <= 5; count++) {
+      own.ws.send(JSON.stringify({ type: "input", captured: true, events: [] }));
+      await waitFor(() => remoteCalls[0].input.mock.calls.length === count);
+    }
+    own.ws.send(JSON.stringify({ type: "stop" }));
+    expect((await own.closed)[0]).toBe(1000);
+    expect(remoteCalls[0].stop).toHaveBeenCalled();
+  } finally { finish(); remotePreparation = undefined; }
 });

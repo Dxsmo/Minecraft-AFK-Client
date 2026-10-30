@@ -12,7 +12,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const cameras = [], controls = [], errors = [];
-  let forceGui = false;
+  let forceGui = false, controlFailure = false;
   page.on('pageerror', error => errors.push(error.message));
   await installLiveCamFixture(page, cameras);
   await page.addInitScript(() => {
@@ -33,10 +33,15 @@ try {
     let index = 0, timer;
     socket.onMessage(data => {
       const body = JSON.parse(data.toString()); entry.inputs.push(body);
+      if (body.type === 'start' && controlFailure) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Native encoder unavailable (synthetic fixture)' }));
+        socket.close({ code: 1011, reason: 'Control unavailable' }); return;
+      }
       if (body.type === 'start') timer = setInterval(() => {
         const source = video[index % video.length];
         socket.send(JSON.stringify({ ...source, screenOpen: forceGui || source.screenOpen, timestamp: index++ * 66667 }));
       }, 70);
+      timer?.unref();
       if (body.type === 'stop') { clearInterval(timer); socket.close(); }
     });
     socket.onClose(() => { clearInterval(timer); entry.closed = true; });
@@ -79,7 +84,12 @@ try {
   await page.evaluate(() => dispatchEvent(new Event('blur')));
   await image.waitFor({ state: 'visible' }); await page.waitForTimeout(100);
   assert.ok(controls.every(control => control.closed));
+  controlFailure = true; await image.click();
+  await page.getByText('Native encoder unavailable (synthetic fixture)', { exact: true }).waitFor();
+  await page.waitForTimeout(100);
+  assert.equal(await page.getByText('Die Fernsteuerung wurde beendet. Du kannst zur Live Cam zurückkehren.', { exact: true }).count(), 0);
+  await page.keyboard.press('Escape'); await image.waitFor({ state: 'visible' });
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ nativeH264Decoded: true, decoderRecovery: true, lazyControlConnection: true, keyDownAndUp: true, inventoryKey: true,
-    escapeIsLocal: true, mouseReleasedOutsideImage: true, releaseOnBlur: true, pageErrors: errors }, null, 2));
+    escapeIsLocal: true, mouseReleasedOutsideImage: true, releaseOnBlur: true, nativeErrorPreservedAfterClose: true, pageErrors: errors }, null, 2));
 } finally { await browser.close(); }

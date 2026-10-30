@@ -1,0 +1,13 @@
+{
+  "browserToNative": true,
+  "startsMs": [
+    911,
+    152
+  ],
+  "starts": 2,
+  "h264Frames": 22,
+  "movement": true,
+  "inventoryOpenClose": true,
+  "escapeAndRestart": true,
+  "failures": []
+}

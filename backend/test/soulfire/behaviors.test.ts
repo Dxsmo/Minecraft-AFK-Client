@@ -14,6 +14,27 @@ function fixture(config: BehaviorConfig = {}) {
 }
 
 describe("common SoulFire automation", () => {
+  it("sends all 36 stacks in one native action and keeps the requested interval despite immediate refills", async () => {
+    const f = fixture({ autosell_enabled: true, autosell_interval_seconds: 2 });
+    f.game.transferAll = vi.fn(async () => {});
+    await f.engine.spawned(); f.advance(2000); await f.engine.tick(); f.sellMenu();
+    f.inventory({ playerSlots: Array.from({ length: 36 }, (_, i) => i + 27), slots: Array.from({ length: 36 }, (_, i) => slot(i + 27)) });
+    await f.engine.tick();
+    expect(f.game.transferAll).toHaveBeenCalledExactlyOnceWith("sell-1"); expect(f.game.click).not.toHaveBeenCalled();
+    f.engine.onChat(null, "[HugoSMP] +$121,60 (Basis: $64, Bonus: +$57,60 durch 1.9x)");
+    await f.engine.tick(); expect(f.game.close).toHaveBeenCalledExactlyOnceWith("sell-1");
+    f.inventory({ menuId: "player", containerSlots: [] });
+    f.advance(1999); await f.engine.tick(); expect(f.game.chat).toHaveBeenCalledTimes(1);
+    f.advance(1); await f.engine.tick(); expect(f.game.chat).toHaveBeenCalledTimes(2);
+  });
+  it("keeps the confirmation deadline for a native batch with no inventory change or genuine payout", async () => {
+    const f = fixture({ autosell_enabled: true }); f.game.transferAll = vi.fn(async () => {});
+    await f.engine.spawned(); f.advance(2000); await f.engine.tick(); f.sellMenu(); await f.engine.tick();
+    f.advance(4999); await f.engine.tick(); expect(f.game.close).not.toHaveBeenCalled();
+    f.advance(1); await f.engine.tick();
+    expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("Item-Transfer wurde nicht bestätigt") }));
+    expect(f.game.transferAll).toHaveBeenCalledTimes(1);
+  });
   it("performs the 3-second teleport checks silently, without releasing held input", async () => {
     const f = fixture({ crouch_enabled: true, auto_button: "right" });
     await f.engine.spawned(); await f.engine.tick();

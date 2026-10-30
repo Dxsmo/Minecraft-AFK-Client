@@ -14,7 +14,7 @@ vi.mock("../../src/soulfire/versions.js", () => ({
   protocolOptions: vi.fn(async () => [{ id: "RELEASE|47", displayName: "1.8.8", keywords: ["1.8.8"] }]),
   selectProtocol: vi.fn(() => ({ id: "RELEASE|47" })),
 }));
-const { runSoulFire } = await import("../../src/soulfire/session.js");
+const { runSoulFire, SELL_ALL_PLAYER_SLOTS } = await import("../../src/soulfire/session.js");
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0)) await close(); vi.useRealTimers(); });
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -52,7 +52,7 @@ async function fixture() {
   };
   mocks.rpc = rpc;
   const config = { host: "localhost", port: 25565, username: "Fixture", auth_type: "offline", edition: "JAVA" as const,
-    cache_dir: dir, version: "1.8.8", autosell_enabled: true };
+    cache_dir: dir, version: "1.8.8", autosell_enabled: true, autosell_interval_seconds: 60 };
   let running: Promise<void> | undefined;
   cleanup.push(async () => { abort.abort(); await running?.catch(() => {}); await rm(dir, { recursive: true, force: true }); });
   const start = async () => {
@@ -79,7 +79,7 @@ it("uses icon-free inventory events for selling and gives commands priority over
   await f.frame("inventory", { state: f.inventory() });
   await vi.advanceTimersByTimeAsync(100); expect(f.rpc.live.sendChat).toHaveBeenCalledWith(expect.objectContaining({ message: "/sell" }), expect.anything());
   await f.frame("inventory", { state: f.inventory("sell", "Items verkaufen") });
-  await vi.advanceTimersByTimeAsync(100); expect(f.rpc.bot.clickInventorySlot).toHaveBeenCalledWith(expect.objectContaining({ slot: 2, expectedMenuId: "sell" }), expect.anything());
+  await vi.advanceTimersByTimeAsync(100); expect(f.rpc.bot.clickInventorySlot).toHaveBeenCalledWith(expect.objectContaining({ slot: SELL_ALL_PLAYER_SLOTS, expectedMenuId: "sell" }), expect.anything());
   f.queue.push({ type: "chat", text: "/homes" }); await vi.advanceTimersByTimeAsync(100);
   expect(f.rpc.live.sendChat).toHaveBeenLastCalledWith(expect.objectContaining({ message: "/homes" }), expect.anything());
   expect(f.rpc.bot.closeContainer).toHaveBeenCalledTimes(1);
@@ -169,12 +169,28 @@ it("retains failure detection through the separate idle health check", async () 
   expect(f.emit).toHaveBeenCalledWith({ type: "connection_failed", error: "fixture disconnected" });
 });
 
-it("continues acknowledged transfers immediately instead of adding 100ms per stack", async () => {
+it("transfers a whole sale in one native call and closes after its first progress event", async () => {
   const f = await fixture(); await f.start(); await f.frame("inventory", { state: f.inventory() });
   await vi.advanceTimersByTimeAsync(2100);
   const state = f.inventory("sell", "Items verkaufen"); state.slots.push({ ...state.slots[0], slot: 3 });
   await f.frame("inventory", { state });
-  expect(f.rpc.bot.clickInventorySlot).toHaveBeenLastCalledWith(expect.objectContaining({ slot: 2 }), expect.anything());
+  expect(f.rpc.bot.clickInventorySlot).toHaveBeenLastCalledWith(expect.objectContaining({ slot: SELL_ALL_PLAYER_SLOTS }), expect.anything());
   state.slots = state.slots.filter(slot => slot.slot !== 2); await f.frame("inventory", { state });
-  expect(f.rpc.bot.clickInventorySlot).toHaveBeenLastCalledWith(expect.objectContaining({ slot: 3 }), expect.anything());
+  expect(f.rpc.bot.clickInventorySlot).toHaveBeenCalledTimes(1);
+  expect(f.rpc.bot.closeContainer).toHaveBeenCalledWith(expect.objectContaining({ expectedMenuId: "sell" }), expect.anything());
+});
+
+it("recovers a burst-induced stream resync without resetting the sell interval or losing the active menu", async () => {
+  const f = await fixture(); f.config.autosell_interval_seconds = .5;
+  await f.start(); await f.frame("inventory", { state: f.inventory() }); await vi.advanceTimersByTimeAsync(2100);
+  await f.frame("inventory", { state: f.inventory("sell", "Items verkaufen") });
+  await f.frame("chat", { senderName: "", plainText: "[HugoSMP] +$121,60 (Basis: $64, Bonus: +$57,60 durch 1.9x)" });
+  await f.frame("resyncRequired", { reason: "consumer burst" });
+  await f.frame("inventory", { state: f.inventory("sell", "Items verkaufen") });
+  await vi.advanceTimersByTimeAsync(100);
+  expect(f.rpc.bot.closeContainer).toHaveBeenCalledWith(expect.objectContaining({ expectedMenuId: "sell" }), expect.anything());
+  await f.frame("inventory", { state: f.inventory() });
+  await vi.advanceTimersByTimeAsync(500);
+  expect(f.rpc.live.sendChat.mock.calls.filter(([request]) => request.message === "/sell").length).toBeGreaterThanOrEqual(2);
+  expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "warning" }));
 });

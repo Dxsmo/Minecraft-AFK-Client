@@ -13,11 +13,12 @@ export interface GameGateway {
   chat(text: string): Promise<void>;
   inventory(): Promise<GameInventory>;
   click(menu: string, slot: number, action: "transfer" | "drop" | "left"): Promise<void>;
+  transferAll?(menu: string): Promise<void>;
   close(menu: string): Promise<void>;
   openSpawner(crouch: boolean): Promise<boolean>;
 }
 export type BotOutput = (event: Record<string, unknown>) => void;
-type Sell = { requested: number; opened: number | null; menu: string | null; targets: number[] | null; pending: { slot: GameSlot; at: number; confirmed: boolean } | null };
+type Sell = { requested: number; opened: number | null; menu: string | null; targets: number[] | null; pending: { slot: GameSlot; batch?: GameSlot[]; at: number; confirmed: boolean } | null };
 type Foreground = { kind: "multipliers" | "spawner"; deadline: number; opened: number | null; menu: string | null; previousMenu: string; phase: "drop" | "sell"; next: number;
   pending: { fingerprint: string; slot?: GameSlot; at: number; confirmed: boolean } | null };
 const plain = (text: string) => tooltipText(text).trim();
@@ -220,12 +221,30 @@ export class SoulFireBehaviors {
     if (!sale.targets && !populated.length && now - sale.opened! < 500) return;
     sale.targets ??= populated;
     if (sale.pending) {
-      const current = inventory.slots.find(slot => slot.slot === sale.pending!.slot.slot);
-      if (!sale.pending.confirmed && current && current.itemId === sale.pending.slot.itemId && current.count >= sale.pending.slot.count) {
+      const before = sale.pending.batch ?? [sale.pending.slot];
+      const unchanged = before.every(previous => {
+        const current = inventory.slots.find(slot => slot.slot === previous.slot);
+        return current && current.itemId === previous.itemId && current.count >= previous.count;
+      });
+      if (!sale.pending.confirmed && unchanged) {
         if (now - sale.pending.at >= 5000) await this.failSell("Item-Transfer wurde nicht bestätigt");
         return;
       }
       sale.pending = null;
+    }
+    if (this.game.transferAll && sale.targets.length) {
+      const items = inventory.slots.filter(slot => sale.targets!.includes(slot.slot) && slot.count > 0);
+      sale.targets = [];
+      if (!items.length) { await this.cancelSell(); return; }
+      const pending = { slot: { ...items[0] }, batch: items.map(item => ({ ...item })), at: now, confirmed: false };
+      sale.pending = pending;
+      try {
+        // One game-thread action sends all ordinary shift-clicks. The server
+        // still owns acceptance/payouts; the next pass retries remaining stock.
+        await this.game.transferAll(inventory.menuId);
+        if (this.sell === sale && sale.pending === pending) pending.at = this.clock();
+      } catch { if (this.sell === sale && !pending.confirmed) await this.failSell("Item-Transfer wurde abgelehnt"); }
+      return;
     }
     const slotIndex = sale.targets.shift();
     if (slotIndex === undefined) { await this.cancelSell(); return; }

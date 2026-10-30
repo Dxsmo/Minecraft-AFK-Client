@@ -1,0 +1,16 @@
+{
+  "browserToNative": true,
+  "droppedItems": 1500,
+  "preparationDelayMs": 4000,
+  "preparationDelayApplied": true,
+  "startsMs": [
+    4625,
+    217
+  ],
+  "starts": 2,
+  "h264Frames": 23,
+  "movement": true,
+  "inventoryOpenClose": true,
+  "escapeAndRestart": true,
+  "failures": []
+}

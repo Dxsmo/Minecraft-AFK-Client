@@ -70,8 +70,12 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
             if (socket.readyState !== socket.OPEN || socket.bufferedAmount > 512 * 1024) return false;
             send(message); return true;
           }, message => { send({ type: "error", message }); socket.close(1011, "Control unavailable"); });
-          try { await remote.start(); }
-          catch (error) { send({ type: "error", message: error instanceof Error ? error.message : "Fernsteuerung nicht verfügbar." }); socket.close(1011); }
+          // Preparation may need several RPCs on a busy Pi. Do not hold the
+          // authorization queue: browser heartbeats, Stop and revocation must
+          // remain responsive while the native stream is starting.
+          void remote.start().catch(error => {
+            send({ type: "error", message: error instanceof Error ? error.message : "Fernsteuerung nicht verfügbar." }); socket.close(1011);
+          });
           return;
         }
         const input = remoteInputSchema.safeParse(body);

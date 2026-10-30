@@ -16,6 +16,9 @@ import { SoulFireBehaviors, type BehaviorConfig, type GameGateway, type BotOutpu
 import { registerRemoteControl } from "./remoteState.js";
 import { SoulFireInventory } from "./inventory.js";
 
+// Reserved by our pinned native extension, never a Minecraft inventory slot.
+export const SELL_ALL_PLAYER_SLOTS = -1048576;
+
 export type SoulFireConfig = BehaviorConfig & { host: string; port: number; username: string; auth_type: string; email?: string; edition: Edition;
   cache_dir: string; account_id?: string; version?: string; autosell_pause_after_ms?: number; autosell_resume_after_ms?: number };
 
@@ -90,7 +93,6 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   let heldButton: string | undefined, heldCrouch: boolean | undefined;
   const gateway: GameGateway = {
     remote: async active => {
-      if (active) { await setting("afk-service", "auto-button", "OFF"); await setting("afk-service", "crouch-enabled", false); }
       await setting("afk-service", "remote-control", active);
       heldButton = undefined; heldCrouch = undefined;
     },
@@ -105,6 +107,11 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
     click: async (menu, slot, action) => {
       const result = await rpc.bot.clickInventorySlot({ ...ids, expectedMenuId: menu, slot,
         clickType: action === "transfer" ? ClickType.SHIFT_LEFT_CLICK : action === "drop" ? ClickType.DROP_ALL : ClickType.LEFT_CLICK }, call());
+      if (!result.success) throw new Error(result.error || "Inventaraktion abgelehnt");
+    },
+    transferAll: async menu => {
+      const result = await rpc.bot.clickInventorySlot({ ...ids, expectedMenuId: menu, slot: SELL_ALL_PLAYER_SLOTS,
+        clickType: ClickType.SHIFT_LEFT_CLICK }, call());
       if (!result.success) throw new Error(result.error || "Inventaraktion abgelehnt");
     },
     close: async menu => {
@@ -153,7 +160,11 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
     stream = (async () => {
       for await (const frame of rpc.live.watchBotEvents({ ...ids, filter: { includeStateDeltas: true, includeInventory: true, includeChat: true, includeLifecycle: true }, heartbeatIntervalSeconds: 5 }, { signal, timeoutMs: 0 })) {
         const event = frame.event;
-        if (event.case === "resyncRequired") { inventory.reset(); position = undefined; behaviors.transition(); }
+        // Dropped telemetry is not a teleport. Pause only until the fresh
+        // inventory snapshot arrives, then reconcile existing menu ownership.
+        // Resetting automation here imposed another 2s delay on every burst
+        // of pickups/sales, and could postpone AutoSell indefinitely.
+        if (event.case === "resyncRequired") inventory.reset();
         if (event.case === "inventory" && event.value.state) { inventory.update(event.value.state); wakeScheduler?.(); }
         if (event.case === "chat") { emit({ type: "chat", sender: event.value.senderName || null, message: event.value.plainText }); behaviors.onChat(event.value.senderName || null, event.value.plainText); wakeScheduler?.(); }
         if (event.case === "snapshot") {
