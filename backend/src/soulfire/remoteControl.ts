@@ -22,6 +22,11 @@ const eventSchema = z.object({
 export const remoteInputSchema = z.object({
   type: z.literal("input"), captured: z.boolean(), events: z.array(eventSchema).max(128), requestKeyFrame: z.boolean().optional(),
   inputId: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  feedback: z.object({
+    receivedSequence: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+    deliveryDelayMs: z.number().min(0).max(60000), decoderQueueSize: z.number().int().min(0).max(64),
+    decoderRecoveries: z.number().int().min(0).max(2147483647),
+  }).strict().optional(),
 }).strict();
 export type RemoteInput = z.infer<typeof remoteInputSchema>;
 type Message = Record<string, unknown>;
@@ -48,6 +53,7 @@ export class RemoteControlSession {
   private starting = true;
   private receivedInputId = 0;
   private acknowledgedInputId = 0;
+  private feedback?: RemoteInput["feedback"];
 
   constructor(readonly accountId: string, private send: (message: Message) => boolean,
     private fail: (message: string) => void) {}
@@ -77,7 +83,7 @@ export class RemoteControlSession {
           if (frame.keyFrame) awaitKey = false;
           clearTimeout(this.startup);
           const sent = this.send({ type: "video", codec: frame.codec, keyFrame: frame.keyFrame,
-            timestamp: Number(frame.timestampUs), width: frame.width, height: frame.height,
+            timestamp: Number(frame.timestampUs), sequence: Number(frame.sequence ?? 0n), width: frame.width, height: frame.height,
             screenOpen: frame.screenOpen, data: Buffer.from(frame.data).toString("base64") });
           if (!sent) { awaitKey = true; this.keyFrame = true; }
         }
@@ -95,6 +101,7 @@ export class RemoteControlSession {
   input(input: RemoteInput): void {
     if (this.stopped) return;
     this.lastInput = Date.now(); this.captured = input.captured;
+    if (input.feedback && input.feedback.receivedSequence >= (this.feedback?.receivedSequence ?? 0)) this.feedback = input.feedback;
     if (input.inputId !== undefined) {
       if (input.inputId <= this.receivedInputId) {
         this.fail("Die Reihenfolge der Steuerungseingaben ist ungültig. Bitte erneut verbinden."); void this.stop(); return;
@@ -123,7 +130,8 @@ export class RemoteControlSession {
         const events = this.pending.splice(0, 128), requestKeyFrame = this.keyFrame; this.keyFrame = false;
         const inputId = this.pending.length ? 0 : this.receivedInputId;
         await this.rpc.pov.input({ sessionId: this.sessionId, inputToken: this.token, sequence: ++this.sequence,
-          captured: this.captured, events, requestKeyFrame, width: 480, height: 270, escape: false, audioEnabled: false },
+          captured: this.captured, events, requestKeyFrame, width: 480, height: 270, escape: false, audioEnabled: false,
+          ...(this.feedback ? { feedback: { ...this.feedback, receivedSequence: BigInt(this.feedback.receivedSequence) } } : {}) },
           // Native input itself waits up to 5s for the game thread. A shorter
           // browser-side deadline used to kill otherwise valid slow starts.
           { signal: this.abort.signal, timeoutMs: 6000 });

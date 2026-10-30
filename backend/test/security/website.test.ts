@@ -371,6 +371,44 @@ it("never starts a camera for anonymous visitors or offline accounts", async () 
   expect(offline.messages).toContainEqual({type:"offline"});
 });
 
+it("bounds camera frames per viewer until the displayed image is acknowledged", async () => {
+  const own = await socket(`/ws/accounts/${accounts[0].id}/camera`);
+  await waitFor(() => cameraSubscribe.mock.calls.length === 1);
+  const publish = (image: string) => { for (const viewer of cameraViewers.get(accounts[0].id)!) viewer.frame({ type: "frame", image, mime: "image/jpeg" }); };
+  publish("first"); await waitFor(() => own.messages.some(message => message.image === "first"));
+  expect(own.messages.at(-1)).toMatchObject({ sequence: 1, mime: "image/jpeg" });
+  for (let i = 0; i < 100; i++) publish("obsolete");
+  await new Promise(resolve => setTimeout(resolve, 40));
+  expect(own.messages.filter(message => message.type === "frame")).toHaveLength(1);
+  own.ws.send(JSON.stringify({ type: "frameAck", sequence: 12345 }));
+  await new Promise(resolve => setTimeout(resolve, 40)); publish("wrong-ack");
+  await new Promise(resolve => setTimeout(resolve, 40));
+  expect(own.messages.filter(message => message.type === "frame")).toHaveLength(1);
+  own.ws.send(JSON.stringify({ type: "frameAck", sequence: 1 }));
+  await new Promise(resolve => setTimeout(resolve, 40)); publish("latest");
+  await waitFor(() => own.messages.some(message => message.image === "latest"));
+  expect(own.messages.at(-1)).toMatchObject({ sequence: 2 });
+});
+
+it("does not let a slow camera viewer block another viewer of the same account", async () => {
+  const slow = await socket(`/ws/accounts/${accounts[0].id}/camera`), fast = await socket(`/ws/accounts/${accounts[0].id}/camera`);
+  await waitFor(() => cameraViewers.get(accounts[0].id)?.size === 2);
+  for (const viewer of cameraViewers.get(accounts[0].id)!) viewer.frame({ type: "frame", image: "first" });
+  await waitFor(() => slow.messages.some(message => message.type === "frame") && fast.messages.some(message => message.type === "frame"));
+  fast.ws.send(JSON.stringify({ type: "frameAck", sequence: 1 }));
+  await new Promise(resolve => setTimeout(resolve, 40));
+  for (const viewer of cameraViewers.get(accounts[0].id)!) viewer.frame({ type: "frame", image: "second" });
+  await waitFor(() => fast.messages.some(message => message.image === "second"));
+  expect(slow.messages.filter(message => message.type === "frame")).toHaveLength(1);
+});
+
+it("rejects malformed camera acknowledgements", async () => {
+  const own = await socket(`/ws/accounts/${accounts[0].id}/camera`);
+  await waitFor(() => cameraSubscribe.mock.calls.length === 1);
+  own.ws.send(JSON.stringify({ type: "frameAck", sequence: "1" }));
+  expect((await own.closed)[0]).toBe(4400);
+});
+
 it("validates WebSocket commands, CSRF and current account access before sending them",async()=>{
   const connection=await socket(`/ws/accounts/${accounts[0].id}`);
   await waitFor(()=>connection.messages.some(m=>m.type==="history"));

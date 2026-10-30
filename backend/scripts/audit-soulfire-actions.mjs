@@ -106,9 +106,11 @@ try {
   try {
     await wait(() => { assert.deepEqual(cameraErrors, []); return frames.every(target => target.length >= 2); });
     assert.equal(upstreams, 1);
-    const png = Buffer.from(frames[0][0].image, 'base64');
-    assert.deepEqual([...png.subarray(0, 8)], [137,80,78,71,13,10,26,10]);
-    assert.equal(png.readUInt32BE(16), 480); assert.equal(png.readUInt32BE(20), 270);
+    const jpeg = Buffer.from(frames[0][0].image, 'base64');
+    assert.equal(frames[0][0].mime, 'image/jpeg');
+    assert.deepEqual([...jpeg.subarray(0, 2)], [255,216]);
+    const header = jpeg.indexOf(Buffer.from([255,192])); assert.ok(header > 0, 'Missing JPEG baseline frame header');
+    assert.equal(jpeg.readUInt16BE(header + 7), 480); assert.equal(jpeg.readUInt16BE(header + 5), 270);
     const beforeWorldChange = frames.map(target => target.length);
     clients[0].write('respawn', { dimension: -1, difficulty: 1, gamemode: 0, levelType: 'flat' });
     await new Promise(resolve => setTimeout(resolve, 150));

@@ -1,5 +1,7 @@
 # Fernsteuerung: Eingaberückstau beim Verbinden
 
+Der anschließende Wechsel zu kleineren Live-Bildern, begrenztem Rendering und Qualitätsrückmeldungen ist im [Kamera-Latenzbericht für Controls 1.4.0](CAMERA-LATENCY-2026-10-30.md) beschrieben.
+
 Die Meldung „Die Verbindung ist zu langsam. Steuerung wurde freigegeben.“ kam aus dem eigenen Backend, sobald mehr als 256 unbearbeitete Eingabeereignisse warteten. Das war keine Messung der Internetgeschwindigkeit. Schon vor dem ersten Bild wurden Mausbewegungen gesammelt, alle 25 ms gesendet und einzeln hinter einer noch startenden oder langsamen nativen Eingabeanfrage aufgestaut. Eine schnelle Maus konnte das Limit deshalb bereits während des Verbindungsaufbaus überschreiten.
 
 ## Änderung

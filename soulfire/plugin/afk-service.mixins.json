@@ -11,7 +11,10 @@
     "SellBatchMixin",
     "CameraFrameMixin",
     "CameraItemsMixin",
-    "CameraItemCopiesMixin"
+    "CameraItemCopiesMixin",
+    "LiveCamEncodingMixin",
+    "LiveCamPacingMixin",
+    "RemotePacingMixin"
   ],
   "injectors": {
     "defaultRequire": 1

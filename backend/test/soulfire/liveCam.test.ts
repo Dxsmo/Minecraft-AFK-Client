@@ -52,6 +52,14 @@ it("keeps Java and Bedrock views separate and stops only the account whose viewe
   f.feeds.get("bedrock")!(f.frame()); await tick(); expect(bedrock.frame).toHaveBeenCalledTimes(2);
 });
 
+it("forwards compressed JPEG camera images while retaining compatibility with PNG", async () => {
+  const f = fixture(), subscriber = viewer(); f.manager.subscribe("java", subscriber); await tick();
+  f.feeds.get("java")!({ render: { imageMimeType: "image/jpeg", imageBase64: "synthetic-jpeg" } } as BotPovFrame); await tick();
+  expect(subscriber.frame).toHaveBeenLastCalledWith({ type: "frame", image: "synthetic-jpeg", mime: "image/jpeg" });
+  f.feeds.get("java")!(f.frame()); await tick();
+  expect(subscriber.frame).toHaveBeenLastCalledWith({ type: "frame", image: "synthetic-png" });
+});
+
 it("cancels an unopened camera immediately and allows reopening after its last viewer leaves", async () => {
   const f = fixture(), first = viewer(), second = viewer();
   f.manager.subscribe("java", first)(); await tick(); expect(f.source).not.toHaveBeenCalled();

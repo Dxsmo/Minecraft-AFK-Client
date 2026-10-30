@@ -1,0 +1,45 @@
+{
+  "browserToNative": true,
+  "droppedItems": 1500,
+  "preparationDelayMs": 4000,
+  "preparationDelayApplied": true,
+  "inputDelayMs": 3000,
+  "inputDelayApplied": true,
+  "mousePressure": true,
+  "maxInputsInFlight": 1,
+  "inputBatches": 140,
+  "startsMs": [
+    4866,
+    238
+  ],
+  "starts": 2,
+  "h264Frames": 202,
+  "liveFps": 4.767030601260957,
+  "remoteFps": [
+    12.490632025980515,
+    13.493253373313344
+  ],
+  "congestionCheck": true,
+  "delayedAckFrames": 4,
+  "adaptedResolution": {
+    "width": 360,
+    "height": 202
+  },
+  "cameraMime": "image/jpeg",
+  "cameraSellPeriodsMs": [
+    2017,
+    2055
+  ],
+  "transfers": 324,
+  "cameraPixels": {
+    "width": 480,
+    "height": 270,
+    "colors": 2120
+  },
+  "movement": true,
+  "inventoryOpenClose": true,
+  "escapeAndRestart": true,
+  "autoSellPausedDuringRemote": true,
+  "autoSellResumed": true,
+  "failures": []
+}

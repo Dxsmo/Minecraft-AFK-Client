@@ -1,0 +1,24 @@
+{
+  "backendTests": 491,
+  "testFiles": 50,
+  "backendBuild": true,
+  "frontendBuild": true,
+  "frontendLint": true,
+  "soulfireVersion": "2.10.6",
+  "controlsVersion": "1.4.0",
+  "nativeRuntimeVerified": true,
+  "dockerImages": [
+    "soulfire",
+    "backend",
+    "web"
+  ],
+  "softwareRendererWorkersBefore": 12,
+  "softwareRendererWorkersAfter": 2,
+  "gameFixture": "Java 1.8.8, temporary offline accounts",
+  "hardware": "M3 Pro / Docker Desktop / Linux ARM64 / llvmpipe",
+  "comparisonQuotaCpus": 2,
+  "overloadQuotaCpus": 1,
+  "productionPiTested": false,
+  "realBedrockLoginTested": false,
+  "userInternetPingMeasured": false
+}

@@ -19,6 +19,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
     let startup: ReturnType<typeof setTimeout> | undefined;
     let events: RemoteEvent[] = [], open = false, intentionalUnlock = false;
     let interactive = false, inputId = 0, inFlightInputId = 0, keyFrameRequested = false;
+    let receivedSequence = 0, timingFloor = Infinity, deliveryDelayMs = 0, decoderRecoveries = 0;
     const buttons = new Set<number>();
     function release() {
       if (disposed) return;
@@ -30,6 +31,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
       exit.current();
     }
     stop.current = release;
+    const feedback = () => receivedSequence ? { receivedSequence, deliveryDelayMs, decoderQueueSize: Math.min(64, decoder?.decodeQueueSize ?? 0), decoderRecoveries } : undefined;
     function failControl(message: string) {
       if (disposed || failed) return;
       failed = true; interactive = false; events = []; clearTimeout(startup); setError(message);
@@ -42,7 +44,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
       if (disposed || failed || socket?.readyState !== WebSocket.OPEN) return;
       if (inFlightInputId || socket.bufferedAmount > 64 * 1024 || (!events.length && !keyFrameRequested)) return;
       inFlightInputId = ++inputId;
-      socket.send(JSON.stringify({ type: "input", captured: true, events: events.splice(0, 128), requestKeyFrame: keyFrameRequested, inputId }));
+      socket.send(JSON.stringify({ type: "input", captured: true, events: events.splice(0, 128), requestKeyFrame: keyFrameRequested, inputId, feedback: feedback() }));
       keyFrameRequested = false;
     }
     function queue(event: RemoteEvent) {
@@ -72,6 +74,12 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
           return;
         }
         if (frame.type !== "video" || typeof frame.data !== "string" || frame.data.length > 4 * 1024 * 1024) return;
+        if (Number.isSafeInteger(frame.sequence) && frame.sequence > receivedSequence && Number.isFinite(frame.timestamp)) {
+          receivedSequence = frame.sequence;
+          const transit = performance.now() - frame.timestamp / 1000;
+          timingFloor = Math.min(timingFloor, transit);
+          deliveryDelayMs = Math.min(60000, Math.max(0, transit - timingFloor));
+        }
         if (open !== frame.screenOpen) {
           open = !!frame.screenOpen; setScreenOpen(open);
           if (open && document.pointerLockElement) { intentionalUnlock = true; document.exitPointerLock(); }
@@ -85,6 +93,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
               finally { video.close(); }
             },
             error: () => {
+              decoderRecoveries++;
               if (++decoderFailures >= 3) {
                 failControl("Dein Browser kann das Steuerungsbild nicht dekodieren. Bitte einen aktuellen Chrome oder Edge versuchen."); return;
               }
@@ -93,7 +102,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
           });
           decoder.configure({ codec, optimizeForLatency: true });
         }
-        if (decoder.decodeQueueSize > 4) { waitForKey = true; send(true); return; }
+        if (decoder.decodeQueueSize > 4) { decoderRecoveries++; waitForKey = true; send(true); return; }
         if (waitForKey && !frame.keyFrame) return;
         if (frame.keyFrame) waitForKey = false;
         const data = Uint8Array.from(atob(frame.data), char => char.charCodeAt(0));
@@ -165,7 +174,7 @@ export function RemoteControlPanel({ accountId, onExit }: { accountId: string; o
     const inputTimer = setInterval(() => send(), 50);
     const heartbeat = setInterval(() => {
       if (!disposed && !failed && socket.readyState === WebSocket.OPEN && socket.bufferedAmount <= 64 * 1024)
-        socket.send(JSON.stringify({ type: "input", captured: true, events: [] }));
+        socket.send(JSON.stringify({ type: "input", captured: true, events: [], feedback: feedback() }));
     }, 500);
     startup = setTimeout(() => {
       if (disposed || failed) return;

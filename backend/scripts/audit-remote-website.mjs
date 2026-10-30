@@ -75,6 +75,7 @@ const originalFetch = globalThis.fetch;
 const preparationDelayMs = Number(process.env.AFK_REMOTE_RPC_DELAY_MS || 0);
 const inputDelayMs = Number(process.env.AFK_REMOTE_INPUT_DELAY_MS || 0);
 const mousePressure = process.env.AFK_REMOTE_MOUSE_PRESSURE === '1';
+const congestionCheck = process.env.AFK_REMOTE_CONGESTION_CHECK === '1';
 let delayNextPreparation = false, preparationDelayApplied = false;
 let delayNextInput = false, inputDelayApplied = false;
 globalThis.fetch = async (input, init) => {
@@ -110,12 +111,28 @@ try {
   await app.listen({ host: '127.0.0.1', port });
   browser = await chromium.launch({ headless: true, channel: 'chrome' });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  if (congestionCheck) await page.addInitScript(() => {
+    const send = WebSocket.prototype.send;
+    window.__cameraAckDelay = 0; window.__remoteCongestion = false;
+    WebSocket.prototype.send = function(data) {
+      if (typeof data !== 'string') return send.call(this, data);
+      const message = JSON.parse(data);
+      if (message.type === 'frameAck' && window.__cameraAckDelay) {
+        const socket = this; setTimeout(() => { if (socket.readyState === WebSocket.OPEN) send.call(socket, data); }, window.__cameraAckDelay); return;
+      }
+      if (message.type === 'input' && message.feedback && window.__remoteCongestion) {
+        message.feedback.deliveryDelayMs = 800; message.feedback.decoderQueueSize = 8;
+        return send.call(this, JSON.stringify(message));
+      }
+      return send.call(this, data);
+    };
+  });
   page.on('pageerror', error => failures.push(error.message));
   const remoteFrames = [], controlClosed = [], cameraFrames = [], inputMessages = [];
   let maxInputsInFlight = 0;
   page.on('websocket', ws => {
     if (ws.url().endsWith('/camera')) ws.on('framereceived', frame => {
-      const message = JSON.parse(String(frame.payload)); if (message.type === 'frame') cameraFrames.push({ at: Date.now(), image: message.image });
+      const message = JSON.parse(String(frame.payload)); if (message.type === 'frame') cameraFrames.push({ ...message, at: Date.now() });
     });
     if (ws.url().endsWith('/control')) {
     const inFlight = new Set();
@@ -143,11 +160,26 @@ try {
   const cameraSales = sales.filter(at => at >= cameraStart);
   const cameraSellPeriodsMs = cameraSales.slice(1).map((at, i) => at - cameraSales[i]);
   assert.ok(cameraSellPeriodsMs.every(ms => ms <= 3000), `Camera delayed sales: ${cameraSellPeriodsMs}`);
+  let delayedAckFrames;
+  if (congestionCheck) {
+    assert.equal(cameraFrames.at(-1).mime, 'image/jpeg');
+    await page.evaluate(() => { window.__cameraAckDelay = 500; });
+    const before = cameraFrames.length; await page.waitForTimeout(2500); delayedAckFrames = cameraFrames.length - before;
+    assert.ok(delayedAckFrames >= 2 && delayedAckFrames <= 6, `Slow viewer was not paced: ${delayedAckFrames} frames`);
+    await page.evaluate(() => { window.__cameraAckDelay = 0; });
+    await page.waitForTimeout(700);
+  }
   const { PNG } = require('pngjs');
-  const pixels = PNG.sync.read(Buffer.from(cameraFrames.at(-1).image, 'base64'));
+  const snapshot = await image.evaluate(img => {
+    const canvas = document.createElement('canvas'); canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+    canvas.getContext('2d').drawImage(img, 0, 0);
+    return canvas.toDataURL('image/png').split(',')[1];
+  });
+  const pixels = PNG.sync.read(Buffer.from(snapshot, 'base64'));
   const colors = new Set(); for (let i = 0; i < pixels.data.length; i += 64) colors.add(pixels.data.subarray(i, i + 3).toString('hex'));
   assert.ok(colors.size > 5, 'Camera returned a blank image');
   const durations = [], remoteFps = [];
+  let adaptedResolution;
   for (let run = 0; run < 2; run++) {
     delayNextPreparation = run === 0 && preparationDelayMs > 0;
     const started = Date.now(); await image.click();
@@ -172,6 +204,12 @@ try {
     remoteFps.push((remoteFrames.length - remoteBefore) * 1000 / (Date.now() - remoteStart));
     assert.ok(remoteFps.at(-1) >= 2, `Remote camera too slow: ${remoteFps.at(-1)}fps`);
     assert.equal(sales.length, pausedSales, 'Native selling must pause during remote control');
+    if (congestionCheck && run === 0) {
+      const before = remoteFrames.length; await page.evaluate(() => { window.__remoteCongestion = true; });
+      await wait(() => remoteFrames.slice(before).some(frame => frame.width < 480));
+      const adapted = remoteFrames.slice(before).find(frame => frame.width < 480); adaptedResolution = { width: adapted.width, height: adapted.height };
+      await page.evaluate(() => { window.__remoteCongestion = false; });
+    }
     const before = moves.at(-1)?.z ?? .5;
     await page.keyboard.down('w'); await new Promise(resolve => setTimeout(resolve, 400)); await page.keyboard.up('w');
     await wait(() => moves.some(move => move.z > before + .05));
@@ -187,7 +225,7 @@ try {
   assert.equal(inputDelayApplied, inputDelayMs > 0);
   assert.ok(maxInputsInFlight <= 1, `Input backpressure failed: ${maxInputsInFlight} batches in flight`);
   console.log(JSON.stringify({ browserToNative: true, droppedItems, preparationDelayMs, preparationDelayApplied, inputDelayMs, inputDelayApplied, mousePressure, maxInputsInFlight, inputBatches: inputMessages.filter(message => message.inputId).length, startsMs: durations, starts: durations.length, h264Frames: remoteFrames.length,
-    liveFps, remoteFps, cameraSellPeriodsMs, transfers, cameraPixels: { width: pixels.width, height: pixels.height, colors: colors.size },
+    liveFps, remoteFps, congestionCheck, delayedAckFrames, adaptedResolution, cameraMime: cameraFrames[0].mime, cameraSellPeriodsMs, transfers, cameraPixels: { width: pixels.width, height: pixels.height, colors: colors.size },
     movement: true, inventoryOpenClose: true, escapeAndRestart: true, autoSellPausedDuringRemote: true, autoSellResumed: true, failures }, null, 2));
 } finally {
   await browser?.close(); await clientManager.shutdownAll(); await app?.close();

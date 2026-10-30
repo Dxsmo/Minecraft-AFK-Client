@@ -16,6 +16,9 @@ COPY entrypoint.sh /opt/soulfire/entrypoint.sh
 RUN chmod +x /opt/soulfire/entrypoint.sh
 WORKDIR /data
 ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=65 -XX:+UseG1GC"
+# Keep software rendering from spawning a worker per host CPU and crowding out
+# account ticks/network handling. Operators can override this Mesa setting.
+ENV LP_NUM_THREADS=2
 VOLUME ["/data"]
 EXPOSE 38765
 ENTRYPOINT ["/opt/soulfire/entrypoint.sh"]

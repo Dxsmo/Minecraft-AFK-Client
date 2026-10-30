@@ -1,0 +1,147 @@
+{
+  "clients": 2,
+  "droppedItems": 1500,
+  "secondsPerPhase": 8,
+  "phases": {
+    "idle": {
+      "bots": [
+        {
+          "keepAlive": {
+            "n": 40,
+            "medianMs": 1.3,
+            "p95Ms": 2.06,
+            "maxMs": 2.07
+          },
+          "gameResponse": {
+            "n": 16,
+            "medianMs": 6.49,
+            "p95Ms": 10.82,
+            "maxMs": 10.82
+          }
+        },
+        {
+          "keepAlive": {
+            "n": 40,
+            "medianMs": 1.22,
+            "p95Ms": 4.55,
+            "maxMs": 10.59
+          },
+          "gameResponse": {
+            "n": 16,
+            "medianMs": 6.94,
+            "p95Ms": 11.58,
+            "maxMs": 11.58
+          }
+        }
+      ],
+      "frames": 0,
+      "fps": 0,
+      "kilobitsPerSecond": 0
+    },
+    "live": {
+      "bots": [
+        {
+          "keepAlive": {
+            "n": 40,
+            "medianMs": 1,
+            "p95Ms": 1.68,
+            "maxMs": 13.71
+          },
+          "gameResponse": {
+            "n": 16,
+            "medianMs": 23.85,
+            "p95Ms": 52.82,
+            "maxMs": 52.82
+          }
+        },
+        {
+          "keepAlive": {
+            "n": 40,
+            "medianMs": 1,
+            "p95Ms": 1.98,
+            "maxMs": 2.7
+          },
+          "gameResponse": {
+            "n": 16,
+            "medianMs": 17.29,
+            "p95Ms": 49.08,
+            "maxMs": 49.08
+          }
+        }
+      ],
+      "frames": 39,
+      "fps": 4.875,
+      "kilobitsPerSecond": 3378
+    },
+    "remote": {
+      "bots": [
+        {
+          "keepAlive": {
+            "n": 40,
+            "medianMs": 1.09,
+            "p95Ms": 6.5,
+            "maxMs": 20.79
+          },
+          "gameResponse": {
+            "n": 16,
+            "medianMs": 12.67,
+            "p95Ms": 43.54,
+            "maxMs": 43.54
+          }
+        },
+        {
+          "keepAlive": {
+            "n": 40,
+            "medianMs": 1.09,
+            "p95Ms": 1.73,
+            "maxMs": 1.78
+          },
+          "gameResponse": {
+            "n": 16,
+            "medianMs": 16.66,
+            "p95Ms": 36.63,
+            "maxMs": 36.63
+          }
+        }
+      ],
+      "frames": 120,
+      "fps": 15,
+      "kilobitsPerSecond": 692
+    },
+    "afterCamera": {
+      "bots": [
+        {
+          "keepAlive": {
+            "n": 40,
+            "medianMs": 1.25,
+            "p95Ms": 2.57,
+            "maxMs": 2.72
+          },
+          "gameResponse": {
+            "n": 16,
+            "medianMs": 8.23,
+            "p95Ms": 15.39,
+            "maxMs": 15.39
+          }
+        },
+        {
+          "keepAlive": {
+            "n": 40,
+            "medianMs": 1.21,
+            "p95Ms": 11.03,
+            "maxMs": 11.79
+          },
+          "gameResponse": {
+            "n": 16,
+            "medianMs": 18.55,
+            "p95Ms": 121.49,
+            "maxMs": 121.49
+          }
+        }
+      ],
+      "frames": 0,
+      "fps": 0,
+      "kilobitsPerSecond": 0
+    }
+  }
+}

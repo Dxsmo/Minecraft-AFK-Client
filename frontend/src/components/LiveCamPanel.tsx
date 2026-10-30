@@ -7,6 +7,7 @@ type CameraState = "loading" | "live" | "error";
 export function LiveCamPanel({ accountId, online }: { accountId: string; online: boolean }) {
   const [remote, setRemote] = useState(false);
   const image = useRef<HTMLImageElement>(null);
+  const acknowledge = useRef<() => void>(() => {});
   const [visible, setVisible] = useState(() => document.visibilityState === "visible");
   const [state, setState] = useState<CameraState>("loading");
   const [error, setError] = useState("");
@@ -40,7 +41,11 @@ export function LiveCamPanel({ accountId, online }: { accountId: string; online:
           const message = JSON.parse(event.data);
           if (message.type === "frame" && typeof message.image === "string" && message.image.length <= 2 * 1024 * 1024) {
             clearTimeout(firstFrame);
-            if (img) img.src = `data:image/png;base64,${message.image}`;
+            acknowledge.current = () => {
+              if (!disposed && socket === current && current.readyState === WebSocket.OPEN && Number.isSafeInteger(message.sequence) && message.sequence > 0)
+                current.send(JSON.stringify({ type: "frameAck", sequence: message.sequence }));
+            };
+            if (img) img.src = `data:${message.mime === "image/jpeg" ? "image/jpeg" : "image/png"};base64,${message.image}`;
           } else if (message.type === "loading") {
             setState("loading"); setError("");
           } else if (message.type === "error") {
@@ -63,6 +68,7 @@ export function LiveCamPanel({ accountId, online }: { accountId: string; online:
     connect();
     return () => {
       disposed = true;
+      acknowledge.current = () => {};
       clearTimeout(retry); clearTimeout(firstFrame);
       socket?.close();
       img?.removeAttribute("src");
@@ -90,7 +96,7 @@ export function LiveCamPanel({ accountId, online }: { accountId: string; online:
       {live && <p className="px-4 py-2 text-xs" style={{ color: "var(--text-muted)" }}>Ins Bild klicken zum Fernsteuern · Esc zum Beenden</p>}
       <div className="relative aspect-video w-full bg-black">
         <img ref={image} alt="Liveansicht des Minecraft-Accounts" className="h-full w-full cursor-pointer object-contain" hidden={!live} onClick={() => setRemote(true)} title="Klicken zum Fernsteuern"
-          onLoad={() => setState("live")} />
+          onLoad={() => { acknowledge.current(); setState("live"); }} />
         {!live && <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-5 text-center">
           {online && visible && state === "loading" && <span className="spinner" />}
           <p role="status" className="max-w-md text-sm" style={{ color: "var(--text-muted)" }}>{message}</p>

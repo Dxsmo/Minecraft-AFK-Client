@@ -67,7 +67,7 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
           await recordAuditLog({ userId: controllerUserId, action: "ACCOUNT_REMOTE_START", targetType: "MinecraftAccount", targetId: accountId });
           if (socket.readyState !== socket.OPEN) return;
           remote = new RemoteControlSession(accountId, message => {
-            if (socket.readyState !== socket.OPEN || socket.bufferedAmount > 512 * 1024) return false;
+            if (socket.readyState !== socket.OPEN || socket.bufferedAmount > 64 * 1024) return false;
             send(message); return true;
           }, message => { send({ type: "error", message }); socket.close(1011, "Control unavailable"); });
           // Preparation may need several RPCs on a busy Pi. Do not hold the
@@ -93,6 +93,16 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
     const connection = authorizeSocket(socket, req, { accountId });
     if (!connection) return;
     const { run, send, subscribe } = connection;
+    let sentSequence = 0, pendingSequence = 0, pendingSince = 0;
+    let messages = 0, windowStart = Date.now();
+    socket.on("message", (raw, binary) => {
+      if (Date.now() - windowStart >= 1000) { messages = 0; windowStart = Date.now(); }
+      if (binary || Buffer.byteLength(raw as Buffer) > 256 || ++messages > 30) { socket.close(4429, "Camera input limit"); return; }
+      let message: any;
+      try { message = JSON.parse(raw.toString()); } catch { socket.close(4400, "Invalid camera acknowledgement"); return; }
+      if (message?.type !== "frameAck" || !Number.isSafeInteger(message.sequence) || message.sequence < 1) { socket.close(4400, "Invalid camera acknowledgement"); return; }
+      run(() => { if (message.sequence === pendingSequence) pendingSequence = 0; });
+    });
     // Complete the current account permission check before touching SoulFire.
     run(() => {
       if (socket.readyState !== socket.OPEN) return;
@@ -105,9 +115,17 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
       subscribe(cameras.subscribe(accountId, {
         loading: () => run(() => send({ type: "loading" })),
         frame: frame => {
-          if (pending || socket.readyState !== socket.OPEN || socket.bufferedAmount > 512 * 1024) return;
+          if (pending || socket.readyState !== socket.OPEN) return;
           pending = true;
-          run(() => { try { send(frame); } finally { pending = false; } });
+          run(() => {
+            try {
+              // Recheck access even while waiting for a slow viewer's ACK.
+              if (pendingSequence && Date.now() - pendingSince > 15000) { socket.close(1000, "Camera viewer stopped responding"); return; }
+              if (pendingSequence || socket.bufferedAmount > 64 * 1024) return;
+              pendingSequence = ++sentSequence; pendingSince = Date.now(); send({ ...frame, sequence: pendingSequence });
+            }
+            finally { pending = false; }
+          });
         },
         error: error => {
           req.log.warn({ err: error, accountId }, "Live cam stream stopped");

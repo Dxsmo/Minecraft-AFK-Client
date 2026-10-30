@@ -149,6 +149,23 @@ it("validates input size, coordinates, key codes and reserves Escape for leaving
   expect(glfwKey("KeyW")).toBe(87); expect(glfwKey("KeyE")).toBe(69); expect(glfwKey("F3")).toBe(292);
   expect(glfwKey("Escape")).toBeUndefined();
 });
+it("passes browser congestion feedback to native quality adaptation without resetting it on empty heartbeats", async () => {
+  const f = fixture(); await f.session.start(); await tick();
+  const feedback = { receivedSequence: 42, deliveryDelayMs: 380, decoderQueueSize: 3, decoderRecoveries: 1 };
+  f.session.input(remoteInputSchema.parse({ type: "input", captured: true, events: [], feedback })); await tick();
+  expect(f.rpc.pov.input).toHaveBeenLastCalledWith(expect.objectContaining({ feedback: { ...feedback, receivedSequence: 42n } }), expect.anything());
+  f.session.input(remoteInputSchema.parse({ type: "input", captured: true, events: [] })); await tick();
+  expect(f.rpc.pov.input).toHaveBeenLastCalledWith(expect.objectContaining({ feedback: { ...feedback, receivedSequence: 42n } }), expect.anything());
+});
+it("bounds browser quality feedback and ignores older frame reports", async () => {
+  const f = fixture(); await f.session.start(); await tick();
+  const feedback = { receivedSequence: 42, deliveryDelayMs: 300, decoderQueueSize: 0, decoderRecoveries: 0 };
+  const input = (value: unknown) => remoteInputSchema.safeParse({ type: "input", captured: true, events: [], feedback: value });
+  for (const invalid of [{ ...feedback, deliveryDelayMs: -1 }, { ...feedback, deliveryDelayMs: Infinity }, { ...feedback, decoderQueueSize: 1000000 }, { ...feedback, receivedSequence: 0 }]) expect(input(invalid).success).toBe(false);
+  f.session.input(input(feedback).data!); await tick();
+  f.session.input(input({ ...feedback, receivedSequence: 41, deliveryDelayMs: 0 }).data!); await tick();
+  expect(f.rpc.pov.input).toHaveBeenLastCalledWith(expect.objectContaining({ feedback: { ...feedback, receivedSequence: 42n } }), expect.anything());
+});
 it("restores automation even when preparing native control fails halfway", async () => {
   const f = fixture(); mocked.active.mockRejectedValueOnce(new Error("native unavailable"));
   await expect(f.session.start()).rejects.toThrow("native unavailable");

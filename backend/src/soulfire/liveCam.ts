@@ -7,7 +7,7 @@ import { soulFireRpc } from "./rpc.js";
 import type { BotPovFrame } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
 
 export const LIVE_CAM_OPTIONS = { width: 480, height: 270, maxDistance: 32, intervalMs: 150, includeHud: true, includeHands: true } as const;
-export type CameraFrame = { type: "frame"; image: string };
+export type CameraFrame = { type: "frame"; image: string; mime?: "image/jpeg" };
 type Viewer = { frame: (frame: CameraFrame) => void; loading?: () => void; error: (error: unknown) => void };
 type Stream = { viewers: Set<Viewer>; abort: AbortController; done: Promise<void> };
 type FrameSource = (accountId: string, signal: AbortSignal) => AsyncIterable<BotPovFrame>;
@@ -40,8 +40,8 @@ export class LiveCamStreams {
             for await (const frame of this.source(accountId, current.abort.signal)) {
               if (current.abort.signal.aborted) return;
               const render = frame.render;
-              if (!render || render.imageMimeType !== "image/png" || !render.imageBase64 || render.imageBase64.length > 2 * 1024 * 1024) continue;
-              const message: CameraFrame = { type: "frame", image: render.imageBase64 };
+              if (!render || !["image/png", "image/jpeg"].includes(render.imageMimeType) || !render.imageBase64 || render.imageBase64.length > 2 * 1024 * 1024) continue;
+              const message: CameraFrame = { type: "frame", image: render.imageBase64, ...(render.imageMimeType === "image/jpeg" ? { mime: "image/jpeg" as const } : {}) };
               for (const recipient of current.viewers) {
                 try { recipient.frame(message); }
                 catch (error) {
