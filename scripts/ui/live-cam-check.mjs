@@ -9,8 +9,9 @@ const credentials = process.env.UI_CREDENTIALS_FILE
   ? Object.fromEntries((await readFile(process.env.UI_CREDENTIALS_FILE, 'utf8')).trim().split('\n').map(line => {
     const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)];
   })) : {};
-const username = process.env.UI_USERNAME ?? credentials.INITIAL_ADMIN_USERNAME;
-const password = process.env.UI_PASSWORD ?? credentials.INITIAL_ADMIN_PASSWORD;
+const fixture = process.env.UI_FIXTURE === '1';
+const username = process.env.UI_USERNAME ?? credentials.INITIAL_ADMIN_USERNAME ?? (fixture ? 'CameraFixture' : undefined);
+const password = process.env.UI_PASSWORD ?? credentials.INITIAL_ADMIN_PASSWORD ?? (fixture ? 'fixture-password' : undefined);
 assert.ok(username && password, 'Provide website test credentials');
 const browser = await chromium.launch({ headless: true, channel: 'chrome' });
 const waitFor = async check => {
@@ -23,10 +24,11 @@ const waitFor = async check => {
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const requests = [], cameras = [], errors = [];
+  if (fixture) await (await import('./live-cam-fixture.mjs')).installLiveCamFixture(page, cameras);
   page.on('request', request => requests.push(request.url()));
   page.on('pageerror', error => errors.push(error.message));
   page.on('websocket', socket => {
-    if (!socket.url().endsWith('/camera')) return;
+    if (fixture || !socket.url().endsWith('/camera')) return;
     const entry = { url: socket.url(), frames: 0, closed: false }; cameras.push(entry);
     socket.on('close', () => { entry.closed = true; });
     socket.on('framereceived', frame => {
@@ -88,7 +90,7 @@ try {
   await waitFor(() => cameras.every(camera => camera.closed));
   assert.equal(cameras.some(camera => camera.url.includes(offline.id)), false);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ javaLiveFrames: true, bedrockLiveFrames: true, lazyLoaded: true,
+  console.log(JSON.stringify({ fixture, javaLiveFrames: true, bedrockLiveFrames: true, lazyLoaded: true,
     stopsOnTabChange: true, hiddenPagePauses: true, accountIsolation: true, offlineDoesNotRender: true,
     mobileOverflow: false, pageErrors: errors.length }));
 } finally { await browser.close(); }

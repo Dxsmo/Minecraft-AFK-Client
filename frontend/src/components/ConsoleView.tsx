@@ -1,4 +1,5 @@
-import { memo, useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useCallback, useLayoutEffect, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ConsoleLogEntry } from "../lib/types";
 
 const TYPE_STYLES: Record<ConsoleLogEntry["type"], string> = {
@@ -32,61 +33,81 @@ const ConsoleRow = memo(function ConsoleRow({ log }: { log: ConsoleLogEntry }) {
 
 export const ConsoleView = memo(function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLogEntry[]; className?: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  // Tracks whether the user is (roughly) scrolled to the bottom already, so we only
-  // auto-follow new output when they haven't scrolled up to read history.
-  const stickToBottomRef = useRef(true);
-  const previousViewRef = useRef<{ firstId?: string; height: number; top: number }>({ height: 0, top: 0 });
-
+  const initialized = useRef(false);
+  const following = useRef(true);
+  const adjusting = useRef(false);
+  const frame = useRef<number | undefined>(undefined);
+  const settled = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
+    count: logs.length,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => 24,
+    getItemKey: useCallback((index: number) => logs[index].id, [logs]),
+    anchorTo: "end",
+    followOnAppend: true,
+    scrollEndThreshold: 48,
+    overscan: 12,
+    directDomUpdates: true,
+    onChange: (instance, sync) => {
+      if (sync || !following.current || frame.current !== undefined) return;
+      frame.current = requestAnimationFrame(() => {
+        frame.current = undefined;
+        if (!following.current) return;
+        adjusting.current = true;
+        instance.scrollToEnd();
+        clearTimeout(settled.current);
+        settled.current = setTimeout(() => { adjusting.current = false; }, 150);
+      });
+    },
+  });
   useLayoutEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+    const element = containerRef.current;
+    if (!element) return;
+    let width = element.clientWidth;
     const observer = new ResizeObserver(() => {
-      if (stickToBottomRef.current) el.scrollTop = el.scrollHeight;
-      previousViewRef.current.height = el.scrollHeight;
-      previousViewRef.current.top = el.scrollTop;
+      if (width !== element.clientWidth) { width = element.clientWidth; virtualizer.measure(); }
+      if (following.current) {
+        adjusting.current = true; virtualizer.scrollToEnd();
+        clearTimeout(settled.current);
+        settled.current = setTimeout(() => { adjusting.current = false; }, 150);
+      }
     });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  // Preserve the reading position when an older page is inserted above it.
+    observer.observe(element);
+    return () => {
+      observer.disconnect(); if (frame.current !== undefined) cancelAnimationFrame(frame.current);
+      frame.current = undefined; clearTimeout(settled.current); adjusting.current = false;
+    };
+  }, [virtualizer]);
   useLayoutEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const previous = previousViewRef.current;
-    if (previous.firstId && logs[0]?.id !== previous.firstId && logs.some((log) => log.id === previous.firstId)) {
-      el.scrollTop = previous.top + el.scrollHeight - previous.height;
+    if (!initialized.current && logs.length) {
+      initialized.current = true;
+      virtualizer.scrollToEnd();
     }
-    previousViewRef.current = { firstId: logs[0]?.id, height: el.scrollHeight, top: el.scrollTop };
-  }, [logs]);
-
-  // Key the auto-follow on the newest entry's id, not the array length: the log
-  // buffer is capped (ring buffer), so once it's full `length` stops changing
-  // and a length-based effect would never fire again — freezing the scroll.
-  const lastLogId = logs.length > 0 ? logs[logs.length - 1].id : null;
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || !stickToBottomRef.current) return;
-    // Scroll only this container - never the page/ancestors (unlike scrollIntoView).
-    el.scrollTop = el.scrollHeight;
-    previousViewRef.current.top = el.scrollTop;
-  }, [lastLogId]);
-
-  const handleScroll = () => {
-    const el = containerRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distanceFromBottom < 48;
-    previousViewRef.current.top = el.scrollTop;
-  };
+  }, [logs.length, virtualizer]);
 
   return (
-    <div ref={containerRef} onScroll={handleScroll} className={`console-output ${className}`}>
+    <div ref={containerRef} className={`console-output ${className}`} style={{ overflowAnchor: "none" }}
+      onWheel={event => { adjusting.current = false; if (event.deltaY < 0) following.current = false; }}
+      onPointerDown={() => { adjusting.current = false; }} onTouchStart={() => { adjusting.current = false; }}
+      onKeyDown={() => { adjusting.current = false; }}
+      onScroll={event => {
+        if (!adjusting.current) {
+          const element = event.currentTarget;
+          following.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+        }
+      }}
+      role="log" aria-label="Account-Konsole" aria-live="off" tabIndex={0} data-log-count={logs.length} data-last-log-id={logs.at(-1)?.id}>
       {logs.length === 0 && (
         <p style={{ color: "#52525b" }}>No console output yet. Start the client to see live output.</p>
       )}
-      {logs.map((log) => <ConsoleRow key={log.id} log={log} />)}
+      <div ref={virtualizer.containerRef} style={{ position: "relative", width: "100%" }}>
+        {virtualizer.getVirtualItems().map(item => (
+          <div key={item.key} data-index={item.index} data-log-id={logs[item.index].id} ref={virtualizer.measureElement}
+            style={{ position: "absolute", top: 0, left: 0, width: "100%" }}>
+            <ConsoleRow log={logs[item.index]} />
+          </div>
+        ))}
+      </div>
     </div>
   );
 });

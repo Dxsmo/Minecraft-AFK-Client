@@ -67,3 +67,12 @@ it("does not forward invalid or oversized images and reports upstream failures t
   expect(subscriber.frame).not.toHaveBeenCalled();
   f.feeds.get("java")!(undefined); await tick(); expect(subscriber.error).toHaveBeenCalledOnce();
 });
+
+it("isolates a failing viewer and its error handler without stopping another viewer", async () => {
+  const f = fixture(), good = viewer();
+  const broken = { frame: vi.fn(() => { throw new Error("closed socket"); }), error: vi.fn(() => { throw new Error("failed cleanup"); }) };
+  f.manager.subscribe("java", broken); f.manager.subscribe("java", good); await tick();
+  f.feeds.get("java")!(f.frame()); await tick(); expect(good.frame).toHaveBeenCalledTimes(1);
+  f.feeds.get("java")!(f.frame()); await tick(); expect(good.frame).toHaveBeenCalledTimes(2);
+  expect(broken.frame).toHaveBeenCalledTimes(1); expect(f.stopped).toEqual([]);
+});

@@ -6,7 +6,7 @@ import type { ZodType } from "zod";
  * field-level error details and returns undefined so the caller can `return`.
  */
 export function parseOrReject<T>(
-  schema: ZodType<T, any, any>,
+  schema: ZodType<T>,
   data: unknown,
   reply: FastifyReply,
 ): T | undefined {

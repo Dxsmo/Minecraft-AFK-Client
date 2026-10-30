@@ -7,7 +7,7 @@ import { Code, ConnectError } from "@connectrpc/connect";
 import { AccountTypeCredentials } from "@soulfiremc/sdk/generated/soulfire/common_pb";
 import { BotDesiredState, BotRuntimeState, ClickType } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
 import { QuerySort } from "@soulfiremc/sdk/generated/soulfire/world_pb";
-import { BotActionStatus, BotLifecycleKind } from "@soulfiremc/sdk/generated/soulfire/bot_live_pb";
+import { BotActionStatus, BotLifecycleKind, Hand } from "@soulfiremc/sdk/generated/soulfire/bot_live_pb";
 import { protocolOptions, selectProtocol, javaServerProtocol } from "./versions.js";
 import { soulFireInstanceName } from "./instanceName.js";
 import { soulFireRpc } from "./rpc.js";
@@ -118,8 +118,18 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
       }, call());
       const position = found.blocks[0]?.position;
       if (!position) return false;
-      const interaction = await rpc.live.interactBlock({ ...ids, position, sneaking: crouch }, call());
-      return interaction.result?.status === BotActionStatus.COMPLETED;
+      const origin = player.player.position;
+      const eyeHeight = crouch || /crouch|sneak/i.test(player.player.pose) ? 1.27 : 1.62;
+      const hit = await rpc.world.raycast({ ...ids, maximumDistance: 4.5, includeEntities: false,
+        direction: { x: position.x + 0.5 - origin.x, y: position.y + 0.5 - origin.y - eyeHeight, z: position.z + 0.5 - origin.z },
+      }, call());
+      const target = hit.block?.position;
+      if (!hit.blockFace || !target || target.x !== position.x || target.y !== position.y || target.z !== position.z) return false;
+      const previousMenu = inventory.read().menuId;
+      const interaction = await rpc.live.interactBlock({ ...ids, position, face: hit.blockFace, hand: Hand.MAIN, sneaking: crouch }, call());
+      // A plugin-owned spawner GUI can open after vanilla reports PASS. The
+      // packet was sent; the actual new container is the authoritative reply.
+      return interaction.result?.status === BotActionStatus.COMPLETED || await inventory.waitForContainer(previousMenu, signal);
     },
   };
   const behaviors = new SoulFireBehaviors(config, gateway, emit);

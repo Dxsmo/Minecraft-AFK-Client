@@ -4,7 +4,7 @@ import { EditorContent, useEditor, useEditorState, type JSONContent } from "@tip
 import StarterKit from "@tiptap/starter-kit";
 import TextAlign from "@tiptap/extension-text-align";
 import { api, ApiError } from "../lib/api";
-import { useAuth } from "../lib/auth";
+import { useAuth } from "../lib/useAuth";
 import type { Note, NoteGrant, NoteSummary } from "../lib/notes";
 import { NoteAccessDialog } from "./NoteAccessDialog";
 

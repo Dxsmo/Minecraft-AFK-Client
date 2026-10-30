@@ -1,0 +1,67 @@
+{
+  "scenarios": [
+    {
+      "width": 320,
+      "groups": [
+        "user:bob",
+        "user:other-admin",
+        "user:admin",
+        "unassigned",
+        "user:new"
+      ],
+      "closingMidHeight": 115.515625,
+      "openingMidHeight": 92.4375,
+      "animation": "0.5s"
+    },
+    {
+      "width": 390,
+      "groups": [
+        "user:bob",
+        "user:other-admin",
+        "user:admin",
+        "unassigned",
+        "user:new"
+      ],
+      "closingMidHeight": 115.546875,
+      "openingMidHeight": 92.421875,
+      "animation": "0.5s"
+    },
+    {
+      "width": 768,
+      "groups": [
+        "user:bob",
+        "user:other-admin",
+        "user:admin",
+        "unassigned",
+        "user:new"
+      ],
+      "closingMidHeight": 137.9375,
+      "openingMidHeight": 92.421875,
+      "animation": "0.5s"
+    },
+    {
+      "width": 1280,
+      "groups": [
+        "user:bob",
+        "user:other-admin",
+        "user:admin",
+        "unassigned",
+        "user:new"
+      ],
+      "closingMidHeight": 137.734375,
+      "openingMidHeight": 110.171875,
+      "animation": "0.5s"
+    }
+  ],
+  "deviceChecks": [
+    "legacy browser settings imported and cleaned up",
+    "admin profile restored on a fresh mobile device before rendering cards",
+    "individual edits from different devices preserve other blur settings",
+    "failed writes are visible and can be retried",
+    "rejected outdated orders recover without blocking later changes",
+    "rapid edits stay ordered and finish after page navigation",
+    "normal-user ordering and blur restored on another device independently of admins"
+  ],
+  "unavailableStorage": "usable",
+  "errors": []
+}

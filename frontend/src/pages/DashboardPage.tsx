@@ -1,7 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
-import { useAuth } from "../lib/auth";
+import { useAuth } from "../lib/useAuth";
 import { useDashboardSocket } from "../lib/sockets";
 import type { DashboardAccount, ManagedUser } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";

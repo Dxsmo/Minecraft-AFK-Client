@@ -17,7 +17,7 @@ import signal
 import statistics
 import time
 
-GROUPS = ("java", "bedrock", "backend", "backend-helper", "web", "tunnel")
+GROUPS = ("soulfire", "java", "bedrock", "backend", "backend-helper", "web", "tunnel")
 MIB = 1024 ** 2
 
 
@@ -53,6 +53,8 @@ def classify(argv):
     args = [arg.replace("\\", "/") for arg in argv[1:]]
     if executable == "azalea-bot":
         return "java"
+    if executable == "java" and any(Path(arg).name.startswith("SoulFireDedicated") and arg.endswith(".jar") for arg in args):
+        return "soulfire"  # One shared JVM; never equate this with one account.
     if executable in ("node", "nodejs"):
         if any(arg.endswith(("/bedrock-bot/index.js", "/bedrock-bot/index.ts")) for arg in args):
             return "bedrock"
@@ -158,7 +160,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--duration", type=float, default=600, help="Seconds (default: 600)")
     parser.add_argument("--interval", type=float, default=2, help="Sample interval in seconds")
-    parser.add_argument("--backend-pid", type=int, help="Scope bots/helpers to this backend host PID")
+    parser.add_argument("--backend-pid", type=int, help="Legacy descendant scope; omit to include the separate SoulFire JVM")
     parser.add_argument("--label", default="existing-live-workload")
     parser.add_argument("--output", required=True, help="New JSON file (never overwrites an existing file)")
     args = parser.parse_args()

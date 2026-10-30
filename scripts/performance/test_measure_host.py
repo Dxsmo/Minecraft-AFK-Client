@@ -30,6 +30,8 @@ class MetricsTest(unittest.TestCase):
 
     def test_classification_never_needs_account_tokens_or_names(self):
         self.assertEqual(sampler.classify(["/app/azalea-bot"]), "java")
+        self.assertEqual(sampler.classify(["/opt/java/bin/java", "-Xmx4g", "-jar", "/opt/soulfire/SoulFireDedicated.jar"]), "soulfire")
+        self.assertIsNone(sampler.classify(["java", "-jar", "/opt/other-service.jar"]))
         self.assertEqual(sampler.classify(["node", "dist/bedrock-bot/index.js"]), "bedrock")
         self.assertEqual(sampler.classify(["node", "--enable-source-maps", "/app/dist/server.js"]), "backend")
         self.assertIsNone(sampler.classify(["node", "some-other-application.js"]))

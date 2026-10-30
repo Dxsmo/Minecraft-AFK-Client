@@ -47,6 +47,7 @@ try {
       await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) });
     });
     await page.addInitScript(({ count, account }) => {
+      const historyTime = Date.now(); // Persisted rows retain their timestamps across reconnects.
       window.__sockets = [];
       window.__formatCalls = 0;
       const format = Date.prototype.toLocaleTimeString;
@@ -64,7 +65,7 @@ try {
             if (url.endsWith('/ws/accounts/bench')) {
               window.__historyStart = performance.now();
               this.deliver({ type: 'history', logs: Array.from({ length: count }, (_, i) => ({
-                id: `line-${i}`, minecraftAccountId: 'bench', type: 'CHAT', message: `History line ${i}`, createdAt: new Date(Date.now() - (count - i) * 1000).toISOString(),
+                id: `line-${i}`, minecraftAccountId: 'bench', type: 'CHAT', message: `History line ${i}`, createdAt: new Date(historyTime - (count - i) * 1000).toISOString(),
               })) });
               this.deliver({ type: 'status', status: account });
             }
@@ -81,8 +82,10 @@ try {
     await page.locator('input[type="password"]').fill('test');
     await page.locator('button[type="submit"]').click();
     await page.locator('a[href="/accounts/bench?tab=console"]').first().click();
-    await page.waitForFunction(n => document.querySelectorAll('.console-output > div').length === n, count);
+    await page.waitForFunction(n => +document.querySelector('.console-output')?.dataset.logCount === n, count);
+    await page.waitForFunction(() => document.querySelector('.console-row'));
     const historyMs = await page.evaluate(() => performance.now() - window.__historyStart);
+    if (process.env.PERF_DEBUG) console.error('history ready', count, historyMs);
     const layouts = [];
     for (const viewport of [{ width: 1365, height: 600 }, { width: 1365, height: 768 }, { width: 1365, height: 900 }, { width: 1920, height: 1080 }, { width: 390, height: 667 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport);
@@ -92,12 +95,13 @@ try {
         const el = document.querySelector('.console-output');
         const style = getComputedStyle(el);
         const earnings = document.querySelector('[aria-label="Sell earnings"]');
+        const bottom = earnings ?? document.querySelector('.account-command');
         return {
           consoleHeight: el.clientHeight,
-          earningsHeight: earnings.getBoundingClientRect().height,
+          earningsHeight: earnings?.getBoundingClientRect().height ?? 0,
           visibleLines: +((el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)) / parseFloat(style.lineHeight)).toFixed(1),
           pageOverflow: document.documentElement.scrollHeight - innerHeight,
-          bottomGap: innerHeight - earnings.getBoundingClientRect().bottom,
+          bottomGap: innerHeight - bottom.getBoundingClientRect().bottom - (document.querySelector('.mobile-nav')?.getBoundingClientRect().height ?? 0),
           expectedBottomGap: parseFloat(getComputedStyle(document.querySelector('main')).paddingBottom),
         };
       });
@@ -106,6 +110,8 @@ try {
         throw new Error(`Account page does not fit the viewport: ${JSON.stringify(layout)}`);
       }
       if (process.env.PERF_VERIFY === '1' && layout.consoleHeight < layout.earningsHeight * 2) throw new Error('Closed graph does not leave most space to the console');
+      // Compact layouts deliberately omit earnings; still check their console fit.
+      if (!layout.earningsHeight) continue;
       await page.locator('[aria-label="Sell earnings"] h3').hover();
       await page.waitForTimeout(550);
       const open = await page.evaluate(() => ({
@@ -134,10 +140,11 @@ try {
         window.__formatCalls = 0;
         const el = document.querySelector('.console-output');
         const start = performance.now();
-        const done = new Promise(resolve => {
+        const done = new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => { observer.disconnect(); reject(new Error('Newest console line did not become visible')); }, 5000);
           const observer = new MutationObserver(() => {
             if (el.lastElementChild.textContent.includes(`Live sample ${i}`)) {
-              observer.disconnect(); resolve(performance.now() - start);
+              clearTimeout(timeout); observer.disconnect(); resolve(performance.now() - start);
             }
           });
           observer.observe(el, { childList: true, subtree: true, characterData: true });
@@ -149,20 +156,22 @@ try {
       }
       return result;
     });
+    if (process.env.PERF_DEBUG) console.error('live ready', count, live);
     // Scrolling up must stop auto-follow, including when long lines wrap.
-    const readingAnchor = await page.evaluate(() => {
+    const readingAnchor = await page.evaluate(async () => {
       const el = document.querySelector('.console-output');
       el.scrollTop = 500;
       el.dispatchEvent(new Event('scroll', { bubbles: true }));
-      const anchor = el.children[30];
-      return { text: anchor.textContent, top: anchor.getBoundingClientRect().top - el.getBoundingClientRect().top, scrollTop: el.scrollTop };
+      await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
+      const anchor = Array.from(el.querySelectorAll('[data-log-id]')).find(row => row.getBoundingClientRect().top >= el.getBoundingClientRect().top + 10);
+      return { id: anchor.dataset.logId, lastId: el.dataset.lastLogId, top: anchor.getBoundingClientRect().top - el.getBoundingClientRect().top, scrollTop: el.scrollTop };
     });
     await page.evaluate(() => window.__sockets.findLast(s => s.url.endsWith('/ws/accounts/bench')).deliver({
       type: 'console', event: { minecraftAccountId: 'bench', type: 'CHAT', message: 'Wrapped sample ' + 'long message '.repeat(100), timestamp: new Date().toISOString() },
     }));
-    await page.waitForFunction(() => document.querySelector('.console-output').lastElementChild.textContent.includes('Wrapped sample'));
+    await page.waitForFunction(last => document.querySelector('.console-output').dataset.lastLogId !== last, readingAnchor.lastId);
     const readingAnchorDelta = await page.locator('.console-output').evaluate((el, anchor) => {
-      const row = Array.from(el.children).find(child => child.textContent === anchor.text);
+      const row = Array.from(el.querySelectorAll('[data-log-id]')).find(child => child.dataset.logId === anchor.id);
       return row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top;
     }, readingAnchor);
     const input = page.locator('input[placeholder="/gamemode creative"]');
@@ -179,18 +188,22 @@ try {
     await input.press('Enter');
     await page.waitForTimeout(150);
     const draftAfterFailure = await input.inputValue();
-    const retainedCount = await page.locator('.console-output > div').count();
+    const retainedCount = await page.locator('.console-output').evaluate(el => +el.dataset.logCount);
+    await page.locator('.console-output').evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
+    await page.waitForTimeout(100);
     await page.evaluate(() => window.__sockets.findLast(s => s.url.endsWith('/ws/accounts/bench')).deliver({
       type: 'console', event: { minecraftAccountId: 'bench', type: 'CHAT', message: 'Latest console line', timestamp: new Date().toISOString() },
     }));
     await page.waitForFunction(() => document.querySelector('.console-output').lastElementChild.textContent.includes('Latest console line'));
-    const finalCount = await page.locator('.console-output > div').count();
+    const finalCount = await page.locator('.console-output').evaluate(el => +el.dataset.logCount);
+    const renderedRows = await page.locator('.console-row').count();
     report.scenarios.push({ count, layouts, finalCount, historyMs: +historyMs.toFixed(1), live, httpCommands,
-      draftAfterSend, draftAfterFailure, readingAnchorDelta, errors });
+      draftAfterSend, draftAfterFailure, readingAnchorDelta, renderedRows, errors });
     if (process.env.PERF_VERIFY === '1') {
       if (await page.getByRole('button', { name: /Konsole (aus|ein)klappen/ }).count()) throw new Error('Removed console toggle is still visible');
       if (await page.getByRole('button', { name: 'Ältere Logs laden' }).count()) throw new Error('Removed history button is still visible');
       if (finalCount !== Math.min(20_000, retainedCount + 1)) throw new Error('Console lost buffered history');
+      if (renderedRows > 200) throw new Error('Console rendered too many offscreen rows');
       if (JSON.stringify(httpCommands) !== JSON.stringify(['/tpahere Steve', '/home'])) throw new Error('Manual commands were dropped');
       if (draftAfterFailure !== '/homes') throw new Error('Failed command draft was lost');
       if (Math.abs(readingAnchorDelta) > 1) throw new Error('Console reading position jumped');
@@ -198,6 +211,39 @@ try {
       if (errors.length) throw new Error(errors.join('; '));
       if (!(await page.locator('.version-text').textContent())?.match(/^V\d+\.\d+\.\d+$/)) throw new Error('Website version is missing');
     }
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Performance.enable');
+    const metrics = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(item => [item.name, item.value]));
+    await page.waitForTimeout(200);
+    const idleStart = await metrics();
+    await page.waitForTimeout(2000);
+    const idleEnd = await metrics();
+    report.scenarios.at(-1).idle = {
+      seconds: idleEnd.Timestamp - idleStart.Timestamp,
+      taskCpuPercentOneCore: 100 * (idleEnd.TaskDuration - idleStart.TaskDuration) / (idleEnd.Timestamp - idleStart.Timestamp),
+      layouts: idleEnd.LayoutCount - idleStart.LayoutCount,
+      styleRecalculations: idleEnd.RecalcStyleCount - idleStart.RecalcStyleCount,
+      jsHeapUsedMiB: idleEnd.JSHeapUsedSize / 1024 / 1024,
+    };
+    await cdp.detach();
+    const beforeHidden = await page.locator('.console-output').getAttribute('data-last-log-id');
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, value: true }); document.dispatchEvent(new Event('visibilitychange'));
+      const socket=window.__sockets.findLast(s=>s.url.endsWith('/ws/accounts/bench'));
+      for(let i=0;i<1000;i++)socket.deliver({type:'console',event:{minecraftAccountId:'bench',type:'CHAT',message:`Hidden burst ${i}`,timestamp:new Date().toISOString()}});
+    });
+    await page.waitForTimeout(150);
+    if(await page.locator('.console-output').getAttribute('data-last-log-id')!==beforeHidden)throw new Error('Hidden console kept rendering');
+    await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'));});
+    await page.getByText('Hidden burst 999',{exact:true}).waitFor();
+    const burstCount=await page.locator('.console-output').evaluate(el=>+el.dataset.logCount);
+    if(burstCount!==Math.min(20000,finalCount+1000))throw new Error(`Hidden console lost buffered lines: actual=${burstCount}, expected=${Math.min(20000,finalCount+1000)}, final=${finalCount}`);
+    await page.getByRole('button',{name:'Einstellungen',exact:true}).click();
+    await page.evaluate(()=>{const socket=window.__sockets.findLast(s=>s.url.endsWith('/ws/accounts/bench'));for(let i=0;i<1000;i++)socket.deliver({type:'console',event:{minecraftAccountId:'bench',type:'CHAT',message:`Settings burst ${i}`,timestamp:new Date().toISOString()}});});
+    await page.getByRole('button',{name:'Console',exact:true}).click();
+    await page.getByText('Settings burst 999',{exact:true}).waitFor();
+    if(await page.locator('.console-output').evaluate(el=>+el.dataset.logCount)!==Math.min(20000,burstCount+1000))throw new Error('Settings console lost buffered lines');
+    report.scenarios.at(-1).bursts={hidden:1000,settings:1000,hiddenDoesNotRender:true,bufferRetained:true};
     await context.close();
   }
   console.log(JSON.stringify(report, null, 2));

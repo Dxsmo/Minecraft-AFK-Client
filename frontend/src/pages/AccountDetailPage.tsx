@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
-import { useAuth } from "../lib/auth";
+import { useAuth } from "../lib/useAuth";
 import { useAccountConsole } from "../lib/sockets";
 import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
@@ -33,7 +33,7 @@ export function AccountDetailPage() {
     }
     setSearchParams((params) => { params.set("tab", next); return params; });
   }
-  const { logs, status, historyError } = useAccountConsole(id);
+  const { logs, status, historyError } = useAccountConsole(id, tab === "console");
   const inputRef = useRef<HTMLInputElement>(null);
   const isAdmin = user?.role === "ADMIN";
   const compact = useCompactLayout();
@@ -53,6 +53,9 @@ export function AccountDetailPage() {
     // Split the available screen space between the console and earnings.
     // The graph gains exactly the height the console gives up, over the same 500ms.
     const measure = () => {
+      // Only the user's graph toggle should animate. Initial observations,
+      // font/layout corrections and viewport resizes must settle immediately.
+      page.dataset.consoleReady = "false";
       const siblings = Array.from(panel.children).filter(element => element !== output);
       const otherHeight = siblings.reduce((total, element) => total + element.getBoundingClientRect().height, 0)
         - (graph?.getBoundingClientRect().height ?? 0);
@@ -70,12 +73,10 @@ export function AccountDetailPage() {
       page.style.setProperty("--console-closed-height", `${height}px`);
       page.style.setProperty("--console-open-height", `${openHeight}px`);
       page.style.setProperty("--earnings-open-height", `${height - openHeight}px`);
+      void output.offsetHeight;
+      page.dataset.consoleReady = "true";
     };
-    page.dataset.consoleReady = "false";
     measure();
-    // Establish the first size before enabling transitions on later hovers.
-    void output.offsetHeight;
-    page.dataset.consoleReady = "true";
     const observer = new ResizeObserver(measure);
     for (const element of Array.from(page.children)) {
       if (element !== panel) observer.observe(element);

@@ -32,9 +32,10 @@ export async function persistConsoleLog(
   minecraftAccountId: string,
   type: ConsoleLogType,
   message: string,
+  createdAt = new Date(),
 ): Promise<void> {
   // Timestamp the event now, not when its batch eventually reaches SQLite.
-  await writer.enqueue({ minecraftAccountId, type, message, createdAt: new Date() });
+  await writer.enqueue({ minecraftAccountId, type, message, createdAt });
 }
 
 export async function getConsoleLogs(minecraftAccountId: string, limit = CONSOLE_HISTORY_PAGE_SIZE, before?: string) {

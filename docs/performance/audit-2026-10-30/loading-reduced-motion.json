@@ -1,0 +1,54 @@
+{
+  "browser": "156.0.8078.74",
+  "fixture": {
+    "accounts": 100,
+    "apiDelayMs": 100,
+    "startupLogoutDelayMs": 800
+  },
+  "loginFormMs": 90,
+  "dashboardMs": 855,
+  "initialAccountRequests": 1,
+  "graphRequests": 1,
+  "interactions": [
+    {
+      "commitMs": 0.6,
+      "repeatedDateFormats": 0
+    },
+    {
+      "commitMs": 0.1,
+      "repeatedDateFormats": 0
+    },
+    {
+      "commitMs": 0.1,
+      "repeatedDateFormats": 0
+    },
+    {
+      "commitMs": 0,
+      "repeatedDateFormats": 0
+    },
+    {
+      "commitMs": 0.1,
+      "repeatedDateFormats": 0
+    }
+  ],
+  "animation": {
+    "reducedMotion": "reduce",
+    "accountMidHeight": 41.109375,
+    "accountOpenHeight": 122,
+    "graphProgress": 0.2863824811310726,
+    "consoleProgress": 0.2857142857142857,
+    "consoleHeight": 486,
+    "expandedConsoleHeight": 192
+  },
+  "backgroundRequests": 0,
+  "pageChecks": [
+    "account-settings",
+    "/users",
+    "/logs",
+    "/settings",
+    "/notes",
+    "/notes/note",
+    "create-account-dialog"
+  ],
+  "errors": []
+}

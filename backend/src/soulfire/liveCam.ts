@@ -38,11 +38,20 @@ export class LiveCamStreams {
           const render = frame.render;
           if (!render || render.imageMimeType !== "image/png" || !render.imageBase64 || render.imageBase64.length > 2 * 1024 * 1024) continue;
           const message: CameraFrame = { type: "frame", image: render.imageBase64 };
-          for (const recipient of current.viewers) recipient.frame(message);
+          for (const recipient of current.viewers) {
+            try { recipient.frame(message); }
+            catch (error) {
+              current.viewers.delete(recipient);
+              try { recipient.error(error); } catch { /* A broken viewer cannot stop the others. */ }
+            }
+          }
+          if (!current.viewers.size) { current.abort.abort(); return; }
         }
         if (!current.abort.signal.aborted) throw new Error("Camera stream ended");
       }).catch(error => {
-        if (!current.abort.signal.aborted) for (const recipient of current.viewers) recipient.error(error);
+        if (!current.abort.signal.aborted) for (const recipient of current.viewers) {
+          try { recipient.error(error); } catch { /* Keep notifying other viewers. */ }
+        }
       }).finally(() => {
         current.abort.abort();
         if (this.streams.get(accountId) === current) this.streams.delete(accountId);

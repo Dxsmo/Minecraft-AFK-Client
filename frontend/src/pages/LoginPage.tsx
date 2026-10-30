@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "../lib/auth";
+import { useAuth } from "../lib/useAuth";
 import { ApiError } from "../lib/api";
 import { rememberedUsername, rememberUsername, restoreBrowserPassword, storeBrowserPassword } from "../lib/rememberLogin";
 import { loadDashboardPage } from "../lib/pageLoaders";

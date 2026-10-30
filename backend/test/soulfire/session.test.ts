@@ -5,7 +5,7 @@ import path from "node:path";
 import { create } from "@bufbuild/protobuf";
 import { Code, ConnectError } from "@connectrpc/connect";
 import { BotInventoryStateResponseSchema, BotRuntimeState } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
-import { BotActionStatus } from "@soulfiremc/sdk/generated/soulfire/bot_live_pb";
+import { BlockFace, BotActionStatus, Hand } from "@soulfiremc/sdk/generated/soulfire/bot_live_pb";
 import { writePrivateJson } from "../../src/soulfire/auth.js";
 
 const mocks = vi.hoisted(() => ({ rpc: undefined as any }));
@@ -33,7 +33,11 @@ async function fixture() {
       getBotInfo: vi.fn(async () => ({ status: { runtimeState: BotRuntimeState.RUNNING }, liveState: {} })),
       getInventoryState: vi.fn(async () => { throw new Error("Background icon rendering is forbidden"); }),
       clickInventorySlot: vi.fn(async () => ({ success: true })), closeContainer: vi.fn(async () => ({})) },
+    world: { getPlayerSnapshot: vi.fn(async () => ({ player: { position: { x: 0, y: 64, z: 0 }, pose: "CROUCHING" } })),
+      queryBlocks: vi.fn(async () => ({ blocks: [{ position: { x: 0, y: 64, z: 2 } }] })),
+      raycast: vi.fn(async () => ({ block: { position: { x: 0, y: 64, z: 2 } }, blockFace: BlockFace.NORTH })) },
     live: { sendChat: vi.fn(async () => ({ result: { status: BotActionStatus.COMPLETED } })),
+      interactBlock: vi.fn(async () => ({ result: { status: BotActionStatus.COMPLETED } })),
       watchBotEvents: vi.fn(async function* () {
         while (!abort.signal.aborted) {
           const frame = await new Promise<any>(resolve => {
@@ -117,4 +121,26 @@ it("retains the stored account and skips device login when refreshing it times o
   await expect(f.begin()).rejects.toBe(failure);
   expect(f.rpc.auth.loginDeviceCode).not.toHaveBeenCalled();
   expect(f.rpc.instance.replaceInstanceAccounts).not.toHaveBeenCalled();
+});
+
+it("opens the spawner using the actual visible block face and an explicit hand", async () => {
+  const f = await fixture(); await f.start(); await f.frame("inventory", { state: f.inventory() });
+  f.queue.push({ type: "clean_spawner" }); await vi.advanceTimersByTimeAsync(100);
+  expect(f.rpc.live.interactBlock).toHaveBeenCalledWith(expect.objectContaining({ position: { x: 0, y: 64, z: 2 }, face: BlockFace.NORTH, hand: Hand.MAIN }), expect.anything());
+});
+it("does not interact through an obstructing block", async () => {
+  const f = await fixture(); await f.start(); await f.frame("inventory", { state: f.inventory() });
+  f.rpc.world.raycast.mockResolvedValueOnce({ block: { position: { x: 0, y: 64, z: 1 } }, blockFace: BlockFace.NORTH });
+  f.queue.push({ type: "clean_spawner" }); await vi.advanceTimersByTimeAsync(100);
+  expect(f.rpc.live.interactBlock).not.toHaveBeenCalled();
+});
+
+it("accepts the plugin menu even when vanilla reports a rejected interaction", async () => {
+  const f = await fixture(); await f.start(); await f.frame("inventory", { state: f.inventory() });
+  f.rpc.live.interactBlock.mockResolvedValueOnce({ result: { status: BotActionStatus.FAILED } });
+  f.queue.push({ type: "clean_spawner" }); await vi.advanceTimersByTimeAsync(100);
+  await f.frame("inventory", { state: f.inventory("plugin-spawner", "Spawner") });
+  await vi.advanceTimersByTimeAsync(2200);
+  expect(f.rpc.live.interactBlock).toHaveBeenCalledOnce();
+  expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "warning", message: expect.stringContaining("kein erreichbarer") }));
 });

@@ -559,6 +559,9 @@ body {
   .earnings-details[data-expanded="true"] {
     height: var(--earnings-open-height, 320px);
   }
+  .account-console-page[data-console-ready="false"] .earnings-details {
+    transition: none;
+  }
   .earnings-details-clip {
     height: var(--earnings-open-height, 320px);
     min-height: 0;

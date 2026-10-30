@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api, ApiError } from "../lib/api";
 import type { BannedIp, ManagedUser } from "../lib/types";
 import { useCompactLayout } from "../lib/useCompactLayout";
-import { useAuth } from "../lib/auth";
+import { useAuth } from "../lib/useAuth";
 
 export function UsersPage() {
   const { user: currentUser } = useAuth();

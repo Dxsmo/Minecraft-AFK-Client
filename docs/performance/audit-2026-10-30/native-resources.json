@@ -1,0 +1,109 @@
+{
+  "scope": "Isolated Linux ARM64 SoulFire cgroup; four offline Java clients in tiny protocol fixture; 20 samples over about 20 seconds, during 60-second soak",
+  "samples": [
+    {
+      "memoryMiB": 2063.06640625,
+      "cpuPercentOneCore": 32.49486764806542,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2062.578125,
+      "cpuPercentOneCore": 32.04180212026802,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2064.29296875,
+      "cpuPercentOneCore": 53.18294500844942,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2076.01953125,
+      "cpuPercentOneCore": 51.79967654899212,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2090.5625,
+      "cpuPercentOneCore": 47.49854134748352,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2091.234375,
+      "cpuPercentOneCore": 45.09378278341217,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2090.70703125,
+      "cpuPercentOneCore": 42.35772674108614,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2090.734375,
+      "cpuPercentOneCore": 40.96966783328004,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2091.1015625,
+      "cpuPercentOneCore": 39.05129513789751,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2091.03515625,
+      "cpuPercentOneCore": 38.64305276745817,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2090.74609375,
+      "cpuPercentOneCore": 37.39148701675546,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2091.68359375,
+      "cpuPercentOneCore": 37.55409402552254,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2091.0078125,
+      "cpuPercentOneCore": 37.34773542149728,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2091.58203125,
+      "cpuPercentOneCore": 37.26561655367311,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2091.03125,
+      "cpuPercentOneCore": 36.47311172927439,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2091.40234375,
+      "cpuPercentOneCore": 36.52939725220687,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2090.98828125,
+      "cpuPercentOneCore": 36.13686215692319,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2091.28515625,
+      "cpuPercentOneCore": 36.681632045084754,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2091.9921875,
+      "cpuPercentOneCore": 36.06222760385258,
+      "oomKills": 0
+    },
+    {
+      "memoryMiB": 2091.53125,
+      "cpuPercentOneCore": 35.489924586691956,
+      "oomKills": 0
+    }
+  ],
+  "meanMemoryMiB": 2086.2291015625,
+  "maxMemoryMiB": 2091.9921875,
+  "cpuPercentOneCore": 35.489924586691956,
+  "oomKills": 0
+}

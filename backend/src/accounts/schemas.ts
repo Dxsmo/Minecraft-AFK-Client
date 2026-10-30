@@ -70,11 +70,11 @@ export const updateAccountSchema = z.object({
 });
 
 export const assignUsersSchema = z.object({
-  userIds: z.array(z.string()),
+  userIds: z.array(z.string().min(1).max(160)).max(10000),
 });
 
 export const reorderAccountsSchema = z.object({
-  accountIds: z.array(z.string().min(1)).min(1),
+  accountIds: z.array(z.string().min(1).max(160)).min(1).max(10000),
 });
 
 export const commandSchema = z.object({

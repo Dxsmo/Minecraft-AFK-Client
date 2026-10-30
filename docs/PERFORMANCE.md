@@ -1,6 +1,8 @@
 # Performance-Prüfung und Command-Korrekturen – V1.6.1
 
-Aktuelle Prüfung vom 11.10.2026: [Login, Accounts, Graphen und Datenabfragen](PERFORMANCE-2026-10-11.md).
+Aktuelle Prüfung vom 30.10.2026: [Website, Accounts, SoulFire und Performance](PERFORMANCE-2026-10-30.md).
+
+Frühere Prüfung vom 11.10.2026: [Login, Accounts, Graphen und Datenabfragen](PERFORMANCE-2026-10-11.md).
 Der folgende Bericht dokumentiert den früheren Stand vom 06.10.2026.
 
 Stand: 06.10.2026. Vergleichsbasis: Commit `dc04bc9`.

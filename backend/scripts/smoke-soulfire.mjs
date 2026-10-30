@@ -15,11 +15,14 @@ const mc = require(process.env.MINECRAFT_PROTOCOL_MODULE || 'minecraft-protocol'
 assert.ok(process.env.SOULFIRE_URL, 'Use an explicitly selected isolated SoulFire service');
 const root = await mkdtemp(path.join(os.tmpdir(), 'afk-soulfire-smoke-'));
 const clients=[], controllers=[], packets=[], events=[];
+const clientCount=Number(process.env.AFK_SMOKE_CLIENTS||2), soakSeconds=Number(process.env.AFK_SMOKE_SOAK_SECONDS||0);
+assert.ok(Number.isInteger(clientCount)&&clientCount>=2&&clientCount<=8);
+assert.ok(Number.isFinite(soakSeconds)&&soakSeconds>=0&&soakSeconds<=300);
 const refillSales=process.env.AFK_SMOKE_REFILL_SALES==='1';
 const rpcCalls=[], originalFetch=globalThis.fetch;
 globalThis.fetch=(input,init)=>{rpcCalls.push(new URL(typeof input==='string'||input instanceof URL?input:input.url).pathname);return originalFetch(input,init);};
 let teleports=0;
-const server=mc.createServer({ host:process.env.MINECRAFT_FIXTURE_HOST ? '0.0.0.0' : '127.0.0.1', port:0, version:'1.8.8', 'online-mode':false, motd:'AFK isolated smoke fixture', maxPlayers:4 });
+const server=mc.createServer({ host:process.env.MINECRAFT_FIXTURE_HOST ? '0.0.0.0' : '127.0.0.1', port:0, version:'1.8.8', 'online-mode':false, motd:'AFK isolated smoke fixture', maxPlayers:clientCount });
 const timers=[];
 const empty={blockId:-1};
 const saleItems=()=>Array.from({length:63},(_,i)=>(refillSales?[54,55,56].includes(i):i===54)?{blockId:260,itemCount:64,itemDamage:0}:empty);
@@ -55,11 +58,11 @@ server.on('playerJoin', client=>{
 const waitFor=async check=>{const deadline=Date.now()+15000;while(!check()){const failure=events.flat().find(event=>event.type==='connection_failed');if(failure)throw new Error(failure.error);assert.ok(Date.now()<deadline,'SoulFire smoke check timed out');await new Promise(resolve=>setTimeout(resolve,100));}};
 try {
   await once(server,'listening'); const port=server.socketServer.address().port;
-  const names=['R','L'].map(prefix=>`Afk${prefix}_${randomUUID().slice(0,6)}`);
-  for(let i=0;i<2;i++) {
+  const names=Array.from({length:clientCount},(_,i)=>`Afk${i}_${randomUUID().slice(0,6)}`);
+  for(let i=0;i<clientCount;i++) {
     const controller=createSoulFireController();controllers.push(controller);events.push([]);
     let buffered='';controller.stdout.on('data',data=>{buffered+=data.toString();let end;while((end=buffered.indexOf('\n'))>=0){events[i].push(JSON.parse(buffered.slice(0,end)));buffered=buffered.slice(end+1);}});
-    controller.stdin.write(JSON.stringify({host:process.env.MINECRAFT_FIXTURE_HOST || '127.0.0.1',port,username:names[i],auth_type:'offline',edition:'JAVA',account_id:`smoke-${randomUUID()}`,cache_dir:path.join(root,String(i)),version:'',crouch_enabled:i===0,auto_button:i===0?'right':'left',autosell_enabled:i===0,autosell_interval_seconds:2})+'\n');
+    controller.stdin.write(JSON.stringify({host:process.env.MINECRAFT_FIXTURE_HOST || '127.0.0.1',port,username:names[i],auth_type:'offline',edition:'JAVA',account_id:`smoke-${randomUUID()}`,cache_dir:path.join(root,String(i)),version:'',crouch_enabled:i===0,auto_button:i===0?'right':i===1?'left':'off',autosell_enabled:i===0,autosell_interval_seconds:2})+'\n');
   }
   await waitFor(()=>events.every(list=>list.some(event=>event.type==='spawn')));
   await waitFor(()=>packets.some(packet=>packet.name===names[1]&&packet.type==='block_dig'));
@@ -67,7 +70,7 @@ try {
   controllers[0].stdin.write('{"type":"check_crouch"}\n');
   await new Promise(resolve=>setTimeout(resolve,6500));
   await waitFor(()=>packets.filter(packet=>packet.type==='window_click').length>=3);
-  await waitFor(()=>teleports===2);
+  await waitFor(()=>teleports===clientCount);
   await new Promise(resolve=>setTimeout(resolve,3500));
   const sneak=packets.filter(packet=>packet.name===names[0]&&packet.type==='entity_action');
   assert.ok(sneak.some(packet=>packet.data.actionId==='start_sneaking'));
@@ -84,21 +87,23 @@ try {
   const povRenderRpcCalls=rpcCalls.filter(method=>/\/(?:RenderBotPov|WatchBotPov)$/.test(method)).length;
   assert.equal(inventoryRpcCalls,0,'Automation must not call the icon-rendering inventory RPC');
   assert.equal(povRenderRpcCalls,0,'Automation must not open a camera');
+  if(soakSeconds){console.error(`Soak started: ${clientCount} clients, ${soakSeconds}s`);await new Promise(resolve=>setTimeout(resolve,soakSeconds*1000));}
+  assert.ok(!events.flat().some(event=>event.type==='connection_failed'||event.type==='warning'),'The soak must remain connected without warnings');
   const before=events[1].filter(event=>event.type==='heartbeat').length;
   const stopped=once(controllers[0],'close');controllers[0].stdin.write('{"type":"disconnect"}\n');await stopped;
   await waitFor(()=>events[1].filter(event=>event.type==='heartbeat').length>before);
-  console.log(JSON.stringify({controllers:2,extraNodeProcesses:0,javaAutoDetection:true,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:6,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
+  console.log(JSON.stringify({controllers:clientCount,soakSeconds,extraNodeProcesses:0,javaAutoDetection:true,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:6,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
 } catch (error) {
   console.error(JSON.stringify({events,packetTypes:packets.map(p=>({name:p.name,type:p.type,data:p.type==='entity_action'?p.data:undefined}))}));
   const rpc=soulFireRpc();
-  for(let i=0;i<2;i++) {try {const ids=JSON.parse(await readFile(path.join(root,String(i),'soulfire.json'),'utf8'));
+  for(let i=0;i<clientCount;i++) {try {const ids=JSON.parse(await readFile(path.join(root,String(i),'soulfire.json'),'utf8'));
     console.error(JSON.stringify({player:await rpc.world.getPlayerSnapshot(ids),block:await rpc.world.getWorldBlock({...ids,position:{x:0,y:64,z:2}}),ray:await rpc.world.raycast({...ids,maximumDistance:4.5,includeEntities:true})}));}catch(error){console.error("World diagnostic:", error.message);}}
   throw error;
 } finally {
   for(const timer of timers)clearTimeout(timer);
   await Promise.all(controllers.map(async controller=>{if(controller.exitCode!==null||controller.signalCode!==null)return;const done=once(controller,'close');controller.kill();await done;}));
   const rpc=soulFireRpc();
-  for(let i=0;i<2;i++) {try {const ids=JSON.parse(await readFile(path.join(root,String(i),'soulfire.json'),'utf8'));await rpc.instance.deleteInstance({id:ids.instanceId});}catch{}}
+  for(let i=0;i<clientCount;i++) {try {const ids=JSON.parse(await readFile(path.join(root,String(i),'soulfire.json'),'utf8'));await rpc.instance.deleteInstance({id:ids.instanceId});}catch{}}
   for(const client of clients)client.end();server.close();await rm(root,{recursive:true,force:true});
   globalThis.fetch=originalFetch;
 }

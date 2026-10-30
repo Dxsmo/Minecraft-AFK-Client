@@ -1,0 +1,263 @@
+{
+  "browser": "156.0.8078.74",
+  "scenarios": [
+    {
+      "count": 2000,
+      "layouts": [
+        {
+          "width": 1365,
+          "height": 600,
+          "consoleHeight": 233,
+          "earningsHeight": 79.5,
+          "visibleLines": 11.1,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 99,
+            "earningsHeight": 213.90625,
+            "graphHeight": 56.609375,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 5.75
+          }
+        },
+        {
+          "width": 1365,
+          "height": 768,
+          "consoleHeight": 354,
+          "earningsHeight": 118.5,
+          "visibleLines": 17.3,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 150,
+            "earningsHeight": 322.703125,
+            "graphHeight": 120.40625,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.25
+          }
+        },
+        {
+          "width": 1365,
+          "height": 900,
+          "consoleHeight": 486,
+          "earningsHeight": 118.5,
+          "visibleLines": 24.1,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 192,
+            "earningsHeight": 412.46875,
+            "graphHeight": 210.171875,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.25
+          }
+        },
+        {
+          "width": 1920,
+          "height": 1080,
+          "consoleHeight": 666,
+          "earningsHeight": 118.5,
+          "visibleLines": 33.3,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 250,
+            "earningsHeight": 534.859375,
+            "graphHeight": 332.5625,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.0625
+          }
+        },
+        {
+          "width": 390,
+          "height": 667,
+          "consoleHeight": 281,
+          "earningsHeight": 0,
+          "visibleLines": 14.5,
+          "pageOverflow": 0,
+          "bottomGap": 12,
+          "expectedBottomGap": 12
+        },
+        {
+          "width": 390,
+          "height": 844,
+          "consoleHeight": 458,
+          "earningsHeight": 0,
+          "visibleLines": 24.3,
+          "pageOverflow": 0,
+          "bottomGap": 12,
+          "expectedBottomGap": 12
+        }
+      ],
+      "finalCount": 2007,
+      "historyMs": 71.8,
+      "live": [
+        {
+          "commitMs": 4.700000017881393,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 10.400000005960464,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 8.299999982118607,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 2.0999999940395355,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 2.300000011920929,
+          "repeatedDateFormats": 0
+        }
+      ],
+      "httpCommands": [
+        "/tpahere Steve",
+        "/home"
+      ],
+      "draftAfterSend": "",
+      "draftAfterFailure": "/homes",
+      "readingAnchorDelta": 0,
+      "errors": []
+    },
+    {
+      "count": 20000,
+      "layouts": [
+        {
+          "width": 1365,
+          "height": 600,
+          "consoleHeight": 233,
+          "earningsHeight": 79.5,
+          "visibleLines": 11.1,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 99,
+            "earningsHeight": 213.90625,
+            "graphHeight": 56.609375,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 5.75
+          }
+        },
+        {
+          "width": 1365,
+          "height": 768,
+          "consoleHeight": 354,
+          "earningsHeight": 118.5,
+          "visibleLines": 17.3,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 150,
+            "earningsHeight": 322.703125,
+            "graphHeight": 120.40625,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.25
+          }
+        },
+        {
+          "width": 1365,
+          "height": 900,
+          "consoleHeight": 486,
+          "earningsHeight": 118.5,
+          "visibleLines": 24.1,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 192,
+            "earningsHeight": 412.46875,
+            "graphHeight": 210.171875,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.25
+          }
+        },
+        {
+          "width": 1920,
+          "height": 1080,
+          "consoleHeight": 666,
+          "earningsHeight": 118.5,
+          "visibleLines": 33.3,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 250,
+            "earningsHeight": 534.859375,
+            "graphHeight": 332.5625,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.0625
+          }
+        },
+        {
+          "width": 390,
+          "height": 667,
+          "consoleHeight": 281,
+          "earningsHeight": 0,
+          "visibleLines": 14.5,
+          "pageOverflow": 0,
+          "bottomGap": 12,
+          "expectedBottomGap": 12
+        },
+        {
+          "width": 390,
+          "height": 844,
+          "consoleHeight": 458,
+          "earningsHeight": 0,
+          "visibleLines": 24.3,
+          "pageOverflow": 0,
+          "bottomGap": 12,
+          "expectedBottomGap": 12
+        }
+      ],
+      "finalCount": 20000,
+      "historyMs": 1274.3,
+      "live": [
+        {
+          "commitMs": 63.30000001192093,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 180.90000000596046,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 178.5,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 180.59999999403954,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 180.80000001192093,
+          "repeatedDateFormats": 0
+        }
+      ],
+      "httpCommands": [
+        "/tpahere Steve",
+        "/home"
+      ],
+      "draftAfterSend": "",
+      "draftAfterFailure": "/homes",
+      "readingAnchorDelta": 0.5,
+      "errors": []
+    }
+  ]
+}

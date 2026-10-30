@@ -1,12 +1,8 @@
 # Ressourcenmessung für Backend, Java und Bedrock
 
-Stand: 28.10.2026. Es liegen echte lokale Messwerte für den API-/Backend-Prozess
-und vom Nutzer übermittelte Prozess-Momentaufnahmen des produktiven Pi vor.
-**Eine gemeinsame Intervallmessung laufender Java-/Bedrock-Accounts und die
-maximale Accountzahl auf dem Pi oder einem Hetzner-Server stehen noch aus.**
-In der Entwicklungsumgebung laufen weder das Produktivbackend noch Bots; der
-lokale Docker-Daemon ist nicht gestartet. Ein SSH-Ziel zum laufenden Host ist
-bisher nicht eingerichtet bzw. nicht bekannt.
+Aktuelle lokale SoulFire-/Website-Messung: [Funktions- und Performanceprüfung vom 30.10.2026](PERFORMANCE-2026-10-30.md). Sie enthält echte isolierte SoulFire-Tests, jedoch keine Kapazitätsmessung des produktiven Pi.
+
+Die folgenden Angaben dokumentieren den früheren Stand vom 28.10.2026 und die damalige Azalea-/Bedrock-Architektur. Die maximal tragbare Accountzahl auf dem Pi oder einem Hetzner-Server ist weiterhin nicht gemessen. Ein SSH-Ziel zum produktiven Host ist nicht eingerichtet bzw. nicht bekannt.
 
 ## Erste Prozesswerte vom produktiven Pi
 

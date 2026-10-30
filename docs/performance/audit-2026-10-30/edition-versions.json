@@ -1,0 +1,11 @@
+{
+  "checks": [
+    "creation",
+    "edition reset",
+    "Bedrock settings",
+    "Java settings",
+    "failed catalogue retry"
+  ],
+  "catalogRequests": 8,
+  "errors": []
+}

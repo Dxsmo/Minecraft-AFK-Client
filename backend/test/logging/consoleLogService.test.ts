@@ -14,6 +14,12 @@ afterEach(async () => {
 });
 
 describe("console history", () => {
+  it("stores the original live-event timestamp so late history can be reconciled exactly", async () => {
+    const id = await account(), at = new Date("2026-10-29T23:45:00.123Z");
+    await persistConsoleLog(id, "CHAT", "same live event", at);
+    const rows = await getConsoleLogs(id);
+    expect(rows[0].createdAt.toISOString()).toBe(at.toISOString());
+  });
   it("paginates tied timestamps without duplicates and scopes cursors to the account", async () => {
     const id = await account();
     const other = await account();

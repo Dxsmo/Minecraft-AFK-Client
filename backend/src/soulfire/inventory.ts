@@ -5,6 +5,7 @@ import type { GameInventory } from "./behaviors.js";
  * that RPC renders every occupied slot, even for background automation. */
 export class SoulFireInventory {
   private current: GameInventory | null = null;
+  private changes = new Set<() => void>();
 
   get ready(): boolean { return this.current !== null; }
 
@@ -22,6 +23,22 @@ export class SoulFireInventory {
       slots: state.slots.map(slot => ({ slot: slot.slot, itemId: slot.itemId, count: slot.count,
         displayName: slot.displayName || "", tooltipLines: [...slot.tooltipLines] })),
     };
+    for (const changed of this.changes) changed();
+  }
+
+  waitForContainer(previousMenu: string, signal: AbortSignal, timeoutMs = 2500): Promise<boolean> {
+    const opened = () => !!this.current?.containerSlots.length && this.current.menuId !== previousMenu;
+    if (signal.aborted) return Promise.resolve(false);
+    if (opened()) return Promise.resolve(true);
+    return new Promise(resolve => {
+      const finish = (value: boolean) => {
+        clearTimeout(timer); this.changes.delete(changed); signal.removeEventListener("abort", abort); resolve(value);
+      };
+      const changed = () => { if (opened()) finish(true); };
+      const abort = () => finish(false);
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      this.changes.add(changed); signal.addEventListener("abort", abort, { once: true });
+    });
   }
 
   read(): GameInventory {

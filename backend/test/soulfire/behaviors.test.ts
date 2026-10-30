@@ -202,4 +202,45 @@ describe("common SoulFire automation", () => {
     expect(f.game.click).toHaveBeenLastCalledWith("spawner", 4, "left");
     f.inventory({ slots: [stock[1], stock[2], stock[4]] }); f.advance(400); await f.engine.tick(); expect(f.game.close).toHaveBeenCalledWith("spawner");
   });
+
+  it("retains one stack of every configured drop item instead of one stack in total", async () => {
+    const f = fixture({ spawner_type: "cow", spawner_drop_items: ["minecraft:beef", "minecraft:leather"] });
+    await f.engine.spawned(); f.advance(2000); f.engine.enqueue("clean_spawner"); await f.engine.tick();
+    const stock = [slot(0, "minecraft:beef"), slot(1, "minecraft:beef"), slot(2, "minecraft:leather"), slot(3, "minecraft:leather"), slot(4, "minecraft:diamond")];
+    f.inventory({ menuId: "spawner", containerSlots: [0, 1, 2, 3, 4], slots: stock });
+    f.advance(400); await f.engine.tick(); expect(f.game.click).toHaveBeenLastCalledWith("spawner", 0, "drop");
+    f.inventory({ slots: stock.slice(1) }); f.advance(400); await f.engine.tick();
+    expect(f.game.click).toHaveBeenLastCalledWith("spawner", 2, "drop");
+    f.inventory({ slots: [stock[1], stock[3], stock[4]] }); f.advance(400); await f.engine.tick(); await f.engine.tick();
+    expect(f.game.click).toHaveBeenCalledTimes(2); expect(f.game.close).toHaveBeenCalledExactlyOnceWith("spawner");
+  });
+
+  it("waits for a real spawner change instead of repeating drops or falsely announcing success", async () => {
+    const f = fixture({ spawner_type: "cow", spawner_drop_items: ["minecraft:beef"] });
+    await f.engine.spawned(); f.advance(2000); f.engine.enqueue("clean_spawner"); await f.engine.tick();
+    f.inventory({ menuId: "spawner", containerSlots: [0, 1], slots: [slot(0, "minecraft:beef"), slot(1, "minecraft:beef")] });
+    f.advance(400); await f.engine.tick();
+    for (let i = 0; i < 10; i++) { f.advance(400); await f.engine.tick(); }
+    expect(f.game.click).toHaveBeenCalledTimes(1); expect(f.game.close).not.toHaveBeenCalled();
+    f.advance(1000); await f.engine.tick();
+    expect(f.emit).toHaveBeenCalledExactlyOnceWith({ type: "warning", message: "CleanSpawner: Änderung wurde nicht bestätigt; Vorgang abgebrochen" });
+    expect(f.game.close).toHaveBeenCalledExactlyOnceWith("spawner");
+  });
+
+  it("does not bind a foreground action to the menu it just closed", async () => {
+    const f = fixture({ spawner_type: "cow", spawner_drop_items: ["minecraft:beef"] }); await f.engine.spawned();
+    f.advance(2000);
+    f.inventory({ menuId: "old", containerSlots: [0, 1], slots: [slot(0, "minecraft:beef"), slot(1, "minecraft:beef")] });
+    f.engine.enqueue("clean_spawner"); await f.engine.tick(); f.advance(500); await f.engine.tick();
+    expect(f.game.click).not.toHaveBeenCalled();
+    f.inventory({ menuId: "new" }); await f.engine.tick(); expect(f.game.click).toHaveBeenCalledExactlyOnceWith("new", 0, "drop");
+  });
+
+  it("does not restore a spawner job after a world transition during the interaction RPC", async () => {
+    const f = fixture({ spawner_type: "cow", spawner_drop_items: ["minecraft:beef"] }); await f.engine.spawned();
+    vi.mocked(f.game.openSpawner).mockImplementationOnce(async () => { f.engine.transition(); return true; });
+    f.engine.enqueue("clean_spawner"); await f.engine.tick();
+    f.inventory({ menuId: "foreign", containerSlots: [0, 1], slots: [slot(0, "minecraft:beef"), slot(1, "minecraft:beef")] });
+    f.advance(2500); await f.engine.tick(); expect(f.game.click).not.toHaveBeenCalled();
+  });
 });

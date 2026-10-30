@@ -16,7 +16,8 @@ export interface GameGateway {
 }
 export type BotOutput = (event: Record<string, unknown>) => void;
 type Sell = { requested: number; opened: number | null; menu: string | null; targets: number[] | null; pending: { slot: GameSlot; at: number; confirmed: boolean } | null };
-type Foreground = { kind: "multipliers" | "spawner"; deadline: number; opened: number | null; menu: string | null; phase: "drop" | "sell"; stalls: number; last: string; next: number };
+type Foreground = { kind: "multipliers" | "spawner"; deadline: number; opened: number | null; menu: string | null; previousMenu: string; phase: "drop" | "sell"; next: number;
+  pending: { fingerprint: string; slot?: GameSlot; at: number; confirmed: boolean } | null };
 const plain = (text: string) => tooltipText(text).trim();
 const sellTitle = (text: string) => /^(items verkaufen|sell)$/i.test(plain(text));
 const teleportSuccess = (text: string) => /^(?:<(?:HugoSMP)>|\[HugoSMP\])?\s*(?:Du wurdest zu deinem Home .+ teleportiert!|[^:]+ hat deine Teleportations-Anfrage angenommen!|Du hast die Teleportations-Anfrage von .+ angenommen!)$/i.test(plain(text));
@@ -86,8 +87,10 @@ export class SoulFireBehaviors {
     // A hopper can refill the same slot before the next snapshot. A genuine
     // server payout still confirms that pending transfer; unchanged counts
     // alone must not turn a successful sale into a timeout.
-    if (this.sell?.pending && /^(?:\[HugoSMP\]|<HugoSMP>)?\s*\+\$/i.test(plain(message))
-        && parseSellEarning(message) !== null) this.sell.pending.confirmed = true;
+    if (/^(?:\[HugoSMP\]|<HugoSMP>)?\s*\+\$/i.test(plain(message)) && parseSellEarning(message) !== null) {
+      if (this.sell?.pending) this.sell.pending.confirmed = true;
+      if (this.foreground?.kind === "spawner" && this.foreground.phase === "sell" && this.foreground.pending) this.foreground.pending.confirmed = true;
+    }
     const text = plain(message).toLowerCase();
     if ((text.includes("inventar") || text.includes("inventory")) && /geladen|gespeichert|saving|loading/.test(text)) {
       this.resetTasks(); this.readyAt = this.clock() + 1000; this.nextSell = this.readyAt;
@@ -142,6 +145,7 @@ export class SoulFireBehaviors {
   }
 
   private async runCommand(command: { type: string; text?: string }): Promise<void> {
+    const generation = this.generation;
     this.sell = null;
     this.foreground = null;
     const inventory = await this.game.inventory();
@@ -149,12 +153,14 @@ export class SoulFireBehaviors {
     this.manualUntil = this.clock() + 5000;
     if (command.type === "read_sell_multipliers") {
       await this.dispatch("/sellmulti");
+      if (generation !== this.generation) return;
       const now = this.clock();
-      this.foreground = { kind: "multipliers", deadline: now + 10_000, opened: null, menu: null, phase: "drop", stalls: 0, last: "", next: now };
+      this.foreground = { kind: "multipliers", deadline: now + 10_000, opened: null, menu: null, previousMenu: inventory.menuId, phase: "drop", pending: null, next: now };
     } else if (command.type === "clean_spawner") {
       if (!await this.game.openSpawner(!!this.cfg.crouch_enabled)) { this.emit({ type: "warning", message: "CleanSpawner: kein erreichbarer Spawner gefunden" }); return; }
+      if (generation !== this.generation) return;
       const now = this.clock();
-      this.foreground = { kind: "spawner", deadline: now + 60_000, opened: null, menu: null, phase: "drop", stalls: 0, last: "", next: now + 400 };
+      this.foreground = { kind: "spawner", deadline: now + 60_000, opened: null, menu: null, previousMenu: inventory.menuId, phase: "drop", pending: null, next: now + 400 };
     } else if (command.text) {
       await this.dispatch(command.text);
       this.manualUntil = this.clock() + 5000;
@@ -225,6 +231,8 @@ export class SoulFireBehaviors {
     const task = this.foreground!;
     if (now < task.next) return;
     const inventory = await this.game.inventory();
+    if (this.foreground !== task) return;
+    now = this.clock();
     if (now >= task.deadline) {
       if (task.menu) await this.closeOwned(task.menu);
       this.foreground = null;
@@ -232,9 +240,11 @@ export class SoulFireBehaviors {
       return;
     }
     if (!inventory.containerSlots.length) { if (task.menu) this.foreground = null; return; }
+    if (inventory.menuId === task.previousMenu) return;
     if (task.menu && task.menu !== inventory.menuId) { this.foreground = null; return; }
     if (!task.menu) { task.menu = inventory.menuId; task.opened = now; }
     if (task.kind === "multipliers") {
+      if (!/^sell multi$/i.test(plain(inventory.title))) return;
       const entries = inventory.containerSlots.slice(0, 9).map(index => {
         const slot = inventory.slots.find(item => item.slot === index);
         return slot ? readMultiplier(slot.displayName, slot.tooltipLines) : null;
@@ -251,20 +261,44 @@ export class SoulFireBehaviors {
     const matching = this.cfg.spawner_type ? stock.filter(slot => names.includes(slot.itemId)) : [...stock].sort((a, b) => b.slot - a.slot);
     const legacyDone = !this.cfg.spawner_type && !stock.some(slot => slot.slot === inventory.containerSlots[2]);
     const fingerprint = matching.map(slot => `${slot.slot}:${slot.itemId}:${slot.count}`).join("|");
-    task.stalls = fingerprint === task.last ? task.stalls + 1 : 0; task.last = fingerprint;
-    if ((this.cfg.spawner_type ? matching.length <= 1 : legacyDone || matching.length === 0) || task.stalls >= 8) {
-      if (task.phase === "drop" && this.cfg.spawner_type) { task.phase = "sell"; task.stalls = 0; task.last = ""; }
+    if (task.pending) {
+      const before = task.pending.slot;
+      const current = before && stock.find(slot => slot.slot === before.slot);
+      const unchanged = before ? current && current.itemId === before.itemId && current.count >= before.count
+        : fingerprint === task.pending.fingerprint;
+      if (unchanged && !task.pending.confirmed) {
+        if (now - task.pending.at >= 5000) {
+          await this.closeOwned(inventory.menuId); this.foreground = null;
+          this.emit({ type: "warning", message: "CleanSpawner: Änderung wurde nicht bestätigt; Vorgang abgebrochen" });
+        }
+        return;
+      }
+      task.pending = null;
+    }
+    // Preserve one stack of EACH selected item, rather than one stack across
+    // all item types combined (e.g. both beef and leather).
+    const counts = new Map<string, number>();
+    for (const slot of matching) counts.set(slot.itemId, (counts.get(slot.itemId) ?? 0) + 1);
+    const eligible = this.cfg.spawner_type ? matching.filter(slot => counts.get(slot.itemId)! > 1) : matching;
+    if (this.cfg.spawner_type ? eligible.length === 0 : legacyDone || matching.length === 0) {
+      if (task.phase === "drop" && this.cfg.spawner_type) { task.phase = "sell"; }
       else { await this.game.close(inventory.menuId); this.foreground = null; this.emit({ type: "behavior_log", message: "Spawner aufgeräumt; Menü geschlossen" }); }
       return;
     }
-    if (task.phase === "drop") await this.game.click(inventory.menuId, matching[0].slot, "drop");
+    if (task.phase === "drop") {
+      task.pending = { fingerprint, slot: { ...eligible[0] }, at: now, confirmed: false };
+      await this.game.click(inventory.menuId, eligible[0].slot, "drop");
+    }
     else {
       const configuredStock = [...this.cfg.spawner_drop_items ?? [], ...this.cfg.spawner_sell_items ?? []];
       const sellButton = stock.find(slot => !configuredStock.includes(slot.itemId) && /verkaufen|sell/i.test([slot.displayName, ...slot.tooltipLines].map(plain).join(" ")));
-      if (sellButton) await this.game.click(inventory.menuId, sellButton.slot, "left");
-      else task.stalls++;
+      if (sellButton) {
+        task.pending = { fingerprint, at: now, confirmed: false };
+        await this.game.click(inventory.menuId, sellButton.slot, "left");
+      }
     }
-    task.next = now + 400;
+    if (task.pending) task.pending.at = this.clock();
+    task.next = this.clock() + 400;
   }
 
   private async closeOwned(menu: string): Promise<void> {

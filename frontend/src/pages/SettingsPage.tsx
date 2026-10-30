@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useAuth } from "../lib/auth";
+import { useAuth } from "../lib/useAuth";
 import { api, ApiError } from "../lib/api";
 
 export function SettingsPage() {

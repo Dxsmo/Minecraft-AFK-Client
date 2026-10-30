@@ -1,0 +1,16 @@
+{
+  "controllers": 4,
+  "soakSeconds": 60,
+  "extraNodeProcesses": 0,
+  "javaAutoDetection": true,
+  "nativeRightUse": true,
+  "nativeLeftMining": true,
+  "noUnsneak": true,
+  "viewDistance": 6,
+  "confirmedSales": 93,
+  "refilledSlotsConfirmed": true,
+  "manualCommandDelivered": true,
+  "inventoryRpcCalls": 0,
+  "povRenderRpcCalls": 0,
+  "independentStop": true
+}

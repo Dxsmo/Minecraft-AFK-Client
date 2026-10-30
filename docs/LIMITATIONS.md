@@ -8,13 +8,8 @@ and the complete automation mapping. Previous implementation notes are in
 - **Bedrock protocols:** this release exposes ViaBedrock 1.26.51 only. Java
   supports the release codecs listed by the running SoulFire instance.
 - **Microsoft login:** accepted refresh-token caches can migrate silently.
-  Missing, revoked or incompatible tokens need a new device code. Discovering
-  the other edition uses the same login, but can fail for missing ownership,
-  Xbox profile setup or authentication restrictions. It never creates an
-  unauthenticated placeholder.
-- **Companion endpoints:** automatically added accounts use the same hostname
-  with the other edition's standard port. Different server endpoints must be
-  configured on that account afterwards.
+  Missing, revoked or incompatible tokens need a new device code. Each edition
+  is added independently; automatic opposite-edition sign-in has been removed.
 - **Menus and game actions:** the common scheduler uses SoulFire's authoritative
   inventory state and menu IDs. Bedrock custom-menu/item compatibility also
   depends on ViaBedrock. Vanilla/server attack, use, mining and command limits
@@ -24,9 +19,10 @@ and the complete automation mapping. Previous implementation notes are in
   a server simulation radius.
 - **Resource packs:** SoulFire provides its own headless resource-pack handling.
   That does not establish support for every custom pack or server behavior.
-- **Screenshots/live view:** SoulFire has renderer/POV APIs. This migration
-  does not add a streaming player or automatic screenshot UI. A later UI can
-  use those APIs with the existing account permissions and resource limits.
+- **Live view:** the account's Live Cam tab starts a native POV stream on demand.
+  Closing it or hiding the document stops that account's rendering when no
+  viewers remain. Background automation consumes inventory events without
+  rendering icons. Native renderer caches may remain until the JVM restarts.
 - **Capacity:** all controllers share Node and one JVM, but this engine's CPU/
   RAM profile differs from Azalea. Historical capacity estimates do not carry
   over automatically.

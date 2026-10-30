@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { api, ApiError } from "../lib/api";
 import type { MinecraftAccount } from "../lib/types";
-import { useAuth } from "../lib/auth";
+import { useAuth } from "../lib/useAuth";
 import { useCompactLayout } from "../lib/useCompactLayout";
 import { AccessUsernameInput, type AccessUser } from "./AccessUsernameInput";
 import { AUTO_DETECT_VERSION } from "../lib/minecraftVersions";

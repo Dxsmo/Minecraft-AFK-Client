@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-30",
+  "backend": {
+    "files": 48,
+    "tests": 442,
+    "failed": 0
+  },
+  "hostSampler": {
+    "tests": 9,
+    "failed": 0
+  },
+  "frontend": {
+    "build": "passed",
+    "lintErrors": 0,
+    "lintWarnings": 0
+  },
+  "docker": {
+    "architecture": "linux/arm64",
+    "backendBuild": "passed",
+    "webBuild": "passed",
+    "soulfireVersion": "2.10.6"
+  },
+  "dependencies": {
+    "backendKnownVulnerabilities": 0,
+    "frontendKnownVulnerabilities": 0,
+    "includesDevDependencies": true
+  },
+  "limits": [
+    "No production Raspberry Pi or HugoSMP measurement",
+    "No new live Microsoft authorization or live Bedrock server test",
+    "Native soak lasted 60 seconds with four offline Java test clients"
+  ]
+}

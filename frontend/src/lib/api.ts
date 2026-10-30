@@ -41,6 +41,7 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   const method = (options.method ?? "GET").toUpperCase();
   const headers = new Headers(options.headers);
   const mutating = !["GET", "HEAD", "OPTIONS"].includes(method);
+  const sessionAtRequest = typeof document === "undefined" ? undefined : getCookie("afk_csrf");
 
   if (mutating) {
     clearApiReadCache();
@@ -69,6 +70,10 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   const body = isJson ? await response.json().catch(() => undefined) : undefined;
 
   if (!response.ok) {
+    // A stale request from a previous login must not sign out the new user.
+    // An incorrect current password is also a 401, but is not session expiry.
+    if (response.status === 401 && body?.error === "Unauthorized" && typeof window !== "undefined"
+        && sessionAtRequest === getCookie("afk_csrf")) window.dispatchEvent(new Event("afk-session-expired"));
     throw new ApiError(response.status, body?.error ?? response.statusText, body?.details);
   }
   return body as T;

@@ -106,7 +106,7 @@ export class ClientManager {
 
     client = new MinecraftClient(toRuntimeConfig(account));
     client.on("console", (event: ConsoleEvent) => {
-      persistConsoleLog(event.minecraftAccountId, event.type, event.message).catch((err) =>
+      persistConsoleLog(event.minecraftAccountId, event.type, event.message, new Date(event.timestamp)).catch((err) =>
         logger.error({ err }, "Failed to persist console log"),
       );
       for (const listener of this.consoleListeners) {

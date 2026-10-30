@@ -1,0 +1,291 @@
+{
+  "browser": "156.0.8078.74",
+  "scenarios": [
+    {
+      "count": 2000,
+      "layouts": [
+        {
+          "width": 1365,
+          "height": 600,
+          "consoleHeight": 233,
+          "earningsHeight": 79.5,
+          "visibleLines": 11.1,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 99,
+            "earningsHeight": 213.90625,
+            "graphHeight": 56.609375,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 5.75
+          }
+        },
+        {
+          "width": 1365,
+          "height": 768,
+          "consoleHeight": 354,
+          "earningsHeight": 118.5,
+          "visibleLines": 17.3,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 150,
+            "earningsHeight": 322.703125,
+            "graphHeight": 120.40625,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.25
+          }
+        },
+        {
+          "width": 1365,
+          "height": 900,
+          "consoleHeight": 486,
+          "earningsHeight": 118.5,
+          "visibleLines": 24.1,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 192,
+            "earningsHeight": 412.46875,
+            "graphHeight": 210.171875,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.25
+          }
+        },
+        {
+          "width": 1920,
+          "height": 1080,
+          "consoleHeight": 666,
+          "earningsHeight": 118.5,
+          "visibleLines": 33.3,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 250,
+            "earningsHeight": 534.859375,
+            "graphHeight": 332.5625,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.0625
+          }
+        },
+        {
+          "width": 390,
+          "height": 667,
+          "consoleHeight": 281,
+          "earningsHeight": 0,
+          "visibleLines": 14.5,
+          "pageOverflow": 0,
+          "bottomGap": 12,
+          "expectedBottomGap": 12
+        },
+        {
+          "width": 390,
+          "height": 844,
+          "consoleHeight": 458,
+          "earningsHeight": 0,
+          "visibleLines": 24.3,
+          "pageOverflow": 0,
+          "bottomGap": 12,
+          "expectedBottomGap": 12
+        }
+      ],
+      "finalCount": 2007,
+      "historyMs": 44.4,
+      "live": [
+        {
+          "commitMs": 53.400000005960464,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 52,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 52.5,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 52.900000005960464,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 53,
+          "repeatedDateFormats": 0
+        }
+      ],
+      "httpCommands": [
+        "/tpahere Steve",
+        "/home"
+      ],
+      "draftAfterSend": "",
+      "draftAfterFailure": "/homes",
+      "readingAnchorDelta": 0,
+      "renderedRows": 23,
+      "errors": [],
+      "idle": {
+        "seconds": 2.00266699999338,
+        "taskCpuPercentOneCore": 1.9936414790942267,
+        "layouts": 0,
+        "styleRecalculations": 62,
+        "jsHeapUsedMiB": 8.585418701171875
+      },
+      "bursts": {
+        "hidden": 1000,
+        "settings": 1000,
+        "hiddenDoesNotRender": true,
+        "bufferRetained": true
+      }
+    },
+    {
+      "count": 20000,
+      "layouts": [
+        {
+          "width": 1365,
+          "height": 600,
+          "consoleHeight": 233,
+          "earningsHeight": 79.5,
+          "visibleLines": 11.1,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 99,
+            "earningsHeight": 213.90625,
+            "graphHeight": 56.609375,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 5.75
+          }
+        },
+        {
+          "width": 1365,
+          "height": 768,
+          "consoleHeight": 354,
+          "earningsHeight": 118.5,
+          "visibleLines": 17.3,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 150,
+            "earningsHeight": 322.703125,
+            "graphHeight": 120.40625,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.25
+          }
+        },
+        {
+          "width": 1365,
+          "height": 900,
+          "consoleHeight": 486,
+          "earningsHeight": 118.5,
+          "visibleLines": 24.1,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 192,
+            "earningsHeight": 412.46875,
+            "graphHeight": 210.171875,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.25
+          }
+        },
+        {
+          "width": 1920,
+          "height": 1080,
+          "consoleHeight": 666,
+          "earningsHeight": 118.5,
+          "visibleLines": 33.3,
+          "pageOverflow": 0,
+          "bottomGap": 24,
+          "expectedBottomGap": 24,
+          "open": {
+            "consoleHeight": 250,
+            "earningsHeight": 534.859375,
+            "graphHeight": 332.5625,
+            "pageOverflow": 0,
+            "horizontalOverflow": 0,
+            "summaryBottomGap": 25.0625
+          }
+        },
+        {
+          "width": 390,
+          "height": 667,
+          "consoleHeight": 281,
+          "earningsHeight": 0,
+          "visibleLines": 14.5,
+          "pageOverflow": 0,
+          "bottomGap": 12,
+          "expectedBottomGap": 12
+        },
+        {
+          "width": 390,
+          "height": 844,
+          "consoleHeight": 458,
+          "earningsHeight": 0,
+          "visibleLines": 24.3,
+          "pageOverflow": 0,
+          "bottomGap": 12,
+          "expectedBottomGap": 12
+        }
+      ],
+      "finalCount": 20000,
+      "historyMs": 81,
+      "live": [
+        {
+          "commitMs": 56,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 54.60000002384186,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 54.5,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 54.39999997615814,
+          "repeatedDateFormats": 0
+        },
+        {
+          "commitMs": 54.19999998807907,
+          "repeatedDateFormats": 0
+        }
+      ],
+      "httpCommands": [
+        "/tpahere Steve",
+        "/home"
+      ],
+      "draftAfterSend": "",
+      "draftAfterFailure": "/homes",
+      "readingAnchorDelta": 0,
+      "renderedRows": 23,
+      "errors": [],
+      "idle": {
+        "seconds": 2.003249000001233,
+        "taskCpuPercentOneCore": 2.0477234732164975,
+        "layouts": 0,
+        "styleRecalculations": 66,
+        "jsHeapUsedMiB": 20.521591186523438
+      },
+      "bursts": {
+        "hidden": 1000,
+        "settings": 1000,
+        "hiddenDoesNotRender": true,
+        "bufferRetained": true
+      }
+    }
+  ]
+}

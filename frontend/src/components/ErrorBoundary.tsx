@@ -8,6 +8,7 @@ interface Props {
 
 interface State {
   error: Error | null;
+  resetKey?: string;
 }
 
 /**
@@ -16,17 +17,15 @@ interface State {
  * with no indication of what went wrong.
  */
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  state: State = { error: null, resetKey: this.props.resetKey };
 
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: Error): Pick<State, "error"> {
     return { error };
   }
 
-  componentDidUpdate(prev: Props) {
+  static getDerivedStateFromProps(props: Props, state: State): State | null {
     // A new page gets a clean slate, so navigating away recovers.
-    if (prev.resetKey !== this.props.resetKey && this.state.error) {
-      this.setState({ error: null });
-    }
+    return props.resetKey !== state.resetKey ? { error: null, resetKey: props.resetKey } : null;
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {

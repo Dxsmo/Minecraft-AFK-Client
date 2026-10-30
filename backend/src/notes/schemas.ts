@@ -83,4 +83,4 @@ const documentSchema = z.custom<NoteDocument>(isNoteDocument, "Ungültiger Notiz
 export const createNoteSchema = z.object({ title: z.string().trim().min(1).optional(), content: documentSchema.optional() }).strict();
 export const updateNoteSchema = z.object({ revision: z.number().int().nonnegative(), title: z.string().trim().min(1).optional(), content: documentSchema.optional() })
   .strict().refine((value) => value.title !== undefined || value.content !== undefined, "Keine Änderungen angegeben");
-export const noteAccessSchema = z.object({ users: z.array(z.object({ userId: z.string().min(1), canWrite: z.boolean() }).strict()) }).strict();
+export const noteAccessSchema = z.object({ users: z.array(z.object({ userId: z.string().min(1).max(160), canWrite: z.boolean() }).strict()).max(10000) }).strict();

@@ -1,0 +1,30 @@
+{
+  "checks": [
+    "real login, 100 dashboard accounts, virtual console and all account settings categories",
+    "held button saved through real API",
+    "offline Live Cam does not open a render stream",
+    "real item catalog, normalized search and image persistence",
+    "incorrect current password shows an error without expiring the session",
+    "failed logout is visible and retry succeeds",
+    "expired real session returns to login without an endless reconnect loop"
+  ],
+  "layouts": [
+    {
+      "width": 320,
+      "overflow": 0
+    },
+    {
+      "width": 390,
+      "overflow": 0
+    },
+    {
+      "width": 768,
+      "overflow": 0
+    },
+    {
+      "width": 1280,
+      "overflow": 0
+    }
+  ],
+  "pageErrors": []
+}

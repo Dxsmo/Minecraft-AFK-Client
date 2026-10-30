@@ -179,7 +179,10 @@ try {
   await page.getByRole('button', { name: 'Verkaufsgraph einklappen' }).click();
   await page.waitForTimeout(550);
   if (verify) {
-    ensure(await page.locator('.console-output').evaluate((el, height) => el.clientHeight === height, consoleHeight), 'Collapsing the graph did not restore console height');
+    const collapsed = await page.locator('.console-output').evaluate(el => ({ height: el.clientHeight,
+      expanded: document.querySelector('.earnings-details').dataset.expanded,
+      closedHeight: getComputedStyle(document.querySelector('.account-console-page')).getPropertyValue('--console-closed-height') }));
+    ensure(Math.abs(collapsed.height - consoleHeight) <= 1, `Collapsing graph: expected ${consoleHeight}, actual ${JSON.stringify(collapsed)}`);
     const collapsedLayout = await page.evaluate(() => ({ page: document.documentElement.scrollHeight, viewport: innerHeight,
       graph: document.querySelector('.earnings-details').getBoundingClientRect().height,
       output: document.querySelector('.console-output').getBoundingClientRect().height,

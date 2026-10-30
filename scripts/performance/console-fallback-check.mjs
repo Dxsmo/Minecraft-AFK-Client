@@ -51,7 +51,7 @@ try {
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await page.locator('a[href="/accounts/fallback?tab=console"]').click();
   await page.locator('.console-output').getByText('HTTP history', { exact: true }).waitFor({ timeout: 5000 });
-  const lines = await page.locator('.console-output > div').count();
+  const lines = await page.locator('.console-output').evaluate(el => +el.dataset.logCount);
   if (lines !== 3 || historyRequests !== 1 || errors.length) throw new Error(JSON.stringify({ lines, historyRequests, errors }));
   console.log(JSON.stringify({ blockedSocketHistory: true, historyRequests, retainedLines: lines, errors }, null, 2));
 } finally { await browser.close(); }

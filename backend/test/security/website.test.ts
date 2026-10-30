@@ -88,6 +88,14 @@ afterAll(async()=>{
   vi.restoreAllMocks();
 });
 
+it("bounds audit-log reads and rejects malformed limits before running the database query", async () => {
+  for (const limit of ["-1", "0", "1.5", "nope", "1000000"]) {
+    const response = await app.inject({ method: "GET", url: `/api/audit-logs?limit=${limit}`, headers: headers(2) });
+    expect(response.statusCode).toBe(400);
+  }
+  expect((await app.inject({ method: "GET", url: "/api/audit-logs?limit=10", headers: headers(2) })).statusCode).toBe(200);
+});
+
 it("rejects anonymous requests and ordinary users accessing administration",async()=>{
   const paths=["/api/users",`/api/users/${users[2].id}`,"/api/audit-logs","/api/security/ip-bans"];
   for(const path of [...paths,"/api/minecraft/accounts","/api/notes","/api/system/status"]) {

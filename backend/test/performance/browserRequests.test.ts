@@ -96,3 +96,17 @@ it("does not repopulate a cache with a read started before logout or a mutation"
   await expect(api.get(path)).resolves.toMatchObject({ total: 42 });
   expect(fetch).toHaveBeenCalledTimes(3);
 });
+
+it("announces expired sessions, but not an incorrect password or a stale response after a new login", async () => {
+  const events = new EventTarget(), expired = vi.fn(); events.addEventListener("afk-session-expired", expired);
+  vi.stubGlobal("window", events); const document = { cookie: "afk_csrf=old-session" }; vi.stubGlobal("document", document);
+  const fetch = vi.fn().mockResolvedValueOnce(json({ error: "Current password is incorrect" }, 401))
+    .mockResolvedValueOnce(json({ error: "Unauthorized" }, 401));
+  vi.stubGlobal("fetch", fetch);
+  await expect(api.post("/auth/change-password", {})).rejects.toBeInstanceOf(ApiError); expect(expired).not.toHaveBeenCalled();
+  await expect(api.get("/auth/me")).rejects.toBeInstanceOf(ApiError); expect(expired).toHaveBeenCalledTimes(1);
+  let finish!: (value: Response) => void; fetch.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const previous = api.get("/old-session-request"); document.cookie = "afk_csrf=new-session";
+  finish(json({ error: "Unauthorized" }, 401)); await expect(previous).rejects.toBeInstanceOf(ApiError);
+  expect(expired).toHaveBeenCalledTimes(1);
+});

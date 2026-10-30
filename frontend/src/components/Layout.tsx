@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { useAuth } from "../lib/auth";
-import { Suspense, useEffect } from "react";
+import { useAuth } from "../lib/useAuth";
+import { Suspense, useEffect, useState } from "react";
 
 type IconName = "notes" | "dashboard" | "users" | "logs" | "settings";
 
@@ -66,6 +66,14 @@ const navItems: { to: string; label: string; icon: IconName; adminOnly: boolean 
 
 export function Layout() {
   const { user, logout } = useAuth();
+  const [logoutError, setLogoutError] = useState("");
+  const [loggingOut, setLoggingOut] = useState(false);
+  async function signOut() {
+    setLoggingOut(true); setLogoutError("");
+    try { await logout(); }
+    catch { setLogoutError("Abmelden ist gerade nicht möglich. Bitte erneut versuchen."); }
+    finally { setLoggingOut(false); }
+  }
   const location = useLocation();
   const initial = user?.username?.charAt(0).toUpperCase() ?? "?";
 
@@ -140,7 +148,8 @@ export function Layout() {
           >
             {initial}
           </span>
-          <button onClick={() => void logout()} className="btn btn-ghost btn-sm">
+          {logoutError && <p role="alert" className="text-xs" style={{ color: "#f87171" }}>{logoutError}</p>}
+          <button onClick={() => void signOut()} disabled={loggingOut} className="btn btn-ghost btn-sm">
             Log out
           </button>
         </header>

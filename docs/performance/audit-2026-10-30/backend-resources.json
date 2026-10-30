@@ -1,0 +1,71 @@
+{
+  "measuredAt": "2026-10-29T23:57:51.819Z",
+  "scope": "local isolated API/backend only",
+  "machine": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M3 Pro",
+    "logicalCpus": 12,
+    "memoryGiB": 36,
+    "node": "v24.13.0"
+  },
+  "limitations": [
+    "No Minecraft server connections; no per-bot capacity measurement.",
+    "No Caddy, Cloudflare, browser rendering or authenticated WebSocket clients.",
+    "CPU: 100% means one logical core. Load generator is a separate process.",
+    "Fixture bulk insertion is performed in a separate unmeasured process.",
+    "Short sequential phases; RSS includes allocator/JIT/cache retained from earlier phases."
+  ],
+  "phases": [
+    {
+      "name": "empty-backend-idle",
+      "elapsedSeconds": 15.003175333,
+      "cpuPercentOneCore": 0.20904241471481044,
+      "rssMiB": {
+        "mean": 229.03125,
+        "p95": 229.046875,
+        "max": 229.046875
+      },
+      "eventLoopDelayP95Ms": 21.102591,
+      "processesMeasured": 1,
+      "connectedMinecraftAccounts": 0
+    },
+    {
+      "name": "100-offline-account-records-idle",
+      "elapsedSeconds": 15.001835708000002,
+      "cpuPercentOneCore": 0.1847640551430574,
+      "rssMiB": {
+        "mean": 235.90625,
+        "p95": 235.90625,
+        "max": 235.90625
+      },
+      "eventLoopDelayP95Ms": 21.086207,
+      "processesMeasured": 1,
+      "connectedMinecraftAccounts": 0
+    },
+    {
+      "name": "100-offline-records-api-and-log-load",
+      "elapsedSeconds": 15.00179825,
+      "cpuPercentOneCore": 13.26251671195485,
+      "rssMiB": {
+        "mean": 300.19140625,
+        "p95": 342.78125,
+        "max": 342.78125
+      },
+      "eventLoopDelayP95Ms": 21.561343,
+      "processesMeasured": 1,
+      "connectedMinecraftAccounts": 0,
+      "httpRequests": 296,
+      "statuses": {
+        "200": 296
+      },
+      "latencyMs": {
+        "mean": 5.318612030405495,
+        "p95": 13.138165999997,
+        "max": 19.442000000002736
+      },
+      "skippedBatches": 0,
+      "syntheticLogLines": 296
+    }
+  ]
+}

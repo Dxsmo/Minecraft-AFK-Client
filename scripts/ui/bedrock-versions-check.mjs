@@ -1,6 +1,8 @@
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
-import { bedrockVersionCatalog } from '../../backend/dist/bedrock-bot/version.js';
+// The website consumes SoulFire's runtime catalog for both editions.
+const catalog = { java: { versions: ['26.3', '26.2'], defaultVersion: '26.3' },
+  bedrock: { versions: ['1.26.51', '1.26.50'], defaultVersion: '1.26.51' } };
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE ?? 'playwright');
@@ -35,7 +37,7 @@ await page.route('**/api/**', async route => {
       await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Fixture offline' }) });
       return;
     }
-    data = { bedrock: bedrockVersionCatalog() };
+    data = catalog;
   } else if (path.endsWith('/users')) data = [];
   else if (path.endsWith('/accounts')) data = accounts;
   else if (accounts.some(account => path.endsWith(`/accounts/${account.id}`))) {
@@ -57,9 +59,13 @@ await page.addInitScript(() => {
 
 const select = () => page.getByRole('combobox', { name: 'Minecraft version' });
 const options = () => select().locator('option').evaluateAll(entries => entries.filter(entry => !entry.disabled).map(entry => entry.value));
+async function expectJava() {
+  await page.waitForFunction(() => [...document.querySelectorAll('select[aria-label="Minecraft version"] option')].some(option => !option.disabled && option.value === '26.2'));
+  assert.deepEqual(await options(), ['', ...catalog.java.versions]);
+}
 async function expectBedrock() {
   await page.waitForFunction(() => [...document.querySelectorAll('select[aria-label="Minecraft version"] option')].some(option => option.value === '1.26.51'));
-  assert.deepEqual(await options(), ['', ...bedrockVersionCatalog().versions]);
+  assert.deepEqual(await options(), ['', ...catalog.bedrock.versions]);
   assert(!(await options()).includes('26.2'));
 }
 
@@ -77,7 +83,7 @@ try {
   await select().selectOption('1.26.51');
   await page.getByRole('button', { name: 'Java', exact: true }).click();
   assert.equal(await select().inputValue(), '');
-  assert((await options()).includes('26.2'));
+  await expectJava();
   assert(!(await options()).includes('1.26.51'));
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
 
@@ -87,21 +93,23 @@ try {
     await page.getByRole('button', { name: /^Connection/ }).click();
     if (edition === 'bedrock') await expectBedrock();
     else {
-      assert((await options()).includes('26.2'));
+      await expectJava();
       assert(!(await options()).includes('1.26.51'));
     }
     await page.locator('aside a[href="/dashboard"]').click();
     await page.locator('.account-card').nth(1).waitFor();
   }
 
-  failNextCatalog = true;
   await page.getByRole('button', { name: '+ New account', exact: true }).click();
+  await expectJava();
+  failNextCatalog = true;
   await page.getByRole('button', { name: 'Bedrock', exact: true }).click();
   await page.getByRole('button', { name: 'Erneut laden', exact: true }).waitFor();
   assert.deepEqual(await options(), ['']);
+  const beforeRetry = catalogRequests;
   await page.getByRole('button', { name: 'Erneut laden', exact: true }).click();
   await expectBedrock();
-  assert.equal(catalogRequests, 4);
+  assert.equal(catalogRequests, beforeRetry + 1);
   assert.deepEqual(errors, []);
   console.log(JSON.stringify({ checks: ['creation', 'edition reset', 'Bedrock settings', 'Java settings', 'failed catalogue retry'], catalogRequests, errors }));
 } finally { await browser.close(); }

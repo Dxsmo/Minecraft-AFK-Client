@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import { api, ApiError } from "../lib/api";
-import { useAuth } from "../lib/auth";
+import { useAuth } from "../lib/useAuth";
 import type { NoteGrant, NoteUser } from "../lib/notes";
 import { AccessUsernameInput } from "./AccessUsernameInput";
 
