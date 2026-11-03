@@ -1,0 +1,13 @@
+{
+  "fixture": true,
+  "javaLiveFrames": true,
+  "bedrockLiveFrames": true,
+  "lazyLoaded": true,
+  "readOnly": true,
+  "stopsOnTabChange": true,
+  "hiddenPagePauses": true,
+  "accountIsolation": true,
+  "offlineDoesNotRender": true,
+  "mobileOverflow": false,
+  "pageErrors": 0
+}

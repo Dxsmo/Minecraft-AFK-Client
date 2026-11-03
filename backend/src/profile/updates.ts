@@ -19,9 +19,9 @@ export const websiteUpdate = {
       hint: "",
     },
     {
-      title: "Live Cam & Remote Control",
-      description: "Neu ist auch die Live Cam. Ihr findet sie beim jeweiligen Minecraft-Account im Reiter „Live Cam“ und könnt dort live sehen, was euer Account ingame sieht. Für kleinere Anpassungen könnt ihr ihn auch selbst steuern: Klickt dafür einfach auf das Bild in der Live Cam.",
-      hint: "Mit Escape verlasst ihr die Remote Control wieder.",
+      title: "Live Cam",
+      description: "Neu ist auch die Live Cam. Ihr findet sie beim jeweiligen Minecraft-Account im Reiter „Live Cam“ und könnt dort live sehen, was euer Account ingame sieht.",
+      hint: "",
     },
     {
       title: "Dauer-Button",

@@ -27,6 +27,9 @@ const droppedItems=Number(process.env.AFK_SMOKE_DROPPED_ITEMS||0);
 const dropInventory=process.env.AFK_SMOKE_DROP_INVENTORY==='1';
 const nativeChecks=process.env.AFK_SMOKE_NATIVE_CHECKS==='1';
 const dropFirstMenu=process.env.AFK_SMOKE_DROP_FIRST_MENU==='1';
+const breakStream=process.env.AFK_SMOKE_BREAK_EVENT_STREAM==='1';
+const itemPickups=process.env.AFK_SMOKE_ITEM_PICKUPS==='1';
+let injectedStreamFailures=0, pickups=0;
 let droppedInventoryFrames=0;
 let lostMenuReplies=0;
 assert.ok(Number.isInteger(droppedItems)&&droppedItems>=0&&droppedItems<=10000);
@@ -45,6 +48,10 @@ globalThis.fetch=async(input,init)=>{
     while(pending.length>=5 && pending.length>=5+pending.readUInt32BE(1)) {
       const size=pending.readUInt32BE(1),flags=pending[0];
       const event=flags===0 ? fromBinary(BotEventSchema,pending.subarray(5,5+size)).event.case : undefined;
+      if(breakStream && !injectedStreamFailures && event==='inventory' && events.some(list=>list.some(event=>event.type==='spawn'))) {
+        injectedStreamFailures++;
+        throw new TypeError('fetch failed', {cause:Object.assign(new Error('fixture socket reset'),{code:'ECONNRESET'})});
+      }
       if(event==='resyncRequired')streamResyncs++;
       if(dropInventory) {
         if(event==='inventory')droppedInventoryFrames++;
@@ -88,10 +95,26 @@ server.on('playerJoin', client=>{
   client.write('update_health',{health:20,food:10,foodSaturation:0});
   client.write('set_slot',{windowId:0,slot:36,item:{blockId:260,itemCount:64,itemDamage:0}});
   client.write('held_item_slot',{slot:0});
+  const spawnItem=index=>{
+    const entityId=1000+index;
+    client.write('spawn_entity',{entityId,type:2,x:16,y:64*32,z:16,pitch:0,yaw:0,objectData:1,velocity:{x:0,y:0,z:0}});
+    client.write('entity_metadata',{entityId,metadata:[{key:10,type:5,value:{blockId:260,itemCount:64,itemDamage:0}}]});
+  };
   for(let index=0;index<droppedItems;index++) {
     const entityId=1000+index;
     client.write('spawn_entity',{entityId,type:2,x:Math.round((0.5+(index%20)/20)*32),y:64*32,z:Math.round((0.5+Math.floor(index/20)%20/20)*32),pitch:0,yaw:0,objectData:1,velocity:{x:0,y:0,z:0}});
     client.write('entity_metadata',{entityId,metadata:[{key:10,type:5,value:{blockId:260,itemCount:64,itemDamage:0}}]});
+  }
+  if(itemPickups && droppedItems) {
+    let index=0;
+    timers.push(setInterval(()=>{
+      const slot=index++%droppedItems, entityId=1000+slot;
+      client.write('collect',{collectedEntityId:entityId,collectorEntityId:client.id});
+      // These server-authoritative updates must remain effective while the
+      // pile is changing and the same inventory slots are continuously refilled.
+      client.write('set_slot',{windowId:0,slot:36,item:{blockId:260,itemCount:64,itemDamage:0}});
+      spawnItem(slot); pickups++;
+    },50));
   }
   timers.push(setTimeout(()=>{client.write('position',{x:2.5,y:64,z:0.5,yaw:0,pitch:30,flags:0});teleports++;},10000));
 });
@@ -155,11 +178,15 @@ try {
   assert.equal(inventoryRpcCalls,0,'Automation must not call the icon-rendering inventory RPC');
   assert.equal(povRenderRpcCalls,0,'Automation must not open a camera');
   if(soakSeconds){console.error(`Soak started: ${clientCount} clients, ${soakSeconds}s`);await new Promise(resolve=>setTimeout(resolve,soakSeconds*1000));}
-  assert.ok(!events.flat().some(event=>event.type==='connection_failed'||event.type==='warning'),'The soak must remain connected without warnings');
+  const streamWarnings=events.flat().filter(event=>event.type==='warning'&&event.message.startsWith('SoulFire-Ereignisstream unterbrochen:'));
+  assert.ok(!events.flat().some(event=>event.type==='connection_failed'||event.type==='warning'&&!streamWarnings.includes(event)),'The soak must remain connected without unexpected warnings');
+  assert.equal(clients.length,clientCount,'A telemetry failure must not log the Minecraft account in again');
+  if(breakStream){assert.equal(injectedStreamFailures,1);assert.equal(streamWarnings.length,1);assert.ok(streamWarnings[0].message.includes('ECONNRESET'));}
+  if(itemPickups)assert.ok(pickups>100,'The dense pile must be replenished during selling');
   const before=events[1].filter(event=>event.type==='heartbeat').length;
   const stopped=once(controllers[0],'close');controllers[0].stdin.write('{"type":"disconnect"}\n');await stopped;
   await waitFor(()=>events[1].filter(event=>event.type==='heartbeat').length>before);
-  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
+  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,injectedStreamFailures,pickups,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
 } catch (error) {
   console.error(JSON.stringify({events,packetTypes:packets.map(p=>({name:p.name,type:p.type,data:p.type==='entity_action'?p.data:undefined}))}));
   const rpc=soulFireRpc();

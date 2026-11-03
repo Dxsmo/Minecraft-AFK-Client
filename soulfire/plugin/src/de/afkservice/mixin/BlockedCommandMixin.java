@@ -8,7 +8,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Also covers commands entered through the native remote-control chat. */
+/** Blocks forbidden commands on the native packet path as well. */
 @Mixin(ClientPacketListener.class)
 public final class BlockedCommandMixin {
   private static boolean blocked(String text) {

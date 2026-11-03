@@ -14,7 +14,8 @@
     "CameraItemCopiesMixin",
     "LiveCamEncodingMixin",
     "LiveCamPacingMixin",
-    "RemotePacingMixin"
+    "ItemCollisionMixin",
+    "ItemCollisionCandidatesMixin"
   ],
   "injectors": {
     "defaultRequire": 1

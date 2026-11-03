@@ -15,10 +15,6 @@
   "starts": 2,
   "h264Frames": 202,
   "liveFps": 4.767030601260957,
-  "remoteFps": [
-    12.490632025980515,
-    13.493253373313344
-  ],
   "congestionCheck": true,
   "delayedAckFrames": 4,
   "adaptedResolution": {
@@ -39,7 +35,6 @@
   "movement": true,
   "inventoryOpenClose": true,
   "escapeAndRestart": true,
-  "autoSellPausedDuringRemote": true,
   "autoSellResumed": true,
   "failures": []
 }

@@ -73,41 +73,6 @@
       "fps": 5.25,
       "kilobitsPerSecond": 774
     },
-    "remote": {
-      "bots": [
-        {
-          "keepAlive": {
-            "n": 40,
-            "medianMs": 1.01,
-            "p95Ms": 1.78,
-            "maxMs": 1.89
-          },
-          "gameResponse": {
-            "n": 16,
-            "medianMs": 6.48,
-            "p95Ms": 9.3,
-            "maxMs": 9.3
-          }
-        },
-        {
-          "keepAlive": {
-            "n": 40,
-            "medianMs": 1.14,
-            "p95Ms": 1.57,
-            "maxMs": 2.01
-          },
-          "gameResponse": {
-            "n": 16,
-            "medianMs": 8.47,
-            "p95Ms": 34.11,
-            "maxMs": 34.11
-          }
-        }
-      ],
-      "frames": 93,
-      "fps": 11.625,
-      "kilobitsPerSecond": 554
-    },
     "afterCamera": {
       "bots": [
         {

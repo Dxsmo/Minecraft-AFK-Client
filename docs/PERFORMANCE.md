@@ -1,6 +1,6 @@
 # Performance-Prüfung und Command-Korrekturen – V1.6.1
 
-Ergänzung: [AutoSell, Weltwechsel und Fernsteuerung](SOULFIRE-REMOTE-2026-10-30.md).
+Ergänzung: [AutoSell und Weltwechsel](SOULFIRE-AUTOSELL-2026-10-30.md).
 
 Aktuelle Prüfung vom 30.10.2026: [Website, Accounts, SoulFire und Performance](PERFORMANCE-2026-10-30.md).
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import { create } from "@bufbuild/protobuf";
 import { Code, ConnectError } from "@connectrpc/connect";
 import { BotInventoryStateResponseSchema, BotRuntimeState } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
-import { BlockFace, BotActionStatus, Hand } from "@soulfiremc/sdk/generated/soulfire/bot_live_pb";
+import { BlockFace, BotActionStatus, BotLifecycleKind, Hand } from "@soulfiremc/sdk/generated/soulfire/bot_live_pb";
 import { writePrivateJson } from "../../src/soulfire/auth.js";
 
 const mocks = vi.hoisted(() => ({ rpc: undefined as any }));
@@ -23,6 +23,7 @@ async function fixture() {
   const dir = await mkdtemp(path.join(os.tmpdir(), "afk-session-"));
   const abort = new AbortController(), emit = vi.fn(), queue: any[] = [];
   let deliver: ((frame?: any) => void) | undefined;
+  let failStream: ((error: Error) => void) | undefined;
   const rpc = {
     instance: { getOrCreateInstance: vi.fn(async () => ({ id: "instance" })), updateInstanceConfigEntry: vi.fn(async () => ({})),
       getInstanceInfo: vi.fn(async () => ({ result: { case: "info", value: { config: { accounts: [] } } } })), replaceInstanceAccounts: vi.fn(async () => ({})) },
@@ -40,9 +41,10 @@ async function fixture() {
       interactBlock: vi.fn(async () => ({ result: { status: BotActionStatus.COMPLETED } })),
       watchBotEvents: vi.fn(async function* () {
         while (!abort.signal.aborted) {
-          const frame = await new Promise<any>(resolve => {
+          const frame = await new Promise<any>((resolve, reject) => {
             const canceled = () => resolve(undefined);
             deliver = frame => { abort.signal.removeEventListener("abort", canceled); resolve(frame); };
+            failStream = error => { abort.signal.removeEventListener("abort", canceled); reject(error); };
             abort.signal.addEventListener("abort", canceled, { once: true });
           });
           if (!frame) return;
@@ -69,7 +71,8 @@ async function fixture() {
     ] }, slots: [{ slot: 2, itemId: "minecraft:stone", count: 64, tooltipLines: ["Stone"] }],
   });
   return { rpc, config, emit, abort, queue, start, frame, inventory, directory: dir,
-    begin: () => { running = runSoulFire(config, emit, abort, queue); return running; }, end: async () => { deliver!(undefined); await flush(); await running; } };
+    begin: () => { running = runSoulFire(config, emit, abort, queue); return running; },
+    breakStream: async (error?: Error) => { if (error) failStream!(error); else deliver!(undefined); await flush(); } };
 }
 
 it("delegates selling to the native client and suspends it before manual commands", async () => {
@@ -102,10 +105,67 @@ it("discards stale menus after stream resynchronization instead of polling the r
   expect(f.rpc.bot.getInventoryState).not.toHaveBeenCalled();
 });
 
-it("ends the session when its event stream closes instead of operating on stale inventory forever", async () => {
-  const f = await fixture(); await f.start(); await f.end();
+it.each([undefined, new TypeError("fetch failed", { cause: Object.assign(new Error("socket closed"), { code: "ECONNRESET" }) })])(
+  "resubscribes after a telemetry transport failure without stopping or logging in the bot again (%s)", async failure => {
+    const f = await fixture(); await f.start();
+    await f.frame("inventory", { state: f.inventory() });
+    await f.breakStream(failure);
+    expect(f.abort.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.rpc.live.watchBotEvents).toHaveBeenCalledTimes(2);
+    await f.frame("snapshot", { x: 0, y: 64, z: 0, dimension: "overworld" });
+    expect(f.emit.mock.calls.filter(([event]) => event.type === "spawn")).toHaveLength(1);
+    expect(f.rpc.auth.loginCredentials).toHaveBeenCalledTimes(1);
+    expect(f.rpc.bot.setBotsDesiredState).toHaveBeenCalledTimes(1);
+    expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "connection_failed" }));
+    if (failure) expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ type: "warning", message: expect.stringContaining("ECONNRESET") }));
+    f.queue.push({ type: "chat", text: "/homes" });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(f.rpc.live.sendChat).toHaveBeenCalledWith(expect.objectContaining({ message: "/homes" }), expect.anything());
+    expect(f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === "sell-lease-until").length).toBeGreaterThan(1);
+  },
+);
+
+it("retains an actual Minecraft disconnect reason and stops the session", async () => {
+  const f = await fixture(); await f.start();
+  await f.frame("lifecycle", { kind: BotLifecycleKind.BOT_LIFECYCLE_DISCONNECTED, message: "Kicked: server restarting" });
   expect(f.abort.signal.aborted).toBe(true);
-  expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ type: "connection_failed", error: expect.stringContaining("Ereignisstream") }));
+  expect(f.emit).toHaveBeenCalledWith({ type: "connection_failed", error: "Kicked: server restarting" });
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(f.rpc.live.watchBotEvents).toHaveBeenCalledTimes(1);
+});
+
+it("does not retry denied event subscriptions", async () => {
+  const f = await fixture(); await f.start();
+  await f.breakStream(new ConnectError("permission revoked", Code.PermissionDenied));
+  expect(f.abort.signal.aborted).toBe(true);
+  expect(f.emit).toHaveBeenCalledWith({ type: "connection_failed", error: expect.stringContaining("permission revoked") });
+});
+
+it("backs off repeated transport failures, maintains the sale lease, and cancels retries on stop", async () => {
+  const f = await fixture(); await f.start();
+  f.rpc.live.watchBotEvents.mockImplementation(async function* () { throw new TypeError("fetch failed"); yield undefined as any; });
+  await f.breakStream(new TypeError("fetch failed"));
+  await vi.advanceTimersByTimeAsync(14_000);
+  expect(f.rpc.live.watchBotEvents.mock.calls.length).toBeGreaterThanOrEqual(5);
+  expect(f.rpc.live.watchBotEvents.mock.calls.length).toBeLessThanOrEqual(7);
+  expect(f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === "sell-lease-until").length).toBeGreaterThanOrEqual(3);
+  expect(f.emit.mock.calls.filter(([event]) => event.type === "warning")).toHaveLength(1);
+  expect(f.abort.signal.aborted).toBe(false);
+  f.abort.abort(); await flush();
+  const attempts = f.rpc.live.watchBotEvents.mock.calls.length;
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(f.rpc.live.watchBotEvents).toHaveBeenCalledTimes(attempts);
+});
+
+it("detects a real game disconnect via the health check during a broken event subscription", async () => {
+  const f = await fixture(); await f.start();
+  f.rpc.live.watchBotEvents.mockImplementation(async function* () { throw new TypeError("fetch failed"); yield undefined as any; });
+  await f.breakStream(new TypeError("fetch failed"));
+  f.rpc.bot.getBotInfo.mockResolvedValue({ status: { runtimeState: BotRuntimeState.FAILED, lastError: "Read timed out" } } as any);
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(f.abort.signal.aborted).toBe(true);
+  expect(f.emit).toHaveBeenCalledWith({ type: "connection_failed", error: "Read timed out" });
 });
 
 it("still sends a manual command when the server has already replaced its old menu", async () => {

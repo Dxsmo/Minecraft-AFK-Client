@@ -9,14 +9,12 @@ import { once } from 'node:events';
 import { createSoulFireController } from '../dist/soulfire/controller.js';
 import { soulFireRpc } from '../dist/soulfire/rpc.js';
 import { LIVE_CAM_OPTIONS } from '../dist/soulfire/liveCam.js';
-import { fromJson } from '@bufbuild/protobuf';
-import { ValueSchema } from '@bufbuild/protobuf/wkt';
 assert.ok(process.env.SOULFIRE_URL && process.env.SOULFIRE_SECRET_KEY_FILE, 'Select an isolated SoulFire service');
 const require = createRequire(import.meta.url);
 const mc = require(process.env.MINECRAFT_PROTOCOL_MODULE || 'minecraft-protocol');
 const root = await mkdtemp(path.join(tmpdir(), 'afk-camera-latency-'));
 const clients = [], controllers = [], mappings = [], events = [], timers = [];
-const samples = [], images = [], wire = [], failures = [];
+const samples = [], images = [], failures = [];
 const count = Number(process.env.AFK_LATENCY_CLIENTS || 2), duration = Number(process.env.AFK_LATENCY_SECONDS || 8);
 const droppedItems = Number(process.env.AFK_LATENCY_ITEMS || 1500);
 assert.ok(count >= 2 && count <= 8 && duration >= 4 && duration <= 60 && droppedItems >= 0 && droppedItems <= 10000);
@@ -62,7 +60,7 @@ const summary = values => {
   return { n: sorted.length, medianMs: quantile(.5), p95Ms: quantile(.95), maxMs: quantile(1) };
 };
 const rpc = soulFireRpc();
-let liveAbort, liveTask, remoteAbort, remoteTask, inputTimer;
+let liveAbort, liveTask;
 try {
   await once(server, 'listening');
   for (let index = 0; index < count; index++) {
@@ -81,35 +79,18 @@ try {
     }
   })().catch(error => { if (!liveAbort.signal.aborted) failures.push(String(error)); });
   await wait(() => images.length >= 3); await sleep(1000); await measure('live');
-  liveAbort.abort(); await liveTask; await sleep(1000);
-  remoteAbort = new AbortController(); const sessionId = randomUUID(); let token = '', sequence = 0n, busy = false;
-  await rpc.bot.updateBotConfigEntry({ ...mappings[0], namespace: 'afk-service', key: 'remote-control', value: fromJson(ValueSchema, true) });
-  remoteTask = (async () => {
-    for await (const frame of rpc.pov.watch({ ...mappings[0], sessionId, width: 480, height: 270, maxFps: 15, codecs: ['h264'] }, { signal: remoteAbort.signal, timeoutMs: 0 })) {
-      token ||= frame.inputToken;
-      if (frame.data.length) wire.push({ phase, bytes: Math.ceil(frame.data.length / 3) * 4, at: performance.now() });
-    }
-  })().catch(error => { if (!remoteAbort.signal.aborted) failures.push(String(error)); });
-  inputTimer = setInterval(() => {
-    if (!token || busy) return;
-    busy = true;
-    void rpc.pov.input({ sessionId, inputToken: token, sequence: ++sequence, captured: true, events: [], width: 480, height: 270, escape: false }, { signal: remoteAbort.signal, timeoutMs: 6000 })
-      .catch(error => { if (!remoteAbort.signal.aborted) failures.push(String(error)); }).finally(() => { busy = false; });
-  }, 500);
-  await wait(() => wire.length >= 3); await sleep(1000); await measure('remote');
-  clearInterval(inputTimer); remoteAbort.abort(); await remoteTask;
-  await rpc.bot.updateBotConfigEntry({ ...mappings[0], namespace: 'afk-service', key: 'remote-control', value: fromJson(ValueSchema, false) });
+  liveAbort.abort(); await liveTask;
   await sleep(1000); await measure('afterCamera');
   assert.deepEqual(failures, []);
   const result = { clients: count, droppedItems, secondsPerPhase: duration, phases: {} };
-  for (const label of ['idle', 'live', 'remote', 'afterCamera']) {
-    const frames = (label === 'live' ? images : wire).filter(frame => frame.phase === label);
+  for (const label of ['idle', 'live', 'afterCamera']) {
+    const frames = images.filter(frame => frame.phase === label);
     result.phases[label] = { bots: Array.from({ length: count }, (_, bot) => Object.fromEntries(['keepAlive', 'gameResponse'].map(kind => [kind, summary(samples.filter(sample => sample.phase === label && sample.bot === bot && sample.kind === kind).map(sample => sample.ms))]))), frames: frames.length, fps: frames.length / duration, kilobitsPerSecond: Math.round(frames.reduce((sum, frame) => sum + frame.bytes, 0) * 8 / duration / 1000) };
   }
   console.log(JSON.stringify(result, null, 2));
 } finally {
-  for (const timer of timers) clearInterval(timer); clearInterval(inputTimer); liveAbort?.abort(); remoteAbort?.abort();
-  await Promise.allSettled([liveTask, remoteTask]);
+  for (const timer of timers) clearInterval(timer); liveAbort?.abort();
+  await Promise.allSettled([liveTask]);
   await Promise.all(controllers.map(async controller => { if (controller.exitCode !== null) return; const done = once(controller, 'close'); controller.kill(); await done; }));
   for (const ids of mappings) await rpc.instance.deleteInstance({ id: ids.instanceId }).catch(() => {});
   for (const client of clients) client.end(); server.close(); await rm(root, { recursive: true, force: true });

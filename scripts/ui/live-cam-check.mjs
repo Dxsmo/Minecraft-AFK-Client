@@ -60,6 +60,9 @@ try {
   await page.getByRole('button', { name: 'Live Cam', exact: true }).click();
   await loaded(); await waitFor(() => cameras[0]?.frames >= 2);
   assert.ok(cameras[0].url.includes(java.id));
+  await image.click(); await loaded();
+  assert.equal(cameras.length, 1, 'The live image must remain a read-only camera');
+  assert.equal(requests.some(url => /RemoteControlPanel|remoteInput/.test(url)), false);
   await page.screenshot({ path: '/tmp/afk-live-cam-desktop.png', fullPage: true });
   await page.getByRole('button', { name: 'Einstellungen', exact: true }).click();
   await waitFor(() => cameras.every(camera => camera.closed));
@@ -90,7 +93,7 @@ try {
   await waitFor(() => cameras.every(camera => camera.closed));
   assert.equal(cameras.some(camera => camera.url.includes(offline.id)), false);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ fixture, javaLiveFrames: true, bedrockLiveFrames: true, lazyLoaded: true,
+  console.log(JSON.stringify({ fixture, javaLiveFrames: true, bedrockLiveFrames: true, lazyLoaded: true, readOnly: true,
     stopsOnTabChange: true, hiddenPagePauses: true, accountIsolation: true, offlineDoesNotRender: true,
     mobileOverflow: false, pageErrors: errors.length }));
 } finally { await browser.close(); }

@@ -1,3 +1,4 @@
+import { soulFireError } from "./errors.js";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { runSoulFire, type SoulFireConfig } from "./session.js";
@@ -41,7 +42,7 @@ export class SoulFireController extends EventEmitter {
       void runSoulFire(command as SoulFireConfig, event => {
         if (!this.finished) this.stdout.write(`${JSON.stringify(event)}\n`);
       }, this.abort, this.queued).then(() => this.finish(0)).catch(error => {
-        if (!this.finished && !this.abort.signal.aborted) this.stdout.write(`${JSON.stringify({ type: "connection_failed", error: error instanceof Error ? error.message : "SoulFire-Verbindung fehlgeschlagen" })}\n`);
+        if (!this.finished && !this.abort.signal.aborted) this.stdout.write(`${JSON.stringify({ type: "connection_failed", error: soulFireError(error) })}\n`);
         this.finish(1);
       });
     } else if (command.type === "disconnect") this.kill();

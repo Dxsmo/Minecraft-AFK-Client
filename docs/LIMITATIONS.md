@@ -21,8 +21,7 @@ and the complete automation mapping. Previous implementation notes are in
   That does not establish support for every custom pack or server behavior.
 - **Live view:** the account's Live Cam tab starts a native POV stream on demand.
   Closing it or hiding the document stops that account's rendering when no
-  viewers remain. Clicking the image opens an exclusive native remote-control
-  session in supported browsers over HTTPS/localhost; Escape exits locally.
+  viewers remain.
   Teleport-related transient render failures are retried. Background automation consumes inventory events without
   rendering icons. Native renderer caches may remain until the JVM restarts.
 - **Capacity:** all controllers share Node and one JVM, but this engine's CPU/

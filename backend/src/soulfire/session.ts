@@ -1,6 +1,7 @@
 /** Per-account cancellation scope and scheduler, shared by the backend
  * controllers and optional diagnostic CLI. All editions use one SoulFire JVM. */
 import path from "node:path";
+import { MinecraftDisconnected, retryEventStream, soulFireError } from "./errors.js";
 import { fromJson } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError } from "@connectrpc/connect";
@@ -13,11 +14,19 @@ import { soulFireInstanceName } from "./instanceName.js";
 import { soulFireRpc } from "./rpc.js";
 import { authenticate, isRejectedMicrosoftLogin, readRemoteAccount, writePrivateJson, type Edition } from "./auth.js";
 import { SoulFireBehaviors, type BehaviorConfig, type GameGateway, type BotOutput } from "./behaviors.js";
-import { registerRemoteControl } from "./remoteState.js";
 import { SoulFireInventory } from "./inventory.js";
 
 // Reserved by our pinned native extension, never a Minecraft inventory slot.
 export const SELL_ALL_PLAYER_SLOTS = -1048576;
+
+function streamRetryDelay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
 
 export type SoulFireConfig = BehaviorConfig & { host: string; port: number; username: string; auth_type: string; email?: string; edition: Edition;
   cache_dir: string; account_id?: string; version?: string; autosell_pause_after_ms?: number; autosell_resume_after_ms?: number };
@@ -72,7 +81,6 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   // Node's existing supervisor owns exactly the configured reconnect policy.
   await setting("auto-reconnect", "enabled", false);
   await setting("auto-respawn", "enabled", false);
-  await setting("afk-service", "remote-control", false);
   await setting("client-settings", "render-distance", 2);
   await setting("bot", "restore-on-reboot", false);
   const versions = await protocolOptions(rpc, instanceId);
@@ -104,10 +112,6 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   const gateway: GameGateway = {
     nativeAutosell: true,
     suspendSell: async duration => { if (nativeSellEnabled) await setting("afk-service", "sell-manual-until", Date.now() + duration); },
-    remote: async active => {
-      await setting("afk-service", "remote-control", active);
-      heldButton = undefined; heldCrouch = undefined;
-    },
     held: async cfg => {
       const button = (cfg.auto_button || "off").toUpperCase(), crouch = !!cfg.crouch_enabled;
       if (button !== heldButton) { await setting("afk-service", "auto-button", button); heldButton = button; }
@@ -167,52 +171,70 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   await gateway.held(config);
   await setting("afk-service", "sell-manual-until", 0);
   await nativeSellPause(config.autosell_pause_after_ms ?? 0, config.autosell_resume_after_ms ?? 0);
-  const unregisterRemote = registerRemoteControl(accountKey, active => behaviors.remote(active));
   let online = false, busy = false, statusBusy = false, heartbeatAt = 0, lastStatusAt = -Infinity, lastWarning = 0;
   let position: { x: number; y: number; z: number; dimension: string } | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let stream: Promise<void> | undefined;
   let wakeScheduler: (() => void) | undefined;
   let eventPending = false;
+  let lastStreamWarning = -Infinity;
   try {
     stream = (async () => {
-      for await (const frame of rpc.live.watchBotEvents({ ...ids, filter: { includeStateDeltas: true, includeInventory: true, includeChat: true, includeLifecycle: true }, heartbeatIntervalSeconds: 5 }, { signal, timeoutMs: 0 })) {
-        const event = frame.event;
-        // Dropped telemetry is not a teleport. Pause only until the fresh
-        // inventory snapshot arrives, then reconcile existing menu ownership.
-        // Resetting automation here imposed another 2s delay on every burst
-        // of pickups/sales, and could postpone AutoSell indefinitely.
-        if (event.case === "resyncRequired") inventory.reset();
-        if (event.case === "inventory" && event.value.state) { inventory.update(event.value.state); wakeScheduler?.(); }
-        if (event.case === "chat") { emit({ type: "chat", sender: event.value.senderName || null, message: event.value.plainText }); behaviors.onChat(event.value.senderName || null, event.value.plainText); wakeScheduler?.(); }
-        if (event.case === "snapshot") {
-          if (position && (position.dimension !== event.value.dimension || Math.hypot(position.x - event.value.x, position.y - event.value.y, position.z - event.value.z) > 1)) behaviors.transition();
-          position = event.value;
-          if (!online) { online = true; await behaviors.spawned(); emit({ type: "spawn" }); }
-        }
-        if (event.case === "stateDelta" && position) {
-          const next = { ...position, ...Object.fromEntries(Object.entries(event.value).filter(([, value]) => value !== undefined)) };
-          if (next.dimension !== position.dimension || Math.hypot(next.x - position.x, next.y - position.y, next.z - position.z) > 1) behaviors.transition();
-          position = next;
-        }
-        if (event.case === "lifecycle") {
-          if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_CONNECTED) emit({ type: "login" });
-          if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_DISCONNECTED) throw new Error(event.value.message || "Minecraft-Verbindung beendet");
-          if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_DIED) { inventory.reset(); behaviors.joining(); online = false; await rpc.live.respawn(ids, call()); }
-          if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_RESPAWNED || event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_SPAWNED) {
-            if (!online || event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_RESPAWNED) { online = true; await behaviors.spawned(); emit({ type: "spawn" }); }
+      let retryMs = 500;
+      while (!signal.aborted) {
+        try {
+          for await (const frame of rpc.live.watchBotEvents({ ...ids, filter: { includeStateDeltas: true, includeInventory: true, includeChat: true, includeLifecycle: true }, heartbeatIntervalSeconds: 5 }, { signal, timeoutMs: 0 })) {
+            retryMs = 500;
+            const event = frame.event;
+            // Dropped telemetry is not a teleport. Pause only until the fresh
+            // inventory snapshot arrives, then reconcile existing menu ownership.
+            // Resetting automation here imposed another 2s delay on every burst
+            // of pickups/sales, and could postpone AutoSell indefinitely.
+            if (event.case === "resyncRequired") inventory.reset();
+            if (event.case === "inventory" && event.value.state) { inventory.update(event.value.state); wakeScheduler?.(); }
+            if (event.case === "chat") { emit({ type: "chat", sender: event.value.senderName || null, message: event.value.plainText }); behaviors.onChat(event.value.senderName || null, event.value.plainText); wakeScheduler?.(); }
+            if (event.case === "snapshot") {
+              if (position && (position.dimension !== event.value.dimension || Math.hypot(position.x - event.value.x, position.y - event.value.y, position.z - event.value.z) > 1)) behaviors.transition();
+              position = event.value;
+              if (!online) { online = true; await behaviors.spawned(); emit({ type: "spawn" }); }
+            }
+            if (event.case === "stateDelta" && position) {
+              const next = { ...position, ...Object.fromEntries(Object.entries(event.value).filter(([, value]) => value !== undefined)) };
+              if (next.dimension !== position.dimension || Math.hypot(next.x - position.x, next.y - position.y, next.z - position.z) > 1) behaviors.transition();
+              position = next;
+            }
+            if (event.case === "lifecycle") {
+              if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_CONNECTED) emit({ type: "login" });
+              if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_DISCONNECTED) throw new MinecraftDisconnected(event.value.message || "Minecraft-Verbindung beendet");
+              if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_DIED) { inventory.reset(); behaviors.joining(); online = false; await rpc.live.respawn(ids, call()); }
+              if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_RESPAWNED || event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_SPAWNED) {
+                if (!online || event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_RESPAWNED) { online = true; await behaviors.spawned(); emit({ type: "spawn" }); }
+              }
+            }
+            if (event.case === "status" && (event.value.runtimeState === BotRuntimeState.FAILED || event.value.runtimeState === BotRuntimeState.RETRYING)) throw new MinecraftDisconnected(event.value.lastError || "SoulFire-Verbindung fehlgeschlagen");
+            // Game-state frames confirm activity; transport-only heartbeats do not
+            // hide a frozen client from the existing online watchdog.
+            if (online && ["snapshot", "stateDelta", "inventory"].includes(event.case ?? "") && Date.now() - heartbeatAt >= 5000) {
+              heartbeatAt = Date.now(); emit({ type: "heartbeat" });
+            }
           }
-        }
-        if (event.case === "status" && (event.value.runtimeState === BotRuntimeState.FAILED || event.value.runtimeState === BotRuntimeState.RETRYING)) throw new Error(event.value.lastError || "SoulFire-Verbindung fehlgeschlagen");
-        // Game-state frames confirm activity; transport-only heartbeats do not
-        // hide a frozen client from the existing online watchdog.
-        if (online && ["snapshot", "stateDelta", "inventory"].includes(event.case ?? "") && Date.now() - heartbeatAt >= 5000) {
-          heartbeatAt = Date.now(); emit({ type: "heartbeat" });
+          if (!signal.aborted) throw new Error("SoulFire-Ereignisstream wurde beendet");
+        } catch (error) {
+          if (signal.aborted) return;
+          if (error instanceof MinecraftDisconnected || !retryEventStream(error)) throw error;
+          // Telemetry has its own transport lifetime. Keep the game connection,
+          // native sale lease and independent health check alive while resubscribing.
+          inventory.reset();
+          if (Date.now() - lastStreamWarning >= 30_000) {
+            lastStreamWarning = Date.now();
+            emit({ type: "warning", message: `SoulFire-Ereignisstream unterbrochen: ${soulFireError(error)}; verbinde Ereignisstream erneut` });
+          }
+          await streamRetryDelay(retryMs, signal);
+          retryMs = Math.min(retryMs * 2, 5000);
         }
       }
-      if (!signal.aborted) throw new Error("SoulFire-Ereignisstream wurde beendet");
     })();
-    void stream.catch(error => { if (!signal.aborted) { emit({ type: "connection_failed", error: error instanceof Error ? error.message : "SoulFire-Ereignisstream beendet" }); abort.abort(); } });
+    void stream.catch(error => { if (!signal.aborted) { emit({ type: "connection_failed", error: soulFireError(error) }); abort.abort(); } });
     await rpc.bot.setBotsDesiredState({ instanceId, botIds: [botId], desiredState: BotDesiredState.RUNNING }, call());
     const step = () => {
       if (signal.aborted) return;
@@ -265,10 +287,9 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
     timer = setInterval(step, 100);
     await new Promise<void>(resolve => { if (signal.aborted) resolve(); else signal.addEventListener("abort", () => resolve(), { once: true }); });
   } catch (error) {
-    if (!signal.aborted) emit({ type: "connection_failed", error: error instanceof Error ? error.message : "SoulFire-Verbindung fehlgeschlagen" });
+    if (!signal.aborted) emit({ type: "connection_failed", error: soulFireError(error) });
     throw error;
   } finally {
-    unregisterRemote();
     clearInterval(timer);
     wakeScheduler = undefined;
     abort.abort();

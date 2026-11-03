@@ -35,15 +35,6 @@ vi.mock("../../src/soulfire/versions.js", async importOriginal => {
     { id: "SPECIAL|2193", displayName: "Bedrock 1.26.51", keywords: ["Bedrock 1.26.51", "2193"] },
   ]) };
 });
-const remoteCalls: Array<{ id: string; start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn>; input: ReturnType<typeof vi.fn> }> = [];
-let remotePreparation: Promise<void> | undefined;
-vi.mock("../../src/soulfire/remoteControl.js", async importOriginal => {
-  const actual = await importOriginal<typeof import("../../src/soulfire/remoteControl.js")>();
-  return { ...actual, RemoteControlSession: class {
-    start = vi.fn(async () => { await remotePreparation; }); stop = vi.fn(async () => {}); input = vi.fn();
-    constructor(id: string) { remoteCalls.push({ id, start: this.start, stop: this.stop, input: this.input }); }
-  } };
-});
 const sendCommand = vi.fn(() => true);
 const headers = (index = 0, csrf = true) => ({ cookie: `${config.session.cookieName}=${sessions[index].sessionId}`, ...(csrf ? {"x-csrf-token": sessions[index].csrfToken} : {}) });
 const snapshot = (account: {id:string;name:string}) => ({ id:account.id, name:account.name, status:"ONLINE", serverHost:"minecraft.example", serverPort:25565,
@@ -77,7 +68,7 @@ beforeEach(async()=>{
   for(const ws of sockets.splice(0)) ws.terminate();
   await prisma.minecraftAccount.deleteMany({where:{id:{in:accounts.map(a=>a.id)}}});
   await prisma.user.deleteMany({where:{id:{in:users.map(u=>u.id)}}});
-  users=[];accounts=[];sessions=[];sendCommand.mockClear();cameraSubscribe.mockClear();cameraViewers.clear();remoteCalls.length=0;
+  users=[];accounts=[];sessions=[];sendCommand.mockClear();cameraSubscribe.mockClear();cameraViewers.clear();
   for(const role of ["USER","USER","ADMIN"] as const) {
     const user=await prisma.user.create({data:{username:"security-"+randomUUID().slice(0,8),passwordHash,role}});
     users.push(user);sessions.push(await createSession(user.id,{}));
@@ -336,7 +327,7 @@ it("rejects missing, null and foreign origins for cookie-authenticated sockets",
 it("rejects unauthenticated, foreign account sockets",async()=>{
   const anonymous=new WebSocket(url+"/ws/dashboard",{headers:{origin:config.publicOrigin}});sockets.push(anonymous);
   expect((await once(anonymous,"close"))[0]).toBe(4401);
-  for(const path of [`/ws/accounts/${accounts[1].id}`, `/ws/accounts/${accounts[1].id}/camera`,`/ws/accounts/${accounts[1].id}/control`]) {
+  for(const path of [`/ws/accounts/${accounts[1].id}`, `/ws/accounts/${accounts[1].id}/camera`]) {
     const connection=await socket(path);expect((await connection.closed)[0]).toBe(4401);expect(connection.messages).toEqual([]);
   }
 });
@@ -484,35 +475,6 @@ it("returns 404 for retired HTTP and WebSocket endpoints even for admins", async
   }
 });
 
-it("requires CSRF before remote control and releases control after account permission revocation", async () => {
-  const bad = await socket(`/ws/accounts/${accounts[0].id}/control`);
-  bad.ws.send(JSON.stringify({ type: "start", csrfToken: "incorrect" }));
-  expect((await bad.closed)[0]).toBe(4403); expect(remoteCalls).toHaveLength(0);
-  const own = await socket(`/ws/accounts/${accounts[0].id}/control`);
-  own.ws.send(JSON.stringify({ type: "start", csrfToken: sessions[0].csrfToken }));
-  await waitFor(() => remoteCalls.length === 1);
-  await waitFor(() => remoteCalls[0].start.mock.calls.length === 1);
-  own.ws.send(JSON.stringify({ type: "input", captured: true, events: [{ kind: 0, code: 87, action: 1 }] }));
-  await waitFor(() => remoteCalls[0].input.mock.calls.length === 1);
-  await prisma.userMinecraftAccount.deleteMany({where:{minecraftAccountId:accounts[0].id}});
-  own.ws.send(JSON.stringify({ type: "input", captured: true, events: [] }));
-  expect((await own.closed)[0]).toBe(4401);
-  await waitFor(() => remoteCalls[0].stop.mock.calls.length === 1);
-});
-
-it("keeps input heartbeats and Stop responsive while native remote preparation is pending", async () => {
-  let finish!: () => void;
-  remotePreparation = new Promise<void>(resolve => { finish = resolve; });
-  try {
-    const own = await socket(`/ws/accounts/${accounts[0].id}/control`);
-    own.ws.send(JSON.stringify({ type: "start", csrfToken: sessions[0].csrfToken }));
-    await waitFor(() => remoteCalls.length === 1 && remoteCalls[0].start.mock.calls.length === 1);
-    for (let count = 1; count <= 5; count++) {
-      own.ws.send(JSON.stringify({ type: "input", captured: true, events: [] }));
-      await waitFor(() => remoteCalls[0].input.mock.calls.length === count);
-    }
-    own.ws.send(JSON.stringify({ type: "stop" }));
-    expect((await own.closed)[0]).toBe(1000);
-    expect(remoteCalls[0].stop).toHaveBeenCalled();
-  } finally { finish(); remotePreparation = undefined; }
+it("does not expose a control endpoint", async () => {
+  expect((await app.inject({ url: `/ws/accounts/${accounts[0].id}/control`, headers: { ...headers(), origin: config.publicOrigin } })).statusCode).toBe(404);
 });

@@ -10,10 +10,6 @@
   "starts": 2,
   "h264Frames": 144,
   "liveFps": 4.767763764995386,
-  "remoteFps": [
-    14.996250937265684,
-    14.992503748125937
-  ],
   "cameraSellPeriodsMs": [
     2031,
     2022
@@ -27,7 +23,6 @@
   "movement": true,
   "inventoryOpenClose": true,
   "escapeAndRestart": true,
-  "autoSellPausedDuringRemote": true,
   "autoSellResumed": true,
   "failures": []
 }

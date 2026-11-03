@@ -9,7 +9,6 @@ export type GameInventory = { menuId: string; title: string; containerSlots: num
 export interface GameGateway {
   nativeAutosell?: boolean;
   suspendSell?(durationMs: number): Promise<void>;
-  remote?(active: boolean): Promise<void>;
   held(config: BehaviorConfig): Promise<void>;
   sneak(): Promise<void>;
   chat(text: string): Promise<void>;
@@ -32,7 +31,6 @@ const teleportSuccess = (text: string) => /^(?:<(?:HugoSMP)>|\[HugoSMP\])?\s*(?:
 export class SoulFireBehaviors {
   private cfg: BehaviorConfig;
   private online = false;
-  private remoteActive = false;
   private readyAt = 0;
   private nextSell = 0;
   private pauseStart = 0;
@@ -56,15 +54,6 @@ export class SoulFireBehaviors {
     await this.game.held(this.cfg);
     if (!config.autosell_enabled) await this.cancelSell();
     if (changed) this.nextSell = this.clock();
-  }
-
-  async remote(active: boolean): Promise<void> {
-    this.remoteActive = active;
-    const owned = this.sell?.menu ?? this.foreground?.menu;
-    this.resetTasks();
-    if (owned) await this.closeOwned(owned);
-    await this.game.remote?.(active);
-    if (!active) { await this.game.held(this.cfg); this.nextSell = this.clock(); }
   }
 
   async spawned(): Promise<void> {
@@ -121,7 +110,7 @@ export class SoulFireBehaviors {
 
   async tick(): Promise<void> {
     const now = this.clock();
-    if (!this.online || this.remoteActive) return;
+    if (!this.online) return;
     while (this.sneakChecks.length && this.sneakChecks[0] <= now) { this.sneakChecks.shift(); this.checkSneak(); }
     if (this.cfg.crouch_enabled && now >= this.nextSneak) {
       try { await this.game.sneak(); this.nextSneak = now + 30 * 60_000; }

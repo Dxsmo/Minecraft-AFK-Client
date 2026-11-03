@@ -1,0 +1,11 @@
+{
+  "results": [
+    "Desktop: unread, text-only categories, focus return, reopen, cross-device persistence, shared-browser user switch",
+    "Independent user, reduced motion, read failure and retry",
+    "320/390/768px: no overflow, scrollable content, backdrop closing",
+    "Status load failure recovers inside the open dialog",
+    "Stale announcement IDs reload before acknowledging the current update"
+  ],
+  "errors": [],
+  "failures": []
+}

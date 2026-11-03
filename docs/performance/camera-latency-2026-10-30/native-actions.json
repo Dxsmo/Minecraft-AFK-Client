@@ -1,12 +1,4 @@
 {
-  "nativeRemoteControl": {
-    "h264Frames": 11,
-    "movement": true,
-    "mouseLook": true,
-    "inventory": true,
-    "afkBlocked": true,
-    "released": true
-  },
   "nativeCamera": {
     "width": 480,
     "height": 270,

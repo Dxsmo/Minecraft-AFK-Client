@@ -18,7 +18,6 @@ import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
  * video stream, synthetic release cycles, or network roundtrips per tick. */
 public final class SoulFireControls implements ModInitializer {
   private static final Map<BotConnection, Integer> CHECKS = Collections.synchronizedMap(new WeakHashMap<>());
-  private static final Map<BotConnection, Boolean> REMOTE = Collections.synchronizedMap(new WeakHashMap<>());
   private static final Map<BotConnection, Boolean> VISUALS = Collections.synchronizedMap(new WeakHashMap<>());
   @Override
   public void onInitialize() {
@@ -39,19 +38,6 @@ public final class SoulFireControls implements ModInitializer {
       mc.options.renderDistance().set(2);
     }
     NativeAutoSell.tick(bot);
-    boolean remote = flag(settings, "remote-control");
-    var previousRemote = REMOTE.put(bot, remote);
-    if (remote) {
-      // Release configured input once, before native POV takes over. Later
-      // remote key presses must not be overwritten by the automation tick.
-      if (!Boolean.TRUE.equals(previousRemote)) {
-        bot.controlState().shift(false);
-        mc.options.keyShift.setDown(false);
-        mc.options.keyAttack.setDown(false);
-        mc.options.keyUse.setDown(false);
-      }
-      return;
-    }
     boolean crouch = flag(settings, "crouch-enabled");
     bot.controlState().shift(crouch);
     mc.options.keyShift.setDown(crouch);
@@ -88,7 +74,7 @@ public final class SoulFireControls implements ModInitializer {
    * held setting even there; only an explicit setting change may release it. */
   public static boolean forcedDown(BotConnection bot, KeyMapping mapping) {
     var settings = bot.settingsSource().stem().settings().get("afk-service");
-    if (settings == null || flag(settings, "remote-control")) return false;
+    if (settings == null) return false;
     var keys = bot.minecraft().options;
     return (mapping == keys.keyShift && flag(settings, "crouch-enabled"))
       || (mapping == keys.keyAttack && "LEFT".equals(text(settings, "auto-button", "OFF")))
@@ -97,7 +83,7 @@ public final class SoulFireControls implements ModInitializer {
 
   public static boolean heldPointer(BotConnection bot) {
     var settings = bot.settingsSource().stem().settings().get("afk-service");
-    return settings != null && !flag(settings, "remote-control") && !"OFF".equals(text(settings, "auto-button", "OFF"))
+    return settings != null && !"OFF".equals(text(settings, "auto-button", "OFF"))
       && bot.minecraft().gui.screen() == null;
   }
 

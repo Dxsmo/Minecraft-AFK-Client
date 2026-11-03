@@ -1,3 +1,4 @@
+import { soulFireError } from "./errors.js";
 import readline from "node:readline";
 import { runSoulFire, type SoulFireConfig } from "./session.js";
 const emit = (event: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -22,6 +23,6 @@ process.on("SIGINT", () => abort.abort());
 
 
 void configPromise.then(config => runSoulFire(config, emit, abort, queued)).catch(error => {
-  if (!abort.signal.aborted) emit({ type: "connection_failed", error: error instanceof Error ? error.message : "SoulFire-Verbindung fehlgeschlagen" });
+  if (!abort.signal.aborted) emit({ type: "connection_failed", error: soulFireError(error) });
   process.exitCode = 1;
 }).finally(() => { input.close(); process.exit(); });

@@ -17,7 +17,7 @@ public final class NativeAutoSell {
   private static final Map<BotConnection, State> STATES = Collections.synchronizedMap(new WeakHashMap<>());
   private static final class State {
     String config = "", command = "/sell";
-    boolean enabled, waiting, remote;
+    boolean enabled, waiting;
     int player, level;
     long next, requested, lastWarning, interval = 2000;
     double x, y, z;
@@ -46,10 +46,7 @@ public final class NativeAutoSell {
     state.player = player; state.level = level;
     state.x = mc.player.getX(); state.y = mc.player.getY(); state.z = mc.player.getZ();
     if (moved) { state.next = now + 2000; state.waiting = false; }
-    boolean remote = settings.containsKey("remote-control") && settings.get("remote-control").getAsBoolean();
-    if (remote || state.remote != remote) { state.next = now; state.waiting = false; }
-    state.remote = remote;
-    if (!state.enabled || remote || number(settings, "sell-lease-until") < now
+    if (!state.enabled || number(settings, "sell-lease-until") < now
         || number(settings, "sell-manual-until") > now
         || (now >= number(settings, "sell-pause-from") && now < number(settings, "sell-pause-until"))) return;
 

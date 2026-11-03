@@ -1,6 +1,5 @@
 package de.afkservice.mixin;
 
-import com.soulfiremc.server.bot.BotConnection;
 import com.soulfiremc.mod.access.IMenuIdentity;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
@@ -22,10 +21,6 @@ public final class SellBatchMixin {
   private static void transferSaleInventory(Minecraft mc, int slot, int button, ContainerInput input, CallbackInfo ci) {
     if (slot != -1048576) return;
     ci.cancel();
-    var bot = BotConnection.currentOptional().orElseThrow();
-    var settings = bot.settingsSource().stem().settings().get("afk-service");
-    if (settings != null && settings.containsKey("remote-control") && settings.get("remote-control").getAsBoolean())
-      throw new IllegalStateException("Remote control owns this account");
     if (input != ContainerInput.QUICK_MOVE || button != 0 || mc.player == null || mc.gameMode == null
         || !(mc.gui.screen() instanceof AbstractContainerScreen<?> screen))
       throw new IllegalStateException("Sale menu is not available");
