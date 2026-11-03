@@ -31,7 +31,7 @@ describe("explicit website announcements", () => {
       expect(response.statusCode).toBe(200);
       expect(response.headers["cache-control"]).toBe("private, no-store");
       expect(response.json().unread).toBe(true);
-      expect(response.json().announcement.items).toHaveLength(5);
+      expect(response.json().announcement.items).toHaveLength(3);
       expect((await get(index)).json().unread).toBe(true);
       expect((await prisma.user.findUniqueOrThrow({ where: { id: users[index].id } })).lastSeenWebsiteUpdate).toBeNull();
     }
@@ -50,9 +50,9 @@ describe("explicit website announcements", () => {
   });
 
   it("only acknowledges the displayed announcement; stale or unknown IDs cannot hide a new update", async () => {
-    await prisma.user.update({ where: { id: users[0].id }, data: { lastSeenWebsiteUpdate: "older-explicit-announcement" } });
-    expect((await get()).json().unread).toBe(true);
-    expect((await read("older-explicit-announcement")).statusCode).toBe(409);
+    await prisma.user.updateMany({ data: { lastSeenWebsiteUpdate: "2026-10-soulfire-features" } });
+    for (const index of [0, 1]) expect((await get(index)).json().unread).toBe(true);
+    expect((await read("2026-10-soulfire-features")).statusCode).toBe(409);
     expect((await read("arbitrary-future-version")).statusCode).toBe(409);
     expect((await get()).json().unread).toBe(true);
     const id = (await get()).json().announcement.id;

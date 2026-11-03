@@ -28,10 +28,11 @@ execFileSync(process.execPath, [backendRequire.resolve('prisma/build/index.js'),
 const { buildApp } = await import('../../backend/dist/app.js');
 const { prisma } = await import('../../backend/dist/database/prisma.js');
 const { hashPassword } = await import('../../backend/dist/auth/password.js');
+const { websiteUpdate } = await import('../../backend/dist/profile/updates.js');
 const password = 'Updates-fixture-only-2026!';
 const passwordHash = await hashPassword(password);
 for (const username of ['UpdatesAlice', 'UpdatesBob', 'Updates320', 'Updates390', 'Updates768', 'UpdatesLoading', 'UpdatesStale']) {
-  await prisma.user.create({ data: { username, passwordHash } });
+  await prisma.user.create({ data: { username, passwordHash, lastSeenWebsiteUpdate: '2026-10-soulfire-features' } });
 }
 const app = await buildApp();
 await app.listen({ host: '127.0.0.1', port: 0 });
@@ -76,7 +77,7 @@ async function login(page, username) {
 }
 async function waitForRead(username) {
   for (let attempt = 0; attempt < 100; attempt++) {
-    if ((await prisma.user.findUniqueOrThrow({ where: { username } })).lastSeenWebsiteUpdate) return;
+    if ((await prisma.user.findUniqueOrThrow({ where: { username } })).lastSeenWebsiteUpdate === websiteUpdate.id) return;
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   assert.fail('Read marker was not persisted');
@@ -85,14 +86,14 @@ async function openAndInspect(page, label) {
   await page.locator('.updates-bell:visible').click();
   const dialog = page.getByRole('dialog'); await dialog.waitFor();
   await dialog.locator('.updates-feature').last().waitFor();
-  assert.equal(await dialog.locator('.updates-feature').count(), 5);
+  assert.equal(await dialog.locator('.updates-feature').count(), 3);
   assert.equal(await dialog.locator('.updates-feature img, .updates-item-art').count(), 0);
   const bounds = await dialog.boundingBox(), viewport = page.viewportSize();
   assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= viewport.width && bounds.y + bounds.height <= viewport.height);
   assert.ok(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth));
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   // The final feature and close action remain reachable with a short viewport.
-  await dialog.getByText('Kleine Fixes & Verbesserungen').scrollIntoViewIfNeeded();
+  await dialog.getByText('Performance', { exact: true }).scrollIntoViewIfNeeded();
   await dialog.locator('.updates-content').evaluate(element => { element.scrollTop = 0; });
   await page.screenshot({ path: join(screenshots, `${label}.png`) });
   return dialog;

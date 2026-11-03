@@ -3,34 +3,24 @@ import { prisma } from "../database/prisma.js";
 // Change this ID ONLY when the owner explicitly requests a new announcement.
 // Routine releases, copy edits and version bumps must not reset the bell.
 export const websiteUpdate = {
-  id: "2026-10-soulfire-features",
-  date: "2026-10-30",
+  id: "2026-11-stability-update",
+  date: "2026-11-03",
   title: "Das ist neu",
   introduction: "Hier die letzten Änderungen – kurz zusammengefasst.",
   items: [
     {
-      title: "Neue Engine",
-      description: "Der AFK-Client wurde auf eine neue Engine umgestellt, die viele neue Features ermöglicht. Dadurch können aber auch neue Bugs auftreten – sagt also Bescheid, wenn ihr welche findet.",
+      title: "Remote Control",
+      description: "Remote Control wurde vorerst wieder entfernt, da die Funktion unter Last bisher nicht stabil und zuverlässig genug lief.",
       hint: "",
     },
     {
-      title: "Account-Icon",
-      description: "Ihr könnt jedem Minecraft-Account ein Icon zuweisen, damit eure Account-Liste übersichtlicher wird. Klickt dafür links beim Account aufs Plus oder auf das vorhandene Bild und wählt ein neues Icon aus. Ein eigenes Bild müsst ihr dafür nicht hochladen: Es stehen euch rund 1.500 Minecraft-Blöcke und -Items zur Auswahl.",
+      title: "Auto Sell",
+      description: "Auto Sell hat viele Performance-Fixes bekommen. Auch wenn sehr viele Items um einen Account herumliegen, sollte der automatische Verkauf jetzt stabil und ohne Stopps oder Geschwindigkeitseinbrüche weiterlaufen.",
       hint: "",
     },
     {
-      title: "Live Cam",
-      description: "Neu ist auch die Live Cam. Ihr findet sie beim jeweiligen Minecraft-Account im Reiter „Live Cam“ und könnt dort live sehen, was euer Account ingame sieht.",
-      hint: "",
-    },
-    {
-      title: "Dauer-Button",
-      description: "Den neuen Auto button findet ihr in den Einstellungen eures jeweiligen Minecraft-Accounts. Dort könnt ihr aktivieren, dass der Account durchgehend entweder die linke oder die rechte Maustaste gedrückt hält – ohne Pausen.",
-      hint: "",
-    },
-    {
-      title: "Kleine Fixes & Verbesserungen",
-      description: "Dazu kommen viele kleinere Bugfixes, eine schnellere Konsole und ein paar Dinge, die die Bedienung angenehmer machen.",
+      title: "Performance",
+      description: "Es gab viele Performance-Fixes. Außerdem wurden Fehler behoben, durch die Accounts nach einigen Stunden unerwartet die Verbindung verlieren konnten. Diese Probleme sollten jetzt behoben sein.",
       hint: "",
     },
   ],
