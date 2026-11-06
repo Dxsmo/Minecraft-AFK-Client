@@ -4,6 +4,8 @@ import com.google.gson.JsonParser;
 import com.soulfiremc.server.bot.BotConnection;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.world.inventory.ContainerInput;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import java.lang.ref.WeakReference;
 import java.util.Collections;
 import java.util.Map;
 import java.util.WeakHashMap;
@@ -21,6 +23,8 @@ public final class NativeAutoSell {
     int player, level;
     long next, requested, lastWarning, interval = 2000;
     double x, y, z;
+    WeakReference<AbstractContainerMenu> sellingMenu = new WeakReference<>(null);
+    int nextSlot;
   }
   public static void tick(BotConnection bot) {
     var mc = bot.minecraft();
@@ -45,8 +49,8 @@ public final class NativeAutoSell {
       || Math.sqrt(Math.pow(mc.player.getX() - state.x, 2) + Math.pow(mc.player.getY() - state.y, 2) + Math.pow(mc.player.getZ() - state.z, 2)) > 2;
     state.player = player; state.level = level;
     state.x = mc.player.getX(); state.y = mc.player.getY(); state.z = mc.player.getZ();
-    if (moved) { state.next = now + 2000; state.waiting = false; }
-    if (!state.enabled || number(settings, "sell-lease-until") < now
+    if (moved) { state.next = now + 2000; state.waiting = false; state.sellingMenu.clear(); }
+    if (!state.enabled || !SellLease.valid(bot.instanceManager().id(), bot.accountProfileId(), now)
         || number(settings, "sell-manual-until") > now
         || (now >= number(settings, "sell-pause-from") && now < number(settings, "sell-pause-until"))) return;
 
@@ -55,16 +59,25 @@ public final class NativeAutoSell {
       var title = screen.getTitle().getString().replaceAll("§.", "").trim();
       if (!title.equalsIgnoreCase("Items verkaufen") && !title.equalsIgnoreCase("Sell")) return;
       boolean stock = menu.slots.stream().anyMatch(slot -> slot.container == mc.player.getInventory() && slot.isActive() && slot.hasItem());
-      if (!stock && state.waiting && now - state.requested < 500) return;
-      for (int index = 0; index < menu.slots.size() && mc.player.containerMenu == menu; index++) {
+      if (!stock && state.sellingMenu.get() != menu && state.waiting && now - state.requested < 500) return;
+      if (state.sellingMenu.get() != menu) { state.sellingMenu = new WeakReference<>(menu); state.nextSlot = 0; }
+      // Bound packet/prediction work per tick. Keep the cursor across ticks so
+      // constant pickups cannot make us revisit the same refilled slots forever.
+      int sent = 0;
+      while (state.nextSlot < menu.slots.size() && mc.player.containerMenu == menu) {
+        int index = state.nextSlot++;
         var slot = menu.slots.get(index);
-        if (slot.container == mc.player.getInventory() && slot.isActive() && slot.hasItem())
+        if (slot.container == mc.player.getInventory() && slot.isActive() && slot.hasItem()) {
           mc.gameMode.handleContainerInput(menu.containerId, index, 0, ContainerInput.QUICK_MOVE, mc.player);
+          if (++sent >= 8) return;
+        }
       }
       if (mc.player.containerMenu == menu) mc.player.closeContainer();
+      state.sellingMenu.clear();
       state.waiting = false;
       return;
     }
+    state.sellingMenu.clear();
     // Never type through a foreign screen. Lost/delayed GUI replies retry
     // at most once per 3s, without the old 10s website-side snapshot timeout.
     if (mc.gui.screen() != null) return;

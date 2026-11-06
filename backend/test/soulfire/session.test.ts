@@ -168,6 +168,61 @@ it("detects a real game disconnect via the health check during a broken event su
   expect(f.emit).toHaveBeenCalledWith({ type: "connection_failed", error: "Read timed out" });
 });
 
+it.each([false, true])("keeps the game session during a minute-long control outage with AutoSell=%s", async autosell => {
+  const f = await fixture(); f.config.autosell_enabled = autosell; await f.start();
+  const failure = new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED 172.19.0.4:38765"), { code: "ECONNREFUSED" }) });
+  f.rpc.bot.getBotInfo.mockRejectedValue(failure);
+  f.rpc.live.watchBotEvents.mockImplementation(async function* () { throw failure; yield undefined as any; });
+  await f.breakStream(failure);
+  await vi.advanceTimersByTimeAsync(65_000);
+  expect(f.abort.signal.aborted).toBe(false);
+  expect(f.emit.mock.calls.filter(([event]) => event.type === "control_status" && !event.available).length).toBeGreaterThanOrEqual(12);
+  expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "connection_failed" }));
+  expect(f.rpc.bot.setBotsDesiredState).toHaveBeenCalledTimes(1);
+  f.rpc.bot.getBotInfo.mockResolvedValue({ status: { runtimeState: BotRuntimeState.RUNNING }, liveState: {} });
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(f.emit).toHaveBeenCalledWith({ type: "control_status", available: true });
+  expect(f.rpc.bot.setBotsDesiredState).toHaveBeenCalledTimes(1);
+  expect(f.rpc.instance.replaceInstanceAccounts).toHaveBeenCalledTimes(1);
+});
+
+it.each([Code.Unknown, Code.Internal, Code.ResourceExhausted])("does not stop a bot when its control query returns RPC code %s during a database outage", async code => {
+  const f = await fixture(); f.config.autosell_enabled = false; await f.start();
+  // The production database failure is logged in Java, but its gRPC UNKNOWN
+  // response may carry no description. Do not depend on matching Hikari text.
+  const failure = new ConnectError("", code);
+  f.rpc.bot.getBotInfo.mockRejectedValue(failure);
+  f.rpc.live.watchBotEvents.mockImplementation(async function* () { throw failure; yield undefined as any; });
+  await f.breakStream(failure);
+  await vi.advanceTimersByTimeAsync(65_000);
+  expect(f.abort.signal.aborted).toBe(false);
+  expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ type: "control_status", available: false }));
+  expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "connection_failed" }));
+  expect(f.rpc.bot.setBotsDesiredState).toHaveBeenCalledTimes(1);
+  expect(f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === "sell-lease-until")).toHaveLength(0);
+  f.rpc.bot.getBotInfo.mockResolvedValue({ status: { runtimeState: BotRuntimeState.RUNNING }, liveState: {} });
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(f.emit).toHaveBeenCalledWith({ type: "control_status", available: true });
+  expect(f.rpc.bot.setBotsDesiredState).toHaveBeenCalledTimes(1);
+});
+
+it.each(["stopped", "missing", "unauthorized"])("ends a session when the recovered service reports its bot as %s", async condition => {
+  const f = await fixture(); await f.start();
+  await f.breakStream(new TypeError("fetch failed"));
+  if (condition === "stopped") f.rpc.bot.getBotInfo.mockResolvedValue({ status: { runtimeState: BotRuntimeState.STOPPED } } as any);
+  else f.rpc.bot.getBotInfo.mockRejectedValue(new ConnectError(condition, condition === "missing" ? Code.NotFound : Code.Unauthenticated));
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(f.abort.signal.aborted).toBe(true);
+  expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ type: "connection_failed" }));
+});
+
+it("handles a stopped bot in a recovered stream without waiting for the silence watchdog", async () => {
+  const f = await fixture(); await f.start();
+  await f.frame("status", { runtimeState: BotRuntimeState.STOPPED });
+  expect(f.abort.signal.aborted).toBe(true);
+  expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ type: "connection_failed", error: expect.stringContaining("gestoppt") }));
+});
+
 it("still sends a manual command when the server has already replaced its old menu", async () => {
   const f = await fixture(); await f.start(); await f.frame("inventory", { state: f.inventory("old", "Items verkaufen") });
   f.rpc.bot.closeContainer.mockRejectedValueOnce(new ConnectError("The container changed", Code.Aborted));
@@ -231,6 +286,64 @@ it("retains failure detection through the separate idle health check", async () 
   await vi.advanceTimersByTimeAsync(6000);
   expect(f.abort.signal.aborted).toBe(true);
   expect(f.emit).toHaveBeenCalledWith({ type: "connection_failed", error: "fixture disconnected" });
+});
+
+it("confirms world entry through the health check when the initial stream snapshot was lost", async () => {
+  const f = await fixture();
+  vi.useFakeTimers();
+  void f.begin();
+  await vi.waitFor(() => expect(f.rpc.bot.setBotsDesiredState).toHaveBeenCalled());
+  await vi.advanceTimersByTimeAsync(100);
+  expect(f.emit.mock.calls.filter(([event]) => event.type === "spawn")).toHaveLength(1);
+  await f.frame("snapshot", { x: 0, y: 64, z: 0, dimension: "overworld" });
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(f.emit.mock.calls.filter(([event]) => event.type === "spawn")).toHaveLength(1);
+  expect(f.abort.signal.aborted).toBe(false);
+});
+
+it("recovers a stopped bot during world entry without waiting for the five-minute timeout", async () => {
+  const f = await fixture();
+  f.rpc.bot.getBotInfo.mockResolvedValue({ status: { runtimeState: BotRuntimeState.STOPPED } } as any);
+  vi.useFakeTimers();
+  void f.begin();
+  await vi.waitFor(() => expect(f.rpc.bot.setBotsDesiredState).toHaveBeenCalled());
+  await vi.advanceTimersByTimeAsync(100);
+  expect(f.abort.signal.aborted).toBe(true);
+  expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ type: "connection_failed", error: expect.stringContaining("gestoppt") }));
+});
+
+it("does not treat a starting bot without a live player as spawned", async () => {
+  const f = await fixture();
+  f.rpc.bot.getBotInfo.mockResolvedValue({ status: { runtimeState: BotRuntimeState.STARTING } } as any);
+  vi.useFakeTimers();
+  void f.begin();
+  await vi.waitFor(() => expect(f.rpc.bot.setBotsDesiredState).toHaveBeenCalled());
+  await vi.advanceTimersByTimeAsync(15_000);
+  expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "spawn" }));
+  expect(f.abort.signal.aborted).toBe(false);
+  // A delayed initial STOPPED frame may predate our RUNNING request. The
+  // independent status query, rather than this stale frame, decides recovery.
+  await f.frame("status", { runtimeState: BotRuntimeState.STOPPED });
+  expect(f.abort.signal.aborted).toBe(false);
+  f.rpc.bot.getBotInfo.mockResolvedValue({ status: { runtimeState: BotRuntimeState.STOPPED } } as any);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect(f.abort.signal.aborted).toBe(true);
+});
+
+it("shows startup phase changes once and stops startup messages after world entry", async () => {
+  const f = await fixture();
+  f.rpc.bot.getBotInfo.mockResolvedValue({ status: { runtimeState: BotRuntimeState.STARTING } } as any);
+  vi.useFakeTimers();
+  void f.begin();
+  await vi.waitFor(() => expect(f.rpc.live.watchBotEvents).toHaveBeenCalledOnce());
+  await f.frame("status", { runtimeState: BotRuntimeState.STARTING });
+  await vi.advanceTimersByTimeAsync(15_000);
+  const starting = () => f.emit.mock.calls.filter(([event]) => event.type === "behavior_log" && event.message === "Minecraft-Client wird gestartet…");
+  expect(starting()).toHaveLength(1);
+  expect(f.emit).toHaveBeenCalledWith({ type: "behavior_log", message: "Anmeldung bestätigt; bereite Minecraft-Verbindung vor…" });
+  await f.frame("snapshot", { x: 0, y: 64, z: 0, dimension: "overworld" });
+  await f.frame("status", { runtimeState: BotRuntimeState.RUNNING });
+  expect(f.emit).not.toHaveBeenCalledWith({ type: "behavior_log", message: "Minecraft-Client gestartet; warte auf Serveranmeldung und Weltbeitritt…" });
 });
 
 it("renews native selling even when no inventory snapshots arrive or telemetry resynchronizes", async () => {

@@ -9,6 +9,7 @@
     "StartupTimeoutMixin",
     "BlockedCommandMixin",
     "SellBatchMixin",
+    "SellLeaseMixin",
     "CameraFrameMixin",
     "CameraItemsMixin",
     "CameraItemCopiesMixin",

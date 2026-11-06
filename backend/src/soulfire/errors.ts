@@ -23,5 +23,16 @@ export function retryEventStream(error: unknown): boolean {
     .includes(ConnectError.from(error).code);
 }
 
+/** Failed control queries cannot establish that the game client has frozen.
+ * SoulFire also maps database failures to opaque UNKNOWN/INTERNAL responses.
+ * Authorization and missing resources still require session recovery. */
+export function unavailableControlService(error: unknown): boolean {
+  const code = ConnectError.from(error).code;
+  if (code === Code.Unavailable || code === Code.DeadlineExceeded) return true;
+  if (error instanceof ConnectError && [Code.Unknown, Code.Internal, Code.ResourceExhausted].includes(code)) return true;
+  if (code !== Code.Unknown) return false;
+  return /\b(?:ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|UND_ERR_[A-Z_]+)\b|fetch failed/i.test(soulFireError(error));
+}
+
 /** A game disconnect is authoritative, unlike a broken telemetry connection. */
 export class MinecraftDisconnected extends Error {}

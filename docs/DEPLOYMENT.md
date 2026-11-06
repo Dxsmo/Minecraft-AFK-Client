@@ -254,6 +254,31 @@ retains an Azalea binary. Cold SoulFire builds/startups download the pinned
 release and Minecraft libraries; allow several minutes. Subsequent updates
 reuse Docker/download caches. The website no longer builds Rust.
 
+For routine updates, run `git pull --ff-only origin master` and
+`bash scripts/update.sh` in the existing project directory. The script keeps
+the current containers running while all images build, then replaces changed
+containers and waits for readiness. Account connections are interrupted when
+their services restart; a backend restart also requires website users to log in
+again. The complete backup shown above briefly stops account services separately
+for its consistent snapshot; it is not part of the image build.
+
+The update script defaults to one concurrent image build to reduce peak RAM
+pressure on the Pi. Larger hosts can override this using
+`COMPOSE_PARALLEL_LIMIT=2 bash scripts/update.sh`
+([Compose concurrency setting](https://docs.docker.com/compose/how-tos/environment-variables/envvars/#compose_parallel_limit)).
+Backend production dependencies have their own cache stage, so source-only
+changes no longer rerun `npm prune`. Frontend builds copy only their actual
+inputs, so changing its README or Caddyfile does not recompile the frontend.
+These follow Docker's [cache guidance](https://docs.docker.com/build/cache/optimize/).
+The first build after this Dockerfile change may need to populate new cache
+layers; download speed, SD/SSD performance and available RAM determine the time.
+No fixed update duration is guaranteed.
+
+Do not use `--no-cache`, `docker builder prune`, `docker system prune -a`, or
+`docker compose down -v` as routine update steps: they discard reusable caches
+or, with `down -v`, the persistent data volumes. Keep the existing Compose project
+name and data volumes. There is no need to stop the stack before building.
+
 ## 11. Troubleshooting
 
 | Symptom | Check |
@@ -267,6 +292,8 @@ reuse Docker/download caches. The website no longer builds Rust.
 | Login cookie absent over local HTTP | Use `SESSION_COOKIE_SECURE=false` only for local HTTP development. |
 | CSRF rejected | Website writes need the current `afk_csrf` cookie echoed in `x-csrf-token`. |
 | High memory usage | Measure real accounts and set `SOULFIRE_JAVA_OPTIONS` together with backend/OS headroom; old Azalea capacity estimates do not apply. |
+| All accounts disconnect together; `ECONNREFUSED ...:38765` | Collect `bash scripts/diagnose-disconnects.sh 2h` on the affected host; see [shared service outage diagnosis](DISCONNECTS-2026-11-04.md). |
+| Repeated five-minute retries after `Authenticated as`, or AutoSell slows near item piles | See [world-entry recovery and native AutoSell fixes](STABILITY-2026-11-06.md); rebuild both backend and SoulFire extension. |
 
 The systemd fallback additionally needs a Java 25 SoulFire service and its input
 extension. Configure `SOULFIRE_URL` and `SOULFIRE_SECRET_KEY_FILE` in the backend

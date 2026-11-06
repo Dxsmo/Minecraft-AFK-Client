@@ -1,0 +1,8 @@
+{
+  "renewals": 20,
+  "persistedLeaseWrites": 0,
+  "ordinarySettingsPreserved": true,
+  "invalidDeadlineRejected": true,
+  "missingBotRejected": true,
+  "missingInstanceRejected": true
+}

@@ -428,6 +428,45 @@ describe("MinecraftClient (SoulFire adapter) state machine", () => {
     }
   });
 
+  it("keeps all bots connected during a confirmed shared control outage longer than the watchdog timeout", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const bots = [makeClient(), makeClient({ id: "acc-2" })];
+      bots.forEach(client => client.connect());
+      children.forEach(child => child.send({ type: "spawn" })); await tick();
+      const connectedSince = bots.map(client => client.getStatus().connectedSince);
+      for (let i = 0; i < 18; i++) {
+        children.forEach(child => child.send({ type: "control_status", available: false, error: "ECONNREFUSED" }));
+        await tick(); vi.advanceTimersByTime(5000);
+      }
+      expect(bots.map(client => client.getStatus().status)).toEqual(["ONLINE", "ONLINE"]);
+      expect(children).toHaveLength(2);
+      for (const child of children) {
+        expect(child.kill).not.toHaveBeenCalled();
+        child.send({ type: "control_status", available: true });
+      }
+      await tick(); vi.advanceTimersByTime(20_000);
+      children.forEach(child => child.send({ type: "heartbeat" })); await tick();
+      expect(bots.map(client => client.getStatus().connectedSince)).toEqual(connectedSince);
+      expect(bots.map(client => client.getStatus().status)).toEqual(["ONLINE", "ONLINE"]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("expires a control outage exemption if status checks stop, and still honors real disconnects", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const client = makeClient(); client.connect(); const child = lastChild();
+      child.send({ type: "spawn" }); child.send({ type: "control_status", available: false }); await tick();
+      vi.advanceTimersByTime(60_000);
+      expect(client.getStatus().lastError).toBe("Bot froze (no heartbeat)");
+      const other = makeClient({ id: "acc-2" }); other.connect(); const second = lastChild();
+      second.send({ type: "spawn" }); second.send({ type: "control_status", available: false });
+      second.send({ type: "disconnect", reason: "Server restarting" }); await tick();
+      expect(other.getStatus().status).toBe("RECONNECTING");
+      expect(other.getStatus().lastError).toBe("Server restarting");
+    } finally { vi.useRealTimers(); }
+  });
+
   it("keeps a quiet bot connected while its behavior ticks remain alive", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {
@@ -927,6 +966,8 @@ describe("MinecraftClient (SoulFire adapter) state machine", () => {
     vi.useFakeTimers();
     try {
       const client = makeClient({ autoReconnect: true });
+      const messages: string[] = [];
+      client.on("console", event => messages.push(event.message));
       client.connect();
       expect(client.getStatus().status).toBe("CONNECTING");
 
@@ -934,6 +975,25 @@ describe("MinecraftClient (SoulFire adapter) state machine", () => {
       // advance past the hang timeout.
       vi.advanceTimersByTime(5 * 60_000 + 1000);
       expect(client.getStatus().status).toBe("RECONNECTING");
+      expect(messages).toContain("Connection timed out: bot did not enter the world within 5 minutes");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs the missing world entry after authentication before scheduling another attempt", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeClient({ autoReconnect: true });
+      const messages: string[] = [];
+      client.on("console", event => messages.push(event.message));
+      client.connect();
+      lastChild().send({ type: "profile", username: "frustrieren", uuid: "fixture" });
+      await vi.advanceTimersByTimeAsync(0);
+      vi.advanceTimersByTime(5 * 60_000);
+      expect(client.getStatus().status).toBe("RECONNECTING");
+      expect(messages).toContain("Connection timed out: authenticated, but no world entry confirmed within 5 minutes");
+      expect(messages.at(-1)).toBe("Reconnecting in 15s...");
     } finally {
       vi.useRealTimers();
     }

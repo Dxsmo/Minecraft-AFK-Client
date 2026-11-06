@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 # Build context is the ./backend directory (see docker-compose.yml).
 
-# ---- Build stage: compile TypeScript + generate the Prisma client ----
-FROM node:24-bookworm-slim AS builder
+# ---- Shared dependencies: unchanged source files reuse these layers ----
+FROM node:24-bookworm-slim AS dependencies
 WORKDIR /app
 
 # Native argon2 builds must work on arm64 and amd64.
@@ -15,12 +15,16 @@ RUN --mount=type=cache,id=afk-backend-npm,target=/root/.npm,sharing=locked npm c
 COPY prisma ./prisma
 RUN npx prisma generate
 
+# Prepare production modules independently of application source changes.
+# Keep the generated Prisma client in this stage before removing dev tools.
+FROM dependencies AS production-dependencies
+RUN npm prune --omit=dev
+
+# ---- Build stage: compile TypeScript ----
+FROM dependencies AS builder
 COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
-# The builder and runtime use the same Node/Debian base and architecture, so
-# native production modules can be compiled once here and copied forward.
-RUN npm prune --omit=dev
 
 # ---- Runtime stage: website and SoulFire control adapters ----
 FROM node:24-bookworm-slim AS runtime
@@ -32,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-cert
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
-COPY --from=builder /app/node_modules ./node_modules
+COPY --from=production-dependencies /app/node_modules ./node_modules
 
 COPY --from=builder /app/dist ./dist
 COPY prisma ./prisma

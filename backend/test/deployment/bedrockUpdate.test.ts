@@ -12,17 +12,28 @@ async function fixture(failBuild = false) {
   await writeFile(path.join(directory, "docker"), `#!/usr/bin/env node
 const fs=require('node:fs'),args=process.argv.slice(2);
 fs.appendFileSync(process.env.AFK_UPDATE_LOG,JSON.stringify(args)+'\\n');
+if(args.includes('build'))fs.writeFileSync(process.env.AFK_UPDATE_LOG+'.parallel',process.env.COMPOSE_PARALLEL_LIMIT||'');
 if(args.includes('build')&&process.env.AFK_UPDATE_FAIL==='1')process.exit(3);
 `, { mode: 0o755 });
-  return { directory, log, execute: (args: string[] = []) => run("bash", [script, ...args], { env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, AFK_UPDATE_LOG: log, AFK_UPDATE_FAIL: failBuild ? "1" : "0" } }) };
+  return { directory, log, execute: (args: string[] = [], parallel = "") => run("bash", [script, ...args], { env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, AFK_UPDATE_LOG: log, AFK_UPDATE_FAIL: failBuild ? "1" : "0", COMPOSE_PARALLEL_LIMIT: parallel } }) };
 }
 it("builds both editions' SoulFire runtime and website before replacing containers", async () => {
   const f=await fixture(); try {
     await f.execute(); const calls=(await readFile(f.log,"utf8")).trim().split("\n").map(line=>JSON.parse(line));
     expect(calls[0]).toEqual(["compose","build","soulfire","backend","web"]);
+    expect(await readFile(f.log+".parallel","utf8")).toBe("1");
     expect(calls[1]).toContain("--no-build"); expect(calls[1].slice(-3)).toEqual(["soulfire","backend","web"]);
     const dockerfile=await readFile(new URL("../../Dockerfile",import.meta.url),"utf8");
     expect(dockerfile).not.toMatch(/cargo|rustup|rust-bot|azalea-bot/); expect(dockerfile).toContain("COPY assets ./assets");
+  } finally { await rm(f.directory,{recursive:true,force:true}); }
+});
+it("allows an explicit build concurrency override without disabling the cache", async () => {
+  const f=await fixture(); try {
+    await f.execute([], "2");
+    expect(await readFile(f.log+".parallel","utf8")).toBe("2");
+    const calls=(await readFile(f.log,"utf8")).trim().split("\n").map(line=>JSON.parse(line));
+    expect(calls.flat()).not.toContain("--no-cache");
+    expect(calls.flat()).not.toContain("prune");
   } finally { await rm(f.directory,{recursive:true,force:true}); }
 });
 it("can recreate the runtime to clear native caches only after all builds succeed", async () => {

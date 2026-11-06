@@ -1,7 +1,7 @@
 /** Per-account cancellation scope and scheduler, shared by the backend
  * controllers and optional diagnostic CLI. All editions use one SoulFire JVM. */
 import path from "node:path";
-import { MinecraftDisconnected, retryEventStream, soulFireError } from "./errors.js";
+import { MinecraftDisconnected, retryEventStream, soulFireError, unavailableControlService } from "./errors.js";
 import { fromJson } from "@bufbuild/protobuf";
 import { ValueSchema } from "@bufbuild/protobuf/wkt";
 import { Code, ConnectError } from "@connectrpc/connect";
@@ -75,6 +75,7 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   const ids = { instanceId, botId };
   await writePrivateJson(path.join(config.cache_dir, "soulfire.json"), ids);
   emit({ type: "profile", username: account.lastKnownName, uuid: botId });
+  emit({ type: "behavior_log", message: "Anmeldung bestätigt; bereite Minecraft-Verbindung vor…" });
   const setting = async (namespace: string, key: string, value: string | number | boolean) => {
     await rpc.bot.updateBotConfigEntry({ ...ids, namespace, key, value: fromJson(ValueSchema, value) }, call());
   };
@@ -95,6 +96,7 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   }
   const selected = selectProtocol(versions, config.edition, requested, advertised);
   await setting("bot", "protocol-version", selected.id);
+  emit({ type: "behavior_log", message: `Minecraft-Protokoll ausgewählt (${selected.displayName || selected.id}); bereite Client-Steuerung vor…` });
 
   let sneakCheck = 0;
   const inventory = new SoulFireInventory();
@@ -172,6 +174,26 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   await setting("afk-service", "sell-manual-until", 0);
   await nativeSellPause(config.autosell_pause_after_ms ?? 0, config.autosell_resume_after_ms ?? 0);
   let online = false, busy = false, statusBusy = false, heartbeatAt = 0, lastStatusAt = -Infinity, lastWarning = 0;
+  let lastStartupState: BotRuntimeState | undefined;
+  const startupStatus = (state: BotRuntimeState | undefined) => {
+    if (online || state === lastStartupState) return;
+    lastStartupState = state;
+    const message = state === BotRuntimeState.QUEUED ? "Warte auf den Verbindungsstart im Bot-Dienst…"
+      : state === BotRuntimeState.STARTING ? "Minecraft-Client wird gestartet…"
+      : state === BotRuntimeState.RUNNING ? "Minecraft-Client gestartet; warte auf Serveranmeldung und Weltbeitritt…" : undefined;
+    if (message) emit({ type: "behavior_log", message });
+  };
+  const spawned = async () => {
+    if (online || signal.aborted) return;
+    online = true;
+    try { await behaviors.spawned(); }
+    catch (error) { online = false; behaviors.joining(); throw error; }
+    if (!signal.aborted) emit({ type: "spawn" });
+  };
+  let controlUnavailable = false;
+  const controlRestored = () => {
+    if (controlUnavailable) { controlUnavailable = false; emit({ type: "control_status", available: true }); }
+  };
   let position: { x: number; y: number; z: number; dimension: string } | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let stream: Promise<void> | undefined;
@@ -186,6 +208,7 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
           for await (const frame of rpc.live.watchBotEvents({ ...ids, filter: { includeStateDeltas: true, includeInventory: true, includeChat: true, includeLifecycle: true }, heartbeatIntervalSeconds: 5 }, { signal, timeoutMs: 0 })) {
             retryMs = 500;
             const event = frame.event;
+            if (event.case === "status") startupStatus(event.value.runtimeState);
             // Dropped telemetry is not a teleport. Pause only until the fresh
             // inventory snapshot arrives, then reconcile existing menu ownership.
             // Resetting automation here imposed another 2s delay on every burst
@@ -196,7 +219,7 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
             if (event.case === "snapshot") {
               if (position && (position.dimension !== event.value.dimension || Math.hypot(position.x - event.value.x, position.y - event.value.y, position.z - event.value.z) > 1)) behaviors.transition();
               position = event.value;
-              if (!online) { online = true; await behaviors.spawned(); emit({ type: "spawn" }); }
+              await spawned();
             }
             if (event.case === "stateDelta" && position) {
               const next = { ...position, ...Object.fromEntries(Object.entries(event.value).filter(([, value]) => value !== undefined)) };
@@ -208,13 +231,16 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
               if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_DISCONNECTED) throw new MinecraftDisconnected(event.value.message || "Minecraft-Verbindung beendet");
               if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_DIED) { inventory.reset(); behaviors.joining(); online = false; await rpc.live.respawn(ids, call()); }
               if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_RESPAWNED || event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_SPAWNED) {
-                if (!online || event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_RESPAWNED) { online = true; await behaviors.spawned(); emit({ type: "spawn" }); }
+                if (event.value.kind === BotLifecycleKind.BOT_LIFECYCLE_RESPAWNED) online = false;
+                await spawned();
               }
             }
             if (event.case === "status" && (event.value.runtimeState === BotRuntimeState.FAILED || event.value.runtimeState === BotRuntimeState.RETRYING)) throw new MinecraftDisconnected(event.value.lastError || "SoulFire-Verbindung fehlgeschlagen");
+            if (event.case === "status" && online && event.value.runtimeState === BotRuntimeState.STOPPED) throw new MinecraftDisconnected("SoulFire-Bot wurde gestoppt (möglicher Neustart des gemeinsamen Dienstes)");
             // Game-state frames confirm activity; transport-only heartbeats do not
             // hide a frozen client from the existing online watchdog.
             if (online && ["snapshot", "stateDelta", "inventory"].includes(event.case ?? "") && Date.now() - heartbeatAt >= 5000) {
+              controlRestored();
               heartbeatAt = Date.now(); emit({ type: "heartbeat" });
             }
           }
@@ -235,6 +261,7 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
       }
     })();
     void stream.catch(error => { if (!signal.aborted) { emit({ type: "connection_failed", error: soulFireError(error) }); abort.abort(); } });
+    emit({ type: "behavior_log", message: `Starte Minecraft-Verbindung zu ${address}…` });
     await rpc.bot.setBotsDesiredState({ instanceId, botIds: [botId], desiredState: BotDesiredState.RUNNING }, call());
     const step = () => {
       if (signal.aborted) return;
@@ -247,13 +274,32 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
       // automation lock. Frequent game-state frames make this poll unnecessary.
       if (!statusBusy && now - heartbeatAt >= 5000 && now - lastStatusAt >= 5000) {
         statusBusy = true; lastStatusAt = now;
-        void rpc.bot.getBotInfo(ids, { signal, timeoutMs: 3000 }).then(state => {
+        void rpc.bot.getBotInfo(ids, { signal, timeoutMs: 3000 }).then(async state => {
           if (signal.aborted) return;
+          controlRestored();
+          startupStatus(state.status?.runtimeState);
           if (state.status?.runtimeState === BotRuntimeState.FAILED || state.status?.runtimeState === BotRuntimeState.RETRYING) {
             emit({ type: "connection_failed", error: state.status.lastError || "Minecraft-Verbindung fehlgeschlagen" }); abort.abort(); return;
           }
+          if (state.status?.runtimeState === BotRuntimeState.STOPPED) {
+            emit({ type: "connection_failed", error: "SoulFire-Bot wurde gestoppt (möglicher Neustart des gemeinsamen Dienstes)" }); abort.abort(); return;
+          }
+          // A stream outage/burst can lose the first snapshot and SPAWNED event.
+          // A live player returned by the independent game-thread query also
+          // proves world entry; otherwise the supervisor retries every 5 minutes.
+          if (state.liveState && state.status?.runtimeState === BotRuntimeState.RUNNING) await spawned();
           if (online && state.liveState) { heartbeatAt = Date.now(); emit({ type: "heartbeat" }); }
-        }).catch(() => { /* Stream failures and the online watchdog handle unavailable clients. */ })
+        }).catch(error => {
+          if (signal.aborted) return;
+          if (unavailableControlService(error)) {
+            controlUnavailable = true;
+            // Renew only after an actual failed status request. A dead scheduler
+            // cannot leave the supervisor's watchdog disabled indefinitely.
+            emit({ type: "control_status", available: false, error: soulFireError(error) });
+          } else if (!retryEventStream(error)) {
+            emit({ type: "connection_failed", error: soulFireError(error) }); abort.abort();
+          }
+        })
           .finally(() => { statusBusy = false; });
       }
       if (busy) return;

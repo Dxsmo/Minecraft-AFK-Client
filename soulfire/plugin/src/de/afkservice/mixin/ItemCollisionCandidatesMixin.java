@@ -16,17 +16,25 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** Vanilla scans the entire item pile for EACH moving item, although dropped
- * items cannot collide with one another. Cache only candidate membership once
- * per entity tick: O(items + items * non-items), instead of O(items squared).
- * Physics, block collisions, server packets and pickup handling are untouched.
+/** Cache non-item membership until a non-item is added/removed. Boxes and
+ * predicates stay live, so movement needs no invalidation. In particular,
+ * item pickup/refill bursts must not repeatedly rescan the entire item pile.
+ * Physics, block collisions, server packets and pickup handling stay live.
  */
 @Mixin(ClientLevel.class)
 public abstract class ItemCollisionCandidatesMixin implements ItemCollisionSource {
   @Unique private List<Entity> afk$nonItems;
 
-  @Inject(method = { "tickEntities", "addEntity", "removeEntity" }, at = @At("HEAD"))
-  private void invalidate(CallbackInfo ci) { afk$nonItems = null; }
+  @Inject(method = "addEntity", at = @At("HEAD"))
+  private void added(Entity entity, CallbackInfo ci) {
+    if (!(entity instanceof ItemEntity)) afk$nonItems = null;
+  }
+
+  @Inject(method = "removeEntity", at = @At("HEAD"))
+  private void removed(int id, Entity.RemovalReason reason, CallbackInfo ci) {
+    var entity = ((ClientLevel) (Object) this).getEntity(id);
+    if (!(entity instanceof ItemEntity)) afk$nonItems = null;
+  }
 
   @Override
   public List<VoxelShape> afk$itemCollisions(Entity item, AABB box) {

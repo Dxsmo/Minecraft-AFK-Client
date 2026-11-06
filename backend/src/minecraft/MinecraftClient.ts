@@ -34,6 +34,8 @@ const SUBPROCESS_HANG_TIMEOUT_MS = 5 * 60_000;
 const SUBPROCESS_ONLINE_SILENCE_MS = 45_000;
 /// How often the online-hang watchdog checks for subprocess silence.
 const ONLINE_WATCHDOG_INTERVAL_MS = 15_000;
+// Renewed by failed status requests every 5s (each has a 3s deadline).
+const CONTROL_OUTAGE_LEASE_MS = 15_000;
 
 
 /**
@@ -67,6 +69,7 @@ export class MinecraftClient extends EventEmitter {
   private onlineWatchdog: NodeJS.Timeout | null = null;
   /** Epoch ms of the last confirmed behavior tick heartbeat. */
   private lastHeartbeatAt = 0;
+  private lastControlFailureAt: number | null = null;
   private manuallyStopped = false;
   /** Guards against a single connection attempt being "ended" more than once. */
   private connectionEnded = false;
@@ -213,6 +216,7 @@ export class MinecraftClient extends EventEmitter {
 
   private attemptConnect(reconnecting = false): void {
     this.connectionEnded = false;
+    this.lastControlFailureAt = null;
     this.setStatus(reconnecting ? "RECONNECTING" : "CONNECTING");
     this.lastError = undefined;
 
@@ -312,6 +316,7 @@ export class MinecraftClient extends EventEmitter {
     this.hangTimer = setTimeout(() => {
       if (this.status === "CONNECTING" || this.status === "RECONNECTING") {
         this.log.warn("Bot subprocess hang timeout, recycling");
+        this.emitConsole("ERROR", "Connection timed out: bot did not enter the world within 5 minutes");
         this.handleConnectionFailure("Connection timed out");
       }
     }, SUBPROCESS_HANG_TIMEOUT_MS);
@@ -378,7 +383,10 @@ export class MinecraftClient extends EventEmitter {
         const { username, uuid } = event as { username: string; uuid: string };
         this.log.info({ username, uuid }, "Resolved Minecraft profile");
         this.clearHangTimer();
-        this.hangTimer = setTimeout(() => this.handleConnectionFailure("Connection timed out"), SUBPROCESS_HANG_TIMEOUT_MS);
+        this.hangTimer = setTimeout(() => {
+          this.emitConsole("ERROR", "Connection timed out: authenticated, but no world entry confirmed within 5 minutes");
+          this.handleConnectionFailure("Connection timed out");
+        }, SUBPROCESS_HANG_TIMEOUT_MS);
         this.msaSignIn = undefined;
         this.authenticated = true;
         this.emitConsole("SYSTEM", `Authenticated as ${username}`);
@@ -395,6 +403,7 @@ export class MinecraftClient extends EventEmitter {
 
       case "spawn":
         this.clearHangTimer();
+        this.lastControlFailureAt = null;
         this.lastHeartbeatAt = Date.now();
         this.connectedSince = new Date();
         this.msaSignIn = undefined;
@@ -456,7 +465,22 @@ export class MinecraftClient extends EventEmitter {
       }
 
       case "heartbeat":
+        this.lastControlFailureAt = null;
         this.lastHeartbeatAt = Date.now();
+        break;
+
+      case "control_status":
+        if (event.available === false) {
+          if (this.lastControlFailureAt === null) {
+            this.emitConsole("WARNING", `Gemeinsamer SoulFire-Dienst nicht erreichbar; Minecraft-Verbindung wird nicht vorsorglich getrennt. ${String(event.error ?? "")}`.trim());
+          }
+          this.lastControlFailureAt = Date.now();
+        } else if (event.available === true && this.lastControlFailureAt !== null) {
+          this.lastControlFailureAt = null;
+          // Give the recovered stream/status check time to confirm game state.
+          this.lastHeartbeatAt = Date.now();
+          this.emitConsole("SYSTEM", "SoulFire-Steuerverbindung wieder erreichbar; prüfe bestehende Minecraft-Verbindung.");
+        }
         break;
 
       case "warning":
@@ -610,6 +634,7 @@ export class MinecraftClient extends EventEmitter {
     this.clearOnlineWatchdog();
     this.onlineWatchdog = setInterval(() => {
       if (this.status !== "ONLINE") return;
+      if (this.lastControlFailureAt !== null && Date.now() - this.lastControlFailureAt < CONTROL_OUTAGE_LEASE_MS) return;
       const silentFor = Date.now() - this.lastHeartbeatAt;
       if (silentFor > SUBPROCESS_ONLINE_SILENCE_MS) {
         this.log.warn({ silentFor }, "Bot subprocess silent while online, recycling");
