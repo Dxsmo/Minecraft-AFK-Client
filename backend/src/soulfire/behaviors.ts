@@ -50,7 +50,6 @@ export class SoulFireBehaviors {
   private lastFailure = -Infinity;
   private generation = 0;
   private inventoryBlockedUntil = 0;
-  private nativePauseAppliedUntil = 0;
   private lastQueuedChat: { text: string; at: number } | undefined;
   private lastQueueWarning = -Infinity;
   private home = "";
@@ -152,12 +151,9 @@ export class SoulFireBehaviors {
     if (!this.online) return;
     if (this.homeGatePending !== undefined) { await this.game.recoveringHome?.(this.homeGatePending); this.homeGatePending = undefined; }
     if (this.saveHome !== undefined) { const home = this.saveHome; await this.game.rememberHome?.(home); if (home === this.saveHome) this.saveHome = undefined; }
-    // Native code observes the same server signal locally. This coalesced
-    // control-side pause also protects mixed-version updates and manual tasks.
-    if (this.game.nativeAutosell && this.inventoryBlockedUntil > now && this.inventoryBlockedUntil - this.nativePauseAppliedUntil >= 500) {
-      await this.game.suspendSell?.(this.inventoryBlockedUntil - now);
-      this.nativePauseAppliedUntil = this.inventoryBlockedUntil;
-    }
+    // Native selling already handles this rejection on the game thread.
+    // Do not turn a server loading lock into a user-command pause: a late
+    // native menu would then be protected as "manual" and remain open forever.
     if (now < this.inventoryBlockedUntil) return;
     while (this.sneakChecks.length && this.sneakChecks[0] <= now) { this.sneakChecks.shift(); this.checkSneak(); }
     if (this.cfg.crouch_enabled && now >= this.nextSneak) {

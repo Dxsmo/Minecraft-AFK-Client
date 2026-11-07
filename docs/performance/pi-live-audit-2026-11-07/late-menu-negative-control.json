@@ -1,0 +1,9 @@
+{
+  "delayedNativeMenuMs": 4000,
+  "serverRejectionAtMs": 3600,
+  "inventoryRejections": 365,
+  "backendConflatesInventoryAndManualPause": true,
+  "recovered": false,
+  "expectedFailure": "SoulFire smoke check timed out",
+  "observedInventoryClicks": 0
+}

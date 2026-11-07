@@ -30,6 +30,8 @@ const dropFirstMenu=process.env.AFK_SMOKE_DROP_FIRST_MENU==='1';
 const breakStream=process.env.AFK_SMOKE_BREAK_EVENT_STREAM==='1';
 const itemPickups=process.env.AFK_SMOKE_ITEM_PICKUPS==='1';
 const blockInventory=process.env.AFK_SMOKE_BLOCK_INVENTORY==='1';
+const lateBlockedMenu=process.env.AFK_SMOKE_LATE_BLOCKED_MENU==='1';
+let delayedMenuReplies=0;
 const blockOnClick=process.env.AFK_SMOKE_BLOCK_ON_CLICK==='1'; let blockArmed=false;
 const ackDelay=Number(process.env.AFK_SMOKE_ACK_DELAY_MS||0);
 let inventoryBlockedUntil=0, blockedClicks=0, blockedCommands=0;
@@ -102,6 +104,19 @@ server.on('playerJoin', client=>{
   client.on('chat',data=>{if(data.message==='/sell') {
     if(Date.now()<inventoryBlockedUntil){blockedCommands++;return;}
     if(dropFirstMenu && lostMenuReplies===0){lostMenuReplies++;return;}
+    if(lateBlockedMenu && delayedMenuReplies===0){
+      delayedMenuReplies++;
+      // The native request has already timed out when this response arrives.
+      // A loading rejection must not misclassify that late menu as user-owned.
+      timers.push(setTimeout(()=>{
+        for(let i=0;i<365;i++)client.write('chat',{message:JSON.stringify({text:'[HugoSMP] Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird.'}),position:0});
+      },3600));
+      timers.push(setTimeout(()=>{
+        client.write('open_window',{windowId:1,inventoryType:'minecraft:chest',windowTitle:JSON.stringify({text:'Items verkaufen'}),slotCount:27});
+        client.write('window_items',{windowId:1,items:saleItems()});
+      },4000));
+      return;
+    }
     client.write('open_window',{windowId:1,inventoryType:'minecraft:chest',windowTitle:JSON.stringify({text:'Items verkaufen'}),slotCount:27});
     client.write('window_items',{windowId:1,items:saleItems()});
   }});
@@ -225,7 +240,7 @@ try {
   const before=events[1].filter(event=>event.type==='heartbeat').length;
   const stopped=once(controllers[0],'close');controllers[0].stdin.write('{"type":"disconnect"}\n');await stopped;
   await waitFor(()=>events[1].filter(event=>event.type==='heartbeat').length>before);
-  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,injectedStreamFailures,pickups,blockInventory,blockOnClick,blockedClicks,blockedCommands,ackDelay,maxInFlight,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
+  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,injectedStreamFailures,pickups,blockInventory,lateBlockedMenu,delayedMenuReplies,blockOnClick,blockedClicks,blockedCommands,ackDelay,maxInFlight,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
 } catch (error) {
   console.error(JSON.stringify({events,packetTypes:packets.map(p=>({name:p.name,type:p.type,data:p.type==='entity_action'?p.data:undefined}))}));
   const rpc=soulFireRpc();

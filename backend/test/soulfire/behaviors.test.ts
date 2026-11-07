@@ -302,17 +302,18 @@ describe("common SoulFire automation", () => {
 });
 
 describe("recovery without command bursts", () => {
-  it("coalesces hundreds of loading rejections and holds manual commands until inventory recovers", async () => {
+  it("keeps server loading locks separate from manual menu ownership and holds queued commands until recovery", async () => {
     const f = fixture({ autosell_enabled: true }); f.game.nativeAutosell = true;
     f.game.suspendSell = vi.fn(async () => {});
     await f.engine.spawned();
     for (let i = 0; i < 365; i++) f.engine.onChat(null, "[HugoSMP] Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird.");
     f.engine.enqueue("chat", "/homes");
     await f.engine.tick(); f.advance(1000); await f.engine.tick();
-    expect(f.game.suspendSell).toHaveBeenCalledExactlyOnceWith(2000);
+    expect(f.game.suspendSell).not.toHaveBeenCalled();
     expect(f.game.chat).not.toHaveBeenCalled();
     f.advance(1000); await f.engine.tick();
     expect(f.game.chat).toHaveBeenCalledExactlyOnceWith("/homes");
+    expect(f.game.suspendSell).toHaveBeenCalledExactlyOnceWith(5000);
   });
   it("bounds and deduplicates pending commands", async () => {
     const f = fixture(); await f.engine.spawned();
