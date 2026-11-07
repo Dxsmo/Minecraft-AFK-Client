@@ -9,7 +9,8 @@ import java.lang.ref.WeakReference;
 import java.util.Collections;
 import java.util.Map;
 import java.util.WeakHashMap;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.HashMap;
+import net.minecraft.world.item.ItemStack;
 
 /** Runs on the bot game thread. No menu snapshots/RPC roundtrips per sale.
  * Only vanilla inventory actions are used; the server owns prices/acceptance.
@@ -25,9 +26,9 @@ public final class NativeAutoSell {
     long next, requested, lastWarning, interval = 2000;
     double x, y, z;
     WeakReference<AbstractContainerMenu> sellingMenu = new WeakReference<>(null);
-    int nextSlot, contentMenu = -1, pendingSlot = -1;
-    final AtomicLong revision = new AtomicLong();
-    long pendingRevision, pendingAt;
+    int nextSlot, contentMenu = -1;
+    final SellTransfers transfers = new SellTransfers();
+    final Map<Integer, ItemStack> beforeTransfer = new HashMap<>();
     boolean contentReady;
     final SellRecovery recovery = new SellRecovery();
   }
@@ -43,7 +44,7 @@ public final class NativeAutoSell {
         && saleTitle(screen.getTitle().getString())) {
       if (state.waiting) {
         state.sellingMenu = new WeakReference<>(mc.player.containerMenu);
-        state.nextSlot = 0; state.pendingSlot = -1;
+        state.nextSlot = 0; state.transfers.reset(); state.beforeTransfer.clear();
       } else if (number(bot.settingsSource().stem().settings().get("afk-service"), "sell-manual-until") <= now) {
         // An abandoned native open request replied late. Discard its own sale
         // GUI without transferring; manual-command menus remain untouched.
@@ -56,13 +57,30 @@ public final class NativeAutoSell {
     if (state == null) return;
     if (menu == state.contentMenu && slot == -1) state.contentReady = true;
     var owned = state.sellingMenu.get();
-    if (owned != null && menu == owned.containerId && (slot == -1 || slot == state.pendingSlot)) state.revision.incrementAndGet();
+    if (owned != null && menu == owned.containerId) {
+      if (slot >= 0) state.transfers.acknowledgeSlot(slot);
+      else for (var entry : state.beforeTransfer.entrySet()) {
+        int index = entry.getKey();
+        // A full snapshot also includes unchanged or immediately refilled
+        // slots. Only changed stacks acknowledge a transfer; payouts handle
+        // accepted transfers whose authoritative count stayed identical.
+        if (index < owned.slots.size() && !ItemStack.matches(entry.getValue(), owned.slots.get(index).getItem()))
+          state.transfers.acknowledgeSlot(index);
+      }
+    }
+  }
+  public static void inventoryMessage(BotConnection bot, String message) {
+    var state = STATES.get(bot);
+    if (state != null && SellRecovery.inventoryBlocked(message)) state.recovery.rejected(System.currentTimeMillis());
   }
   public static void serverMessage(BotConnection bot, String message) {
     var state = STATES.get(bot);
     if (state == null) return;
     if (SellRecovery.inventoryBlocked(message)) state.recovery.rejected(System.currentTimeMillis());
-    if (SellRecovery.payout(message)) { state.recovery.confirmed(); state.revision.incrementAndGet(); }
+    if (SellRecovery.payout(message)) {
+      state.recovery.confirmed();
+      if (state.sellingMenu.get() != null) state.transfers.acknowledgePayout();
+    }
   }
   public static void tick(BotConnection bot) {
     try { tickSale(bot); }
@@ -70,7 +88,7 @@ public final class NativeAutoSell {
       var state = STATES.get(bot);
       if (state == null) return;
       long now = System.currentTimeMillis();
-      state.recovery.rejected(now); state.pendingSlot = -1;
+      state.recovery.rejected(now); state.transfers.reset(); state.beforeTransfer.clear();
       if (now - state.lastWarning >= 30_000) {
         state.lastWarning = now;
         LOG.log(System.Logger.Level.WARNING, "AutoSell: Inventaraktion abgebrochen; erneuter Versuch nach Pause", error);
@@ -117,33 +135,29 @@ public final class NativeAutoSell {
       if (!saleTitle(title)) return;
       if (!state.waiting && state.sellingMenu.get() != menu) return;
       if (now - state.requested >= 15_000) { state.recovery.rejected(now); cancel(bot, state); return; }
-      if (state.sellingMenu.get() != menu) { state.sellingMenu = new WeakReference<>(menu); state.nextSlot = 0; state.pendingSlot = -1; }
+      if (state.sellingMenu.get() != menu) { state.sellingMenu = new WeakReference<>(menu); state.nextSlot = 0; state.transfers.reset(); state.beforeTransfer.clear(); }
       if (state.contentMenu != menu.containerId || !state.contentReady) return;
-      if (state.pendingSlot >= 0) {
-        if (state.pendingRevision == state.revision.get()) {
-          if (now - state.pendingAt >= 5000) { state.recovery.rejected(now); cancel(bot, state); }
-          return;
-        }
-        state.pendingSlot = -1;
-      }
-      boolean stock = menu.slots.stream().anyMatch(slot -> slot.container == mc.player.getInventory() && slot.isActive() && slot.hasItem());
-      if (!stock && state.sellingMenu.get() != menu && state.waiting && now - state.requested < 500) return;
-      // One transfer per game tick and server acknowledgment. Keep the cursor
-      // across ticks so instant refills cannot revisit the same slot forever.
-      while (state.nextSlot < menu.slots.size() && mc.player.containerMenu == menu) {
+      if (state.transfers.stalled(now)) { state.recovery.rejected(now); cancel(bot, state); return; }
+      // A small, bounded window overlaps roundtrips. Retain the cursor so
+      // constant refills cannot sell the same slot twice in one cycle.
+      int sent = 0;
+      while (state.nextSlot < menu.slots.size() && mc.player.containerMenu == menu
+          && state.transfers.canSend() && sent < SellTransfers.MAX_PER_TICK) {
         int index = state.nextSlot++;
         var slot = menu.slots.get(index);
         if (slot.container == mc.player.getInventory() && slot.isActive() && slot.hasItem()) {
-          state.pendingSlot = index; state.pendingRevision = state.revision.get(); state.pendingAt = now;
+          state.beforeTransfer.put(index, slot.getItem().copy());
+          state.transfers.sent(index, now); sent++;
           mc.gameMode.handleContainerInput(menu.containerId, index, 0, ContainerInput.QUICK_MOVE, mc.player);
-          return;
         }
       }
+      if (state.nextSlot < menu.slots.size() || state.transfers.inFlight() > 0) return;
       if (mc.player.containerMenu == menu) mc.player.closeContainer();
       state.sellingMenu.clear();
       state.waiting = false;
-      state.pendingSlot = -1;
-      return;
+      state.transfers.reset(); state.beforeTransfer.clear();
+      // If the requested interval already elapsed, opening the next sale may
+      // follow this confirmed close in the same tick. Do not add another 50ms.
     }
     state.sellingMenu.clear();
     // Never type through a foreign screen. Lost/delayed GUI replies retry
@@ -173,7 +187,7 @@ public final class NativeAutoSell {
     var mc = bot.minecraft();
     var owned = state.sellingMenu.get();
     if (owned != null && mc.player != null && mc.player.containerMenu == owned) mc.player.closeContainer();
-    state.pendingSlot = -1; state.sellingMenu.clear();
+    state.transfers.reset(); state.beforeTransfer.clear(); state.sellingMenu.clear();
     // Keep a still-outstanding open request recognizable until its finite
     // deadline, so a delayed sale menu can be closed safely when it arrives.
     if (System.currentTimeMillis() - state.requested >= 3000 || owned != null) state.waiting = false;

@@ -1,0 +1,9 @@
+{
+  "faultInjected": true,
+  "reconnectedSameInstance": true,
+  "reconnectedSameProfile": true,
+  "stoppedSocketlessConnectionReleased": true,
+  "affectedAccountConnections": 2,
+  "unaffectedPeerConnections": 1,
+  "peerRemainedOnline": true
+}

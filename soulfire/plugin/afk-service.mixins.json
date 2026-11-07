@@ -11,6 +11,7 @@
     "SellBatchMixin",
     "SellLeaseMixin",
     "SellInventoryMixin",
+    "DisconnectCleanupMixin",
     "CameraFrameMixin",
     "CameraItemsMixin",
     "CameraItemCopiesMixin",

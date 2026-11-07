@@ -1,0 +1,7 @@
+{
+  "recoveryMixinEnabled": false,
+  "faultInjected": true,
+  "reconnectedSameProfile": false,
+  "expectedFailure": "The same profile failed to reconnect after a closed-channel shutdown error",
+  "timeoutMs": 25000
+}

@@ -400,6 +400,15 @@ it("distinguishes an unresponsive game thread from an unreachable control servic
   expect(f.abort.signal.aborted).toBe(false); // The supervisor's existing watchdog handles the frozen game thread.
 });
 
+it("retains SoulFire's specific command failure instead of replacing every rejection with a generic error", async () => {
+  const f = await fixture(); await f.start();
+  f.rpc.live.sendChat.mockResolvedValue({ result: { status: BotActionStatus.FAILED, error: "Bot is disconnecting" } } as any);
+  f.queue.push({ type: "chat", text: "/home melon" });
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ type: "warning", message: expect.stringContaining("Bot is disconnecting") }));
+  expect(f.rpc.live.sendChat).toHaveBeenCalledTimes(1);
+});
+
 it("atomically gates native selling before a reconnect to a remembered home and releases only on server confirmation", async () => {
   const f = await fixture();
   const { rememberHome } = await import("../../src/soulfire/homeRecovery.js");

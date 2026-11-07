@@ -19,3 +19,13 @@ it("spaces repeated control failures without changing normal reconnects", () => 
   expect(policy.delay("Too many packets in a bundle", 0)).toBe(60_000);
   expect(policy.delay("You are sending suspicious packets.", 0)).toBe(60_000);
 });
+it.each(["[internal] status: 429 Too Many Requests, message: Wrong content type", "Du bist bereits auf dem Server! (Reason: Unknown)", "Bot start was cancelled or a connection already exists"])("backs off the observed authentication/admission rejection: %s", reason => {
+  const policy = new ReconnectPolicy();
+  expect(policy.delay(reason, 0)).toBe(60_000);
+  expect(policy.delay(reason, 0)).toBe(120_000);
+});
+it("backs off repeated world-entry timeouts instead of repeating a 90s start/15s retry loop indefinitely", () => {
+  const policy = new ReconnectPolicy();
+  expect(Array.from({ length: 6 }, () => policy.delay("Connection timed out after authentication (no world entry)", 0)))
+    .toEqual([15_000, 15_000, 30_000, 60_000, 120_000, 120_000]);
+});

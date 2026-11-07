@@ -148,7 +148,11 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
       if (nativeSellEnabled && Date.now() >= nextSellLease) await renewSellLease();
     },
     sneak: async () => { await setting("afk-service", "sneak-check", ++sneakCheck); },
-    chat: async message => { const result = await rpc.live.sendChat({ ...ids, message }, call()); if (result.result?.status !== BotActionStatus.COMPLETED) throw new Error("Command wurde nicht ausgeführt"); },
+    chat: async message => {
+      const result = await rpc.live.sendChat({ ...ids, message }, call());
+      if (result.result?.status !== BotActionStatus.COMPLETED)
+        throw new Error(result.result?.error || "Command wurde nicht ausgeführt");
+    },
     inventory: async () => inventory.read(),
     click: async (menu, slot, action) => {
       const result = await rpc.bot.clickInventorySlot({ ...ids, expectedMenuId: menu, slot,

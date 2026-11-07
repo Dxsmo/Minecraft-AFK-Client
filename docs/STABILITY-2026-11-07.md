@@ -1,5 +1,9 @@
 # Reconnects, Inventarsperren und Wiederaufnahme nach Hub-Rückfall
 
+Die anschließende [Account-Prüfung und AutoSell-Korrektur](AUTOSELL-RECONNECT-2026-11-07.md)
+ersetzt die serielle Klickbestätigung dieser Version durch begrenzte parallele
+Transfers und ergänzt die Bereinigung fehlgeschlagener Verbindungsenden.
+
 Stand: 7. November 2026. SoulFire bleibt auf 2.10.6 gepinnt; die native
 Controls-Erweiterung ist 1.6.0. Diese Änderungen ergänzen
 [die Stabilitätskorrekturen vom Vortag](STABILITY-2026-11-06.md).

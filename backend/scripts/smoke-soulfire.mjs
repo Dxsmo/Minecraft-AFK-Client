@@ -30,6 +30,7 @@ const dropFirstMenu=process.env.AFK_SMOKE_DROP_FIRST_MENU==='1';
 const breakStream=process.env.AFK_SMOKE_BREAK_EVENT_STREAM==='1';
 const itemPickups=process.env.AFK_SMOKE_ITEM_PICKUPS==='1';
 const blockInventory=process.env.AFK_SMOKE_BLOCK_INVENTORY==='1';
+const blockOnClick=process.env.AFK_SMOKE_BLOCK_ON_CLICK==='1'; let blockArmed=false;
 const ackDelay=Number(process.env.AFK_SMOKE_ACK_DELAY_MS||0);
 let inventoryBlockedUntil=0, blockedClicks=0, blockedCommands=0;
 const pendingAcks=new Map(); let maxInFlight=0;
@@ -75,6 +76,10 @@ server.on('playerJoin', client=>{
   clients.push(client);
   client.on('packet',(data,meta)=>{ if(['entity_action','block_place','block_dig','chat','window_click','settings'].includes(meta.name)) packets.push({name:client.username,type:meta.name,data,at:Date.now()}); });
   client.on('window_click',data=>{
+    if(blockArmed) {
+      blockArmed=false; inventoryBlockedUntil=Date.now()+2500;
+      for(let i=0;i<365;i++)client.write('chat',{message:JSON.stringify({text:'[HugoSMP] Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird.'}),position:0});
+    }
     if(Date.now()<inventoryBlockedUntil) {
       blockedClicks++;
       client.write('chat',{message:JSON.stringify({text:'[HugoSMP] Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird.'}),position:0});
@@ -189,15 +194,18 @@ try {
   }
   if(blockInventory) {
     const seller=clients.find(client=>client.username===names[0]);
-    inventoryBlockedUntil=Date.now()+2500;
-    for(let i=0;i<365;i++)seller.write('chat',{message:JSON.stringify({text:'[HugoSMP] Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird.'}),position:0});
+    if(blockOnClick) { blockArmed=true; await waitFor(()=>inventoryBlockedUntil>Date.now()); }
+    else {
+      inventoryBlockedUntil=Date.now()+2500;
+      for(let i=0;i<365;i++)seller.write('chat',{message:JSON.stringify({text:'[HugoSMP] Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird.'}),position:0});
+    }
     await new Promise(resolve=>setTimeout(resolve,250));
     const quietClicks=packets.filter(packet=>packet.type==='window_click').length;
     const quietCommands=packets.filter(packet=>packet.type==='chat'&&packet.data.message==='/sell').length;
     await new Promise(resolve=>setTimeout(resolve,1500));
     assert.equal(packets.filter(packet=>packet.type==='window_click').length,quietClicks,'Native selling ignored server inventory lock');
     assert.equal(packets.filter(packet=>packet.type==='chat'&&packet.data.message==='/sell').length,quietCommands,'Sell command spam during inventory lock');
-    assert.ok(blockedClicks<=2,'Too many in-flight clicks after server rejection');
+    assert.ok(blockedClicks<=16,'Too many in-flight clicks after server rejection');
     await waitFor(()=>Date.now()>inventoryBlockedUntil&&packets.filter(packet=>packet.type==='window_click').length>quietClicks);
   }
   controllers[0].stdin.write('{"type":"chat","text":"/homes"}\n');
@@ -210,13 +218,14 @@ try {
   const streamWarnings=events.flat().filter(event=>event.type==='warning'&&event.message.startsWith('SoulFire-Ereignisstream unterbrochen:'));
   assert.ok(!events.flat().some(event=>event.type==='connection_failed'||event.type==='warning'&&!streamWarnings.includes(event)),'The soak must remain connected without unexpected warnings');
   assert.equal(clients.length,clientCount,'A telemetry failure must not log the Minecraft account in again');
-  if(ackDelay)assert.equal(maxInFlight,1,'A sale click was sent before its predecessor was acknowledged');
+  assert.ok(maxInFlight<=16,'Native sale exceeded its bounded confirmation window');
+  if(ackDelay && sellStacks>=16)assert.ok(maxInFlight>1,'Sale transfers still wait one roundtrip per stack');
   if(breakStream){assert.equal(injectedStreamFailures,1);assert.equal(streamWarnings.length,1);assert.ok(streamWarnings[0].message.includes('ECONNRESET'));}
   if(itemPickups)assert.ok(pickups>100,'The dense pile must be replenished during selling');
   const before=events[1].filter(event=>event.type==='heartbeat').length;
   const stopped=once(controllers[0],'close');controllers[0].stdin.write('{"type":"disconnect"}\n');await stopped;
   await waitFor(()=>events[1].filter(event=>event.type==='heartbeat').length>before);
-  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,injectedStreamFailures,pickups,blockInventory,blockedClicks,blockedCommands,ackDelay,maxInFlight,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
+  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,injectedStreamFailures,pickups,blockInventory,blockOnClick,blockedClicks,blockedCommands,ackDelay,maxInFlight,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
 } catch (error) {
   console.error(JSON.stringify({events,packetTypes:packets.map(p=>({name:p.name,type:p.type,data:p.type==='entity_action'?p.data:undefined}))}));
   const rpc=soulFireRpc();
