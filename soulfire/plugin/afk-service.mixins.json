@@ -12,6 +12,7 @@
     "SellLeaseMixin",
     "SellInventoryMixin",
     "DisconnectCleanupMixin",
+    "HeadlessEmoteMixin",
     "CameraFrameMixin",
     "CameraItemsMixin",
     "CameraItemCopiesMixin",

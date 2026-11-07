@@ -107,7 +107,9 @@ export class ClientManager {
     }
     const toResume = accounts.filter((a) => a.autoStart);
     for (const account of toResume) {
-      this.start(account.id);
+      // The running intent is already persisted. Do not enqueue another
+      // database write for every account during the startup status burst.
+      this.clients.get(account.id)!.connect();
     }
     logger.info(
       { count: accounts.length, resumed: toResume.length },

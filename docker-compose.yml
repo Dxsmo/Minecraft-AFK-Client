@@ -47,7 +47,9 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      # Migrations and account reconciliation take longer on an SD card.
+      # Successful probes still mark the backend ready immediately.
+      start_period: 180s
     networks:
       - internal
 

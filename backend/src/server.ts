@@ -10,10 +10,12 @@ import { pruneOldEarnings, purgeStoredPasswords } from "./accounts/service.js";
 import { loadBannedIps } from "./security/ipBans.js";
 import { flushConsoleLogs } from "./logging/consoleLogService.js";
 import { flushSellEarnings } from "./minecraft/earningPersistence.js";
+import { initializeDatabase } from "./database/prisma.js";
 
 const SESSION_PRUNE_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
 async function main() {
+  await initializeDatabase();
   await purgeRetiredData();
   await bootstrapAdmin();
   // Strip any Minecraft passwords still stored on legacy accounts. Accounts are
@@ -24,8 +26,8 @@ async function main() {
   // product requirement), rather than resuming previously-valid sessions.
   await clearAllSessions();
   await pruneOldEarnings();
-  await clientManager.loadAll();
   await loadBannedIps();
+  await clientManager.loadAll();
 
   const app = await buildApp();
 
