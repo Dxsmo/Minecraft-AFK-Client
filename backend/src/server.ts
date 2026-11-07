@@ -9,6 +9,7 @@ import { disconnectDatabase } from "./database/prisma.js";
 import { pruneOldEarnings, purgeStoredPasswords } from "./accounts/service.js";
 import { loadBannedIps } from "./security/ipBans.js";
 import { flushConsoleLogs } from "./logging/consoleLogService.js";
+import { flushSellEarnings } from "./minecraft/earningPersistence.js";
 
 const SESSION_PRUNE_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
@@ -44,7 +45,7 @@ async function main() {
     clearInterval(pruneInterval);
     await clientManager.shutdownAll();
     await app.close();
-    await flushConsoleLogs();
+    await Promise.all([flushConsoleLogs(), flushSellEarnings()]);
     await disconnectDatabase();
     process.exit(0);
   };

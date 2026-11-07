@@ -3,6 +3,8 @@ package de.afkservice;
 import com.google.gson.JsonElement;
 import com.soulfiremc.server.api.SoulFireAPI;
 import com.soulfiremc.server.api.event.bot.BotPreTickEvent;
+import com.soulfiremc.server.api.event.bot.ChatMessageReceiveEvent;
+import com.soulfiremc.server.api.event.bot.BotDisconnectedEvent;
 import net.fabricmc.api.ModInitializer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.phys.EntityHitResult;
@@ -22,6 +24,10 @@ public final class SoulFireControls implements ModInitializer {
   @Override
   public void onInitialize() {
     SoulFireAPI.registerListener(BotPreTickEvent.class, SoulFireControls::tick);
+    SoulFireAPI.registerListener(ChatMessageReceiveEvent.class,
+        event -> NativeAutoSell.serverMessage(event.connection(), event.parseToPlainText()));
+    SoulFireAPI.registerListener(BotDisconnectedEvent.class,
+        event -> NativeAutoSell.disconnected(event.connection()));
   }
 
   private static void tick(BotPreTickEvent event) {

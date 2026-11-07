@@ -15,6 +15,9 @@ import { soulFireRpc } from "./rpc.js";
 import { authenticate, isRejectedMicrosoftLogin, readRemoteAccount, writePrivateJson, type Edition } from "./auth.js";
 import { SoulFireBehaviors, type BehaviorConfig, type GameGateway, type BotOutput } from "./behaviors.js";
 import { SoulFireInventory } from "./inventory.js";
+import { mergeBotSettings } from "./settings.js";
+import { readRuntimeStatus } from "./runtimeStatus.js";
+import { rememberedHome, rememberHome } from "./homeRecovery.js";
 
 // Reserved by our pinned native extension, never a Minecraft inventory slot.
 export const SELL_ALL_PLAYER_SLOTS = -1048576;
@@ -68,23 +71,18 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
       });
     }
   }
-  // Each website account owns one instance. Replace atomically so refreshes
-  // and retries cannot append duplicate copies of the same game account.
-  await rpc.instance.replaceInstanceAccounts({ id: instanceId, accounts: [account] }, call());
   const botId = account.profileId;
   const ids = { instanceId, botId };
+  const homeOwner = { host: config.host, port: config.port, edition: config.edition, botId };
+  config = { ...config, recovery_home: await rememberedHome(config.cache_dir, homeOwner) };
+  let homePending = config.auto_return_home !== false && !!config.recovery_home;
   await writePrivateJson(path.join(config.cache_dir, "soulfire.json"), ids);
   emit({ type: "profile", username: account.lastKnownName, uuid: botId });
   emit({ type: "behavior_log", message: "Anmeldung bestätigt; bereite Minecraft-Verbindung vor…" });
   const setting = async (namespace: string, key: string, value: string | number | boolean) => {
     await rpc.bot.updateBotConfigEntry({ ...ids, namespace, key, value: fromJson(ValueSchema, value) }, call());
   };
-  // Node's existing supervisor owns exactly the configured reconnect policy.
-  await setting("auto-reconnect", "enabled", false);
-  await setting("auto-respawn", "enabled", false);
-  await setting("client-settings", "render-distance", 2);
-  await setting("bot", "restore-on-reboot", false);
-  const versions = await protocolOptions(rpc, instanceId);
+  const versions = await protocolOptions(rpc, instanceId, call());
   const advertised = config.edition === "JAVA" && !config.version
     ? await javaServerProtocol(config.host, config.port).catch(() => undefined) : undefined;
   let requested = config.version || "";
@@ -95,15 +93,31 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
     requested = "";
   }
   const selected = selectProtocol(versions, config.edition, requested, advertised);
-  await setting("bot", "protocol-version", selected.id);
+  const initialSellConfig = JSON.stringify({ enabled: !!config.autosell_enabled,
+    intervalMs: Math.max(250, (config.autosell_interval_seconds ?? 60) * 1000), command: (config.autosell_command || "/sell").trim() });
+  const configuredAt = Date.now();
+  const resumeMs = config.autosell_resume_after_ms ?? 0;
+  account = { ...account, config: mergeBotSettings(account.config ?? [], {
+    "auto-reconnect": { enabled: false }, "auto-respawn": { enabled: false },
+    "client-settings": { "render-distance": 2 }, "bot": { "restore-on-reboot": false, "protocol-version": selected.id },
+    "afk-service": { "auto-button": (config.auto_button || "off").toUpperCase(), "crouch-enabled": !!config.crouch_enabled,
+      "native-auto-sell": initialSellConfig, "sell-manual-until": 0, "sell-home-pending": homePending,
+      "sell-pause-from": resumeMs ? configuredAt + (config.autosell_pause_after_ms ?? 0) : 0,
+      "sell-pause-until": resumeMs ? configuredAt + resumeMs : 0 },
+  }) };
+  // One account/one transaction, including all startup settings. Unrelated
+  // account settings survive refreshes, retries and native extension updates.
+  await rpc.instance.replaceInstanceAccounts({ id: instanceId, accounts: [account] }, call());
   emit({ type: "behavior_log", message: `Minecraft-Protokoll ausgewählt (${selected.displayName || selected.id}); bereite Client-Steuerung vor…` });
 
   let sneakCheck = 0;
   const inventory = new SoulFireInventory();
-  let heldButton: string | undefined, heldCrouch: boolean | undefined, nativeSellConfig: string | undefined;
+  let heldButton: string | undefined = (config.auto_button || "off").toUpperCase(),
+    heldCrouch: boolean | undefined = !!config.crouch_enabled, nativeSellConfig: string | undefined = initialSellConfig;
   let nativeSellEnabled = false, nextSellLease = 0, sellLeaseBusy = false;
+  let sellSuspendedUntil = 0;
   const renewSellLease = async () => {
-    await rpc.bot.updateBotConfigEntry({ ...ids, namespace: "afk-service", key: "sell-lease-until", value: fromJson(ValueSchema, Date.now() + 15_000) }, { signal, timeoutMs: 3000 });
+    await rpc.bot.updateBotConfigEntry({ ...ids, namespace: "afk-service", key: "sell-lease-until", value: fromJson(ValueSchema, Date.now() + 90_000) }, { signal, timeoutMs: 3000 });
     nextSellLease = Date.now() + 5000;
   };
   const nativeSellPause = async (afterMs: number, resumeMs: number) => {
@@ -113,7 +127,17 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   };
   const gateway: GameGateway = {
     nativeAutosell: true,
-    suspendSell: async duration => { if (nativeSellEnabled) await setting("afk-service", "sell-manual-until", Date.now() + duration); },
+    recoveringHome: async pending => {
+      if (homePending !== pending) { await setting("afk-service", "sell-home-pending", pending); homePending = pending; }
+    },
+    rememberHome: home => rememberHome(config.cache_dir, homeOwner, home),
+    suspendSell: async duration => {
+      const until = Date.now() + duration;
+      if (nativeSellEnabled && until > sellSuspendedUntil) {
+        await setting("afk-service", "sell-manual-until", until);
+        sellSuspendedUntil = until;
+      }
+    },
     held: async cfg => {
       const button = (cfg.auto_button || "off").toUpperCase(), crouch = !!cfg.crouch_enabled;
       if (button !== heldButton) { await setting("afk-service", "auto-button", button); heldButton = button; }
@@ -171,8 +195,6 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   const behaviors = new SoulFireBehaviors(config, gateway, emit);
   behaviors.pause(config.autosell_pause_after_ms ?? 0, config.autosell_resume_after_ms ?? 0);
   await gateway.held(config);
-  await setting("afk-service", "sell-manual-until", 0);
-  await nativeSellPause(config.autosell_pause_after_ms ?? 0, config.autosell_resume_after_ms ?? 0);
   let online = false, busy = false, statusBusy = false, heartbeatAt = 0, lastStatusAt = -Infinity, lastWarning = 0;
   let lastStartupState: BotRuntimeState | undefined;
   const startupStatus = (state: BotRuntimeState | undefined) => {
@@ -196,6 +218,7 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   };
   let position: { x: number; y: number; z: number; dimension: string } | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let schedulerTask: Promise<void> | undefined;
   let stream: Promise<void> | undefined;
   let wakeScheduler: (() => void) | undefined;
   let eventPending = false;
@@ -286,16 +309,30 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
           }
           // A stream outage/burst can lose the first snapshot and SPAWNED event.
           // A live player returned by the independent game-thread query also
-          // proves world entry; otherwise the supervisor retries every 5 minutes.
+          // proves world entry; otherwise the supervisor expires world entry.
           if (state.liveState && state.status?.runtimeState === BotRuntimeState.RUNNING) await spawned();
           if (online && state.liveState) { heartbeatAt = Date.now(); emit({ type: "heartbeat" }); }
-        }).catch(error => {
+        }).catch(async error => {
           if (signal.aborted) return;
           if (unavailableControlService(error)) {
-            controlUnavailable = true;
-            // Renew only after an actual failed status request. A dead scheduler
-            // cannot leave the supervisor's watchdog disabled indefinitely.
-            emit({ type: "control_status", available: false, error: soulFireError(error) });
+            try {
+              const state = await readRuntimeStatus(rpc, ids, signal);
+              if (signal.aborted) return;
+              controlRestored();
+              startupStatus(state.runtimeState);
+              if ([BotRuntimeState.FAILED, BotRuntimeState.RETRYING, BotRuntimeState.STOPPED].includes(state.runtimeState)) {
+                emit({ type: "connection_failed", error: state.lastError || "SoulFire-Bot ist nicht mehr verbunden" }); abort.abort();
+              }
+              // Do not synthesize a game heartbeat from a control snapshot.
+              // A frozen game thread must still expire the normal watchdog.
+            } catch (probeError) {
+              if (signal.aborted) return;
+              if (!retryEventStream(probeError)) {
+                emit({ type: "connection_failed", error: soulFireError(probeError) }); abort.abort(); return;
+              }
+              controlUnavailable = true;
+              emit({ type: "control_status", available: false, error: soulFireError(probeError) });
+            }
           } else if (!retryEventStream(error)) {
             emit({ type: "connection_failed", error: soulFireError(error) }); abort.abort();
           }
@@ -304,7 +341,7 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
       }
       if (busy) return;
       busy = true;
-      void (async () => {
+      schedulerTask = (async () => {
         while (queued.length) {
           const command = queued.shift()!;
           switch (command.type) {
@@ -339,6 +376,9 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
     clearInterval(timer);
     wakeScheduler = undefined;
     abort.abort();
+    // A pending private home write must finish before this account's cache can
+    // be removed or a replacement controller starts writing the same file.
+    await schedulerTask;
     await rpc.bot.setBotsDesiredState({ instanceId, botIds: [botId], desiredState: BotDesiredState.STOPPED }, { timeoutMs: 3000 }).catch(() => undefined);
     await stream?.catch(() => undefined);
   }

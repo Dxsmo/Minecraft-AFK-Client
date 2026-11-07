@@ -139,6 +139,8 @@ model MinecraftAccount {
   crouchEnabled              Boolean      @default(false)
   autoButton                 AutoButton   @default(OFF)
   autoReconnect              Boolean      @default(true)
+  // Resume a previously confirmed home after reconnect; no target is guessed.
+  autoReturnHome             Boolean      @default(true)
   // Free-form short note shown in the dashboard/settings (e.g. "farming cobble").
   notes                      String       @default("")
   // Legacy auto-home/command columns retained for database compatibility.

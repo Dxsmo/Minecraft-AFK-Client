@@ -10,6 +10,7 @@
     "BlockedCommandMixin",
     "SellBatchMixin",
     "SellLeaseMixin",
+    "SellInventoryMixin",
     "CameraFrameMixin",
     "CameraItemsMixin",
     "CameraItemCopiesMixin",

@@ -551,7 +551,7 @@ describe("MinecraftClient (SoulFire adapter) state machine", () => {
     expect(client.getStatus().lastError).toContain("code 1");
   });
 
-  it("reconnects at exactly 15 seconds on every attempt, without jitter", async () => {
+  it("reconnects after 15 seconds for ordinary transport exits", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {
       const client = makeClient(); client.connect();
@@ -562,6 +562,20 @@ describe("MinecraftClient (SoulFire adapter) state machine", () => {
         vi.advanceTimersByTime(1);
         expect(lastChild()).not.toBe(failed);
       }
+    } finally { for (const client of active) client.dispose(); vi.useRealTimers(); }
+  });
+
+  it("backs off repeated server login throttles and cancels the pending retry on manual stop", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    try {
+      const client = makeClient(); client.connect();
+      const first = lastChild(); first.send({ type: "connection_failed", error: "You are logging in too fast, try again later." }); await tick();
+      vi.advanceTimersByTime(59_999); expect(children).toHaveLength(1);
+      vi.advanceTimersByTime(1); await tick(); expect(children).toHaveLength(2);
+      lastChild().send({ type: "connection_failed", error: "You are logging in too fast, try again later." }); await tick();
+      vi.advanceTimersByTime(119_999); expect(children).toHaveLength(2);
+      client.disconnect(); vi.advanceTimersByTime(600_000); expect(children).toHaveLength(2);
+      expect(client.getStatus().status).toBe("OFFLINE");
     } finally { for (const client of active) client.dispose(); vi.useRealTimers(); }
   });
 
@@ -990,9 +1004,9 @@ describe("MinecraftClient (SoulFire adapter) state machine", () => {
       client.connect();
       lastChild().send({ type: "profile", username: "frustrieren", uuid: "fixture" });
       await vi.advanceTimersByTimeAsync(0);
-      vi.advanceTimersByTime(5 * 60_000);
+      vi.advanceTimersByTime(90_000);
       expect(client.getStatus().status).toBe("RECONNECTING");
-      expect(messages).toContain("Connection timed out: authenticated, but no world entry confirmed within 5 minutes");
+      expect(messages).toContain("Connection timed out: authenticated, but no world entry confirmed within 90 seconds");
       expect(messages.at(-1)).toBe("Reconnecting in 15s...");
     } finally {
       vi.useRealTimers();

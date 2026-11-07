@@ -31,6 +31,7 @@ async function fixture() {
       yield { data: { case: "oneSuccess", value: { account: { profileId: "bot", lastKnownName: "Fixture" } } } };
     }) },
     bot: { updateBotConfigEntry: vi.fn(async () => ({})), setBotsDesiredState: vi.fn(async () => ({})),
+      watchBotStatuses: vi.fn(async function* () { yield { event: { case: "snapshot", value: { bots: [{ profileId: "bot", runtimeState: BotRuntimeState.RUNNING }] } } }; }),
       getBotInfo: vi.fn(async () => ({ status: { runtimeState: BotRuntimeState.RUNNING }, liveState: {} })),
       getInventoryState: vi.fn(async () => { throw new Error("Background icon rendering is forbidden"); }),
       clickInventorySlot: vi.fn(async () => ({ success: true })), closeContainer: vi.fn(async () => ({})) },
@@ -78,8 +79,12 @@ async function fixture() {
 it("delegates selling to the native client and suspends it before manual commands", async () => {
   const f = await fixture(); await f.start();
   expect(f.rpc.live.watchBotEvents.mock.calls[0][0].filter.includeInventory).toBe(true);
-  expect(f.rpc.bot.updateBotConfigEntry).toHaveBeenCalledWith(expect.objectContaining({ key: "native-auto-sell",
-    value: expect.objectContaining({ kind: { case: "stringValue", value: JSON.stringify({ enabled: true, intervalMs: 60000, command: "/sell" }) } }) }), expect.anything());
+  const initial = f.rpc.instance.replaceInstanceAccounts.mock.calls[0][0].accounts[0];
+  const config = initial.config.find(namespace => namespace.namespace === "afk-service");
+  expect(config.entries.find(entry => entry.key === "native-auto-sell").value.kind.value)
+    .toBe(JSON.stringify({ enabled: true, intervalMs: 60000, command: "/sell" }));
+  // The only periodic setting is the transient lease, never startup DB churn.
+  expect(f.rpc.bot.updateBotConfigEntry.mock.calls.every(([request]) => request.key === "sell-lease-until")).toBe(true);
   await vi.advanceTimersByTimeAsync(2100);
   expect(f.rpc.live.sendChat).not.toHaveBeenCalled();
   await f.frame("inventory", { state: f.inventory("sell", "Items verkaufen") });
@@ -172,6 +177,7 @@ it.each([false, true])("keeps the game session during a minute-long control outa
   const f = await fixture(); f.config.autosell_enabled = autosell; await f.start();
   const failure = new TypeError("fetch failed", { cause: Object.assign(new Error("connect ECONNREFUSED 172.19.0.4:38765"), { code: "ECONNREFUSED" }) });
   f.rpc.bot.getBotInfo.mockRejectedValue(failure);
+  f.rpc.bot.watchBotStatuses.mockImplementation(async function* () { throw failure; });
   f.rpc.live.watchBotEvents.mockImplementation(async function* () { throw failure; yield undefined as any; });
   await f.breakStream(failure);
   await vi.advanceTimersByTimeAsync(65_000);
@@ -192,6 +198,7 @@ it.each([Code.Unknown, Code.Internal, Code.ResourceExhausted])("does not stop a 
   // response may carry no description. Do not depend on matching Hikari text.
   const failure = new ConnectError("", code);
   f.rpc.bot.getBotInfo.mockRejectedValue(failure);
+  f.rpc.bot.watchBotStatuses.mockImplementation(async function* () { throw failure; });
   f.rpc.live.watchBotEvents.mockImplementation(async function* () { throw failure; yield undefined as any; });
   await f.breakStream(failure);
   await vi.advanceTimersByTimeAsync(65_000);
@@ -381,4 +388,29 @@ it("passes restart pause windows to native selling", async () => {
   expect(setting("sell-pause-from")).toBeGreaterThanOrEqual(Date.now() + 900);
   expect(setting("sell-pause-from")).toBeLessThanOrEqual(Date.now() + 1000);
   expect(setting("sell-pause-until") - setting("sell-pause-from")).toBe(120000);
+});
+
+it("distinguishes an unresponsive game thread from an unreachable control service without faking game heartbeats", async () => {
+  const f = await fixture(); await f.start(); f.emit.mockClear();
+  f.rpc.bot.getBotInfo.mockRejectedValue(new ConnectError("game task timed out", Code.DeadlineExceeded));
+  await vi.advanceTimersByTimeAsync(65_000);
+  expect(f.rpc.bot.watchBotStatuses).toHaveBeenCalled();
+  expect(f.emit.mock.calls.some(([event]) => event.type === "control_status" && event.available === false)).toBe(false);
+  expect(f.emit.mock.calls.some(([event]) => event.type === "heartbeat")).toBe(false);
+  expect(f.abort.signal.aborted).toBe(false); // The supervisor's existing watchdog handles the frozen game thread.
+});
+
+it("atomically gates native selling before a reconnect to a remembered home and releases only on server confirmation", async () => {
+  const f = await fixture();
+  const { rememberHome } = await import("../../src/soulfire/homeRecovery.js");
+  await rememberHome(f.directory, { host: "localhost", port: 25565, edition: "JAVA", botId: "bot" }, "melon");
+  await f.start();
+  const entries = f.rpc.instance.replaceInstanceAccounts.mock.calls[0][0].accounts[0].config.find(namespace => namespace.namespace === "afk-service").entries;
+  expect(entries.find(entry => entry.key === "sell-home-pending").value.kind.value).toBe(true);
+  await vi.waitFor(() => expect(f.emit).toHaveBeenCalledWith({ type: "spawn" }));
+  await vi.advanceTimersByTimeAsync(5100);
+  expect(f.rpc.live.sendChat).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: "/home melon" }), expect.anything());
+  await f.frame("chat", { senderName: "", plainText: "[HugoSMP] Du wurdest zu deinem Home melon teleportiert!" });
+  await vi.advanceTimersByTimeAsync(100);
+  expect(f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === "sell-home-pending").map(([request]) => request.value.kind.value)).toEqual([false]);
 });

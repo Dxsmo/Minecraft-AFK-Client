@@ -27,7 +27,8 @@ public final class SellLeaseTest {
 
     // Never let a broken controller grant an indefinitely valid lease.
     SellLease.renew(instance, bot, Long.MAX_VALUE, now);
-    assert !SellLease.valid(instance, bot, now + 15_000);
+    assert SellLease.valid(instance, bot, now + 60_000);
+    assert !SellLease.valid(instance, bot, now + SellLease.MAX_MILLIS);
     SellLease.renew(instance, bot, now - 1, now);
     assert !SellLease.valid(instance, bot, now);
     System.out.println("Sell lease expiration, renewal, revocation and account isolation passed");

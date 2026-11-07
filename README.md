@@ -252,7 +252,10 @@ are documented in [SoulFire migration](docs/SOULFIRE-MIGRATION.md).
   distance remains controlled by the server.
 - Clicking an account icon opens the searchable, alphabetically sorted chooser
   containing **1,489 transparent PNGs**, with custom upload still available.
-- Reconnect remains fixed at 15 seconds, with a five-second manual restart wait.
+- Ordinary disconnects retry after 15 seconds. Server login throttles wait
+  60–300 seconds; repeated unavailable-service failures back off to 120 seconds.
+  Manual restarts wait five seconds. Optional home recovery returns to the last
+  manually visited, server-confirmed `/home` before AutoSell resumes.
   Real game-state checks feed the existing frozen-client watchdog.
 
 ### Feature visibility

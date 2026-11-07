@@ -3,9 +3,9 @@ import { resolveSrv } from "node:dns/promises";
 import type { SoulFireRpc } from "./rpc.js";
 
 export type ProtocolOption = { id: string; displayName: string; keywords: string[] };
-export async function protocolOptions(rpc: SoulFireRpc, instanceId?: string): Promise<ProtocolOption[]> {
-  const id = instanceId || (await rpc.instance.getOrCreateInstance({ name: "afk-version-catalog" })).id;
-  const response = await rpc.instance.getInstanceInfo({ id });
+export async function protocolOptions(rpc: SoulFireRpc, instanceId?: string, options: { signal?: AbortSignal; timeoutMs?: number } = { timeoutMs: 15_000 }): Promise<ProtocolOption[]> {
+  const id = instanceId || (await rpc.instance.getOrCreateInstance({ name: "afk-version-catalog" }, options)).id;
+  const response = await rpc.instance.getInstanceInfo({ id }, options);
   if (response.result.case !== "info") throw new Error("SoulFire-Versionsliste ist nicht verfügbar");
   const definition = response.result.value.settingsDefinitions.find(d => d.id?.namespace === "bot" && d.id.key === "protocol-version");
   if (definition?.type.case !== "combo") throw new Error("SoulFire-Protokollauswahl fehlt");

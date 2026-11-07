@@ -48,6 +48,7 @@ export interface ClientRuntimeConfig {
   crouchEnabled: boolean;
   autoButton: "OFF" | "LEFT" | "RIGHT";
   autoReconnect: boolean;
+  autoReturnHome?: boolean;
   /** Periodically run the sell command and move all items into the sell menu. */
   autoSellEnabled: boolean;
   autoSellIntervalSeconds: number;

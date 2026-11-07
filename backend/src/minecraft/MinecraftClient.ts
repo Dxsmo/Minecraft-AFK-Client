@@ -21,14 +21,14 @@ import { config as appConfig } from "../config/config.js";
 import type { Logger } from "pino";
 import { stopRemoteAccount } from "../soulfire/lifecycle.js";
 import { terminateSubprocess } from "../utils/terminateSubprocess.js";
+import { ReconnectPolicy } from "./reconnectPolicy.js";
 
-// Fixed, locked retry interval for every account and every attempt.
-const RECONNECT_DELAY_MS = 15_000;
 const MANUAL_RESTART_DELAY_MS = 5_000;
 
 // Safety net: if a spawned bot never reaches ONLINE or reports a failure within
 // this window, we treat the attempt as hung and recycle it.
 const SUBPROCESS_HANG_TIMEOUT_MS = 5 * 60_000;
+const AUTHENTICATED_WORLD_ENTRY_TIMEOUT_MS = 90_000;
 /// Require a heartbeat from the behavior tick itself. Chat and other packets
 /// may still arrive even when ticks and queued commands have stopped.
 const SUBPROCESS_ONLINE_SILENCE_MS = 45_000;
@@ -60,6 +60,7 @@ function isServerFallbackMessage(message: string): boolean {
  * contract. All controllers share Node and a dedicated JVM, avoiding one OS
  * process per account. This class owns reconnection and website events. */
 export class MinecraftClient extends EventEmitter {
+  private readonly reconnectPolicy = new ReconnectPolicy();
   private subprocess: SoulFireController | null = null;
   private pendingStop: Promise<void> = Promise.resolve();
   private status: ClientStatus = "OFFLINE";
@@ -107,6 +108,7 @@ export class MinecraftClient extends EventEmitter {
     if (this.subprocess && this.status === "ONLINE") {
       this.sendToBot({
         type: "configure",
+        auto_return_home: config.autoReturnHome ?? true,
         crouch_enabled: config.crouchEnabled,
         auto_button: (config.autoButton ?? "OFF").toLowerCase(),
         autosell_enabled: config.autoSellEnabled,
@@ -137,6 +139,7 @@ export class MinecraftClient extends EventEmitter {
     if (this.status !== "OFFLINE" && this.status !== "ERROR") return;
     if (this.restartTimer) return;
     this.manuallyStopped = false;
+    this.reconnectPolicy.reset();
     this.clearReconnectTimer();
     this.attemptConnect();
   }
@@ -163,6 +166,7 @@ export class MinecraftClient extends EventEmitter {
 
   restart(): void {
     this.manuallyStopped = false;
+    this.reconnectPolicy.reset();
     this.clearRestartTimer();
     this.clearReconnectTimer();
     this.clearHangTimer();
@@ -302,6 +306,7 @@ export class MinecraftClient extends EventEmitter {
       email: this.config.credentialsSecret,
       password: this.config.credentialsPassword,
       cache_dir: cacheDir,
+      auto_return_home: this.config.autoReturnHome ?? true,
       crouch_enabled: this.config.crouchEnabled,
       auto_button: (this.config.autoButton ?? "OFF").toLowerCase(),
       autosell_enabled: this.config.autoSellEnabled,
@@ -384,9 +389,9 @@ export class MinecraftClient extends EventEmitter {
         this.log.info({ username, uuid }, "Resolved Minecraft profile");
         this.clearHangTimer();
         this.hangTimer = setTimeout(() => {
-          this.emitConsole("ERROR", "Connection timed out: authenticated, but no world entry confirmed within 5 minutes");
-          this.handleConnectionFailure("Connection timed out");
-        }, SUBPROCESS_HANG_TIMEOUT_MS);
+          this.emitConsole("ERROR", "Connection timed out: authenticated, but no world entry confirmed within 90 seconds");
+          this.handleConnectionFailure("Connection timed out after authentication (no world entry)");
+        }, AUTHENTICATED_WORLD_ENTRY_TIMEOUT_MS);
         this.msaSignIn = undefined;
         this.authenticated = true;
         this.emitConsole("SYSTEM", `Authenticated as ${username}`);
@@ -516,6 +521,7 @@ export class MinecraftClient extends EventEmitter {
   private handleConnectionFailure(reason: string): void {
     if (this.connectionEnded) return;
     this.connectionEnded = true;
+    const stableForMs = this.connectedSince ? Date.now() - this.connectedSince.getTime() : 0;
     this.lastError = reason;
     this.clearHangTimer();
     this.teardownSubprocess(`Connection ended: ${reason}`);
@@ -531,13 +537,13 @@ export class MinecraftClient extends EventEmitter {
       return;
     }
 
-    const delay = RECONNECT_DELAY_MS;
+    const delay = this.reconnectPolicy.delay(reason, stableForMs);
     const seconds = Math.round(delay / 1000);
     this.setStatus("RECONNECTING");
     this.emitConsole("SYSTEM", `Reconnecting in ${seconds}s...`);
     this.log.info({ delay }, `Reconnecting in ${seconds}s`);
 
-    this.reconnectTimer = setTimeout(() => this.attemptConnect(true), delay);
+    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; this.attemptConnect(true); }, delay);
   }
 
   private teardownSubprocess(reason: string): void {

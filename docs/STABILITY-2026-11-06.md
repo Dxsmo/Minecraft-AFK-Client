@@ -1,5 +1,8 @@
 # Kurze Website-Ausfälle, Reconnects und große Itemmengen
 
+Nachfolgende Korrekturen, aktuelle Freigabezeiten und Prüfungen stehen in
+[Stabilität vom 7. November](STABILITY-2026-11-07.md).
+
 ## Einordnung der gemeldeten Logs
 
 Beim ersten Account folgen auf `Authenticated as` genau fünf Minuten ohne

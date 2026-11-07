@@ -51,9 +51,9 @@ async function main() {
   const prisma = new PrismaClient();
   try {
     const accounts = await prisma.minecraftAccount.findMany({ select: {
-      id: true, name: true, edition: true, serverHost: true, serverPort: true, minecraftVersion: true, status: true,
+      id: true, name: true, displayName: true, edition: true, serverHost: true, serverPort: true, minecraftVersion: true, status: true,
     } });
-    const matches = accounts.filter(account => account.id === name || account.name.toLowerCase() === name.toLowerCase());
+    const matches = accounts.filter(account => account.id === name || account.name.toLowerCase() === name.toLowerCase() || account.displayName?.toLowerCase() === name.toLowerCase());
     if (matches.length !== 1) throw new Error(matches.length ? 'Mehrere Accounts mit diesem Namen; Website-Account-ID verwenden' : 'Account nicht gefunden');
     const account = matches[0];
     const stored = JSON.parse(await readFile(path.join(backend, 'data/bot-cache', account.id, 'soulfire.json'), 'utf8'));

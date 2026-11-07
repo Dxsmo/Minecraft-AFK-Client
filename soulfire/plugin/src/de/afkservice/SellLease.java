@@ -6,6 +6,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /** Controller liveness is transient. Never persist a heartbeat to SQLite or
  * accept a lease left in account settings by an earlier JVM/controller. */
 public final class SellLease {
+  public static final long MAX_MILLIS = 90_000;
   private record Key(UUID instance, UUID bot) {}
   private static final ConcurrentHashMap<Key, Long> DEADLINES = new ConcurrentHashMap<>();
 
@@ -13,7 +14,7 @@ public final class SellLease {
     DEADLINES.entrySet().removeIf(entry -> entry.getValue() <= now);
     var key = new Key(instance, bot);
     if (until <= now) DEADLINES.remove(key);
-    else DEADLINES.put(key, Math.min(until, now + 15_000));
+    else DEADLINES.put(key, Math.min(until, now + MAX_MILLIS));
   }
 
   public static boolean valid(UUID instance, UUID bot, long now) {

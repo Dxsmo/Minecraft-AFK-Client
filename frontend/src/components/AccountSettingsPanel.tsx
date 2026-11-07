@@ -28,6 +28,7 @@ export function AccountSettingsPanel({
   const [serverHost, setServerHost] = useState(account.serverHost);
   const [serverPort, setServerPort] = useState(account.serverPort);
   const [autoReconnect, setAutoReconnect] = useState(account.autoReconnect);
+  const [autoReturnHome, setAutoReturnHome] = useState(account.autoReturnHome ?? true);
   const [autoSellEnabled, setAutoSellEnabled] = useState(account.autoSellEnabled);
   const [autoSellIntervalSeconds, setAutoSellIntervalSeconds] = useState(account.autoSellIntervalSeconds);
   const [autoSellCommand, setAutoSellCommand] = useState(account.autoSellCommand);
@@ -57,6 +58,7 @@ export function AccountSettingsPanel({
         crouchEnabled,
         autoButton,
         autoReconnect,
+        autoReturnHome,
         serverHost,
         serverPort,
         autoSellEnabled,
@@ -260,6 +262,8 @@ export function AccountSettingsPanel({
               <>
                 <Toggle label="Crouch" description="Continuously sneak while connected." checked={crouchEnabled} onChange={setCrouchEnabled} />
                 <Toggle label="Auto-reconnect" checked={autoReconnect} onChange={setAutoReconnect} />
+                <Toggle label="Nach Reconnect zum zuletzt bestätigten Home" checked={autoReturnHome} onChange={setAutoReturnHome} />
+                <p className="text-xs text-slate-400">Das Ziel wird nach einem erfolgreichen manuellen /home-Befehl gemerkt.</p>
               </>
             )}
 

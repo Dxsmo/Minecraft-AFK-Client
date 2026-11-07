@@ -300,3 +300,66 @@ describe("common SoulFire automation", () => {
     f.advance(2500); await f.engine.tick(); expect(f.game.click).not.toHaveBeenCalled();
   });
 });
+
+describe("recovery without command bursts", () => {
+  it("coalesces hundreds of loading rejections and holds manual commands until inventory recovers", async () => {
+    const f = fixture({ autosell_enabled: true }); f.game.nativeAutosell = true;
+    f.game.suspendSell = vi.fn(async () => {});
+    await f.engine.spawned();
+    for (let i = 0; i < 365; i++) f.engine.onChat(null, "[HugoSMP] Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird.");
+    f.engine.enqueue("chat", "/homes");
+    await f.engine.tick(); f.advance(1000); await f.engine.tick();
+    expect(f.game.suspendSell).toHaveBeenCalledExactlyOnceWith(2000);
+    expect(f.game.chat).not.toHaveBeenCalled();
+    f.advance(1000); await f.engine.tick();
+    expect(f.game.chat).toHaveBeenCalledExactlyOnceWith("/homes");
+  });
+  it("bounds and deduplicates pending commands", async () => {
+    const f = fixture(); await f.engine.spawned();
+    for (let i = 0; i < 100; i++) f.engine.enqueue("chat", "/homes");
+    await f.engine.tick(); await f.engine.tick();
+    expect(f.game.chat).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 100; i++) f.engine.enqueue("chat", `/test${i}`);
+    expect(f.emit).toHaveBeenCalledTimes(2); // Dispatch log and one queue warning.
+    for (let i = 0; i < 100; i++) { f.advance(1500); await f.engine.tick(); }
+    expect(f.game.chat).toHaveBeenCalledTimes(33);
+  });
+  it("returns to the confirmed worksite with backoff, waits for confirmation, and preserves it across configuration", async () => {
+    const f = fixture({ autosell_enabled: true, recovery_home: "melon" });
+    f.game.recoveringHome = vi.fn(async () => {}); f.game.rememberHome = vi.fn(async () => {});
+    await f.engine.spawned(); f.advance(4999); await f.engine.tick(); expect(f.game.chat).not.toHaveBeenCalled();
+    f.advance(1); await f.engine.tick(); expect(f.game.chat).toHaveBeenCalledExactlyOnceWith("/home melon");
+    f.advance(14_999); await f.engine.tick(); expect(f.game.chat).toHaveBeenCalledTimes(1);
+    f.advance(1); await f.engine.tick(); expect(f.game.chat).toHaveBeenCalledTimes(2);
+    f.engine.onChat("attacker", "[HugoSMP] Du wurdest zu deinem Home melon teleportiert!");
+    f.advance(29_999); await f.engine.tick(); expect(f.game.chat).toHaveBeenCalledTimes(2);
+    f.engine.onChat(null, "[HugoSMP] Du wurdest zu deinem Home melon teleportiert!"); await f.engine.tick();
+    expect(f.game.recoveringHome).toHaveBeenLastCalledWith(false);
+    expect(f.game.rememberHome).toHaveBeenCalledExactlyOnceWith("melon");
+    await f.engine.configure({ autosell_enabled: true });
+    f.advance(2000); await f.engine.tick(); expect(f.game.chat).toHaveBeenLastCalledWith("/sell");
+    f.engine.joining(); await f.engine.spawned();
+    expect(f.game.recoveringHome).toHaveBeenLastCalledWith(true);
+  });
+  it("remembers only a manually visited home confirmed by the server", async () => {
+    const f = fixture(); f.game.rememberHome = vi.fn(async () => {}); f.game.recoveringHome = vi.fn(async () => {});
+    await f.engine.spawned();
+    f.engine.onChat(null, "[HugoSMP] Du wurdest zu deinem Home fake teleportiert!"); await f.engine.tick();
+    expect(f.game.rememberHome).not.toHaveBeenCalled();
+    f.engine.enqueue("chat", "/home melon"); await f.engine.tick();
+    f.engine.onChat(null, "[HugoSMP] Du wurdest zu deinem Home fake teleportiert!"); await f.engine.tick();
+    expect(f.game.rememberHome).not.toHaveBeenCalled();
+    f.engine.onChat(null, "[HugoSMP] Du wurdest zu deinem Home melon teleportiert!"); await f.engine.tick();
+    expect(f.game.rememberHome).toHaveBeenCalledExactlyOnceWith("melon");
+    f.engine.enqueue("chat", "/spawn"); await f.engine.tick(); await f.engine.tick();
+    expect(f.game.rememberHome).toHaveBeenLastCalledWith("");
+    f.engine.joining(); await f.engine.spawned(); expect(f.game.recoveringHome).toHaveBeenLastCalledWith(false);
+  });
+  it("allows disabling automatic home recovery and prioritizes explicit navigation", async () => {
+    const f = fixture({ autosell_enabled: true, recovery_home: "melon" }); f.game.recoveringHome = vi.fn(async () => {});
+    await f.engine.spawned();
+    await f.engine.configure({ autosell_enabled: true, auto_return_home: false });
+    f.advance(5000); await f.engine.tick(); expect(f.game.chat).toHaveBeenCalledExactlyOnceWith("/sell");
+    expect(f.game.recoveringHome).toHaveBeenLastCalledWith(false);
+  });
+});
