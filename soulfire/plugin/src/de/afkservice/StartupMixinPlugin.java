@@ -56,7 +56,7 @@ public final class StartupMixinPlugin implements IMixinConfigPlugin {
       }
     }
     if (changed != 1) {
-      throw new IllegalStateException("Expected one SoulFire 2.10.6 resource deadline, found " + changed);
+      throw new IllegalStateException("Expected one SoulFire 2.10.7 resource deadline, found " + changed);
     }
     System.out.println("[afk-service] Initial Minecraft resource load timeout: " + seconds + " seconds");
   }
@@ -84,7 +84,7 @@ public final class StartupMixinPlugin implements IMixinConfigPlugin {
         changed++;
       }
     }
-    if (changed != 1) throw new IllegalStateException("Expected one SoulFire 2.10.6 camera frame exit, found " + changed);
+    if (changed != 1) throw new IllegalStateException("Expected one SoulFire 2.10.7 camera frame exit, found " + changed);
     System.out.println("[afk-service] Progressive live camera enabled");
   }
 

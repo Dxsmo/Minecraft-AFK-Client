@@ -9,7 +9,7 @@ import { MCAuthService } from "@soulfiremc/sdk/generated/soulfire/mc-auth_pb";
 import { SdkService } from "@soulfiremc/sdk/generated/soulfire/sdk_pb";
 import { WorldService } from "@soulfiremc/sdk/generated/soulfire/world_pb";
 
-export const SOULFIRE_VERSION = "2.10.6";
+export const SOULFIRE_VERSION = "2.10.7";
 
 /** Same root-token format as the official SDK's dedicated-server installer.
  * The key is mounted read-only from the private SoulFire data volume. */

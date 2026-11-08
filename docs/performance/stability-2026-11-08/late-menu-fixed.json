@@ -1,0 +1,59 @@
+{
+  "controllers": 2,
+  "soakSeconds": 0,
+  "droppedItemsPerClient": 0,
+  "sellStacks": 36,
+  "sellInterval": 2,
+  "salePeriodsMs": [
+    21058,
+    2003,
+    2012,
+    2037,
+    2009,
+    2043
+  ],
+  "streamResyncs": 77,
+  "droppedInventoryFrames": 0,
+  "lostMenuReplies": 0,
+  "nativeChecks": false,
+  "injectedStreamFailures": 0,
+  "pickups": 0,
+  "blockInventory": false,
+  "lateBlockedMenu": false,
+  "latePausedMenu": true,
+  "navigationDuringOpen": false,
+  "manualSaleMenu": true,
+  "lateMenuDelay": 20000,
+  "delayedMenuReplies": 1,
+  "blockOnClick": false,
+  "blockedClicks": 0,
+  "blockedCommands": 0,
+  "ackDelay": 0,
+  "maxInFlight": 1,
+  "rpcDurations": [
+    {
+      "method": "CloseContainer",
+      "ms": 34
+    },
+    {
+      "method": "SendChat",
+      "ms": 58
+    },
+    {
+      "method": "SendChat",
+      "ms": 49
+    }
+  ],
+  "extraNodeProcesses": 0,
+  "javaAutoDetection": false,
+  "nativeRightUse": true,
+  "nativeLeftMining": true,
+  "noUnsneak": true,
+  "viewDistance": 2,
+  "confirmedSales": 204,
+  "refilledSlotsConfirmed": true,
+  "manualCommandDelivered": true,
+  "inventoryRpcCalls": 0,
+  "povRenderRpcCalls": 0,
+  "independentStop": true
+}

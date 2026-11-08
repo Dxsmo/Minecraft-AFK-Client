@@ -2,8 +2,8 @@
 FROM eclipse-temurin:25-jdk-noble AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates curl && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-RUN curl -fL --retry 3 https://github.com/soulfiremc-com/SoulFire/releases/download/2.10.6/SoulFireDedicated-2.10.6.jar -o SoulFireDedicated.jar \
-    && echo 'f033a3c1a88b6f3d303a4d9baee926cc8c3712069dcf30bcb631d368b25e5454  SoulFireDedicated.jar' | sha256sum -c -
+RUN curl -fL --retry 3 https://github.com/soulfiremc-com/SoulFire/releases/download/2.10.7/SoulFireDedicated-2.10.7.jar -o SoulFireDedicated.jar \
+    && echo '1afded9628c9732f0a0c982894e9fb023a7d94ab24f9b7e3e8db1cb96f16b4ea  SoulFireDedicated.jar' | sha256sum -c -
 COPY build-plugin.py ./
 COPY plugin ./plugin
 RUN --mount=type=cache,target=/build/cache python3 build-plugin.py --soulfire-jar SoulFireDedicated.jar --output afk-service-controls.jar --cache /build/cache

@@ -10,7 +10,7 @@ export type GameSlot = { slot: number; itemId: string; count: number; displayNam
 export type GameInventory = { menuId: string; title: string; containerSlots: number[]; playerSlots: number[]; slots: GameSlot[] };
 export interface GameGateway {
   nativeAutosell?: boolean;
-  suspendSell?(durationMs: number): Promise<void>;
+  suspendSell?(durationMs: number, command?: string): Promise<void>;
   recoveringHome?(pending: boolean): Promise<void>;
   rememberHome?(home: string): Promise<void>;
   held(config: BehaviorConfig): Promise<void>;
@@ -211,7 +211,7 @@ export class SoulFireBehaviors {
   }
 
   private async runCommand(command: { type: string; text?: string }): Promise<void> {
-    await this.game.suspendSell?.(5000);
+    await this.game.suspendSell?.(5000, command.type === "chat" ? command.text : undefined);
     const generation = this.generation;
     this.sell = null;
     this.foreground = null;

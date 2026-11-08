@@ -18,6 +18,7 @@ import { SoulFireInventory } from "./inventory.js";
 import { mergeBotSettings } from "./settings.js";
 import { readRuntimeStatus } from "./runtimeStatus.js";
 import { rememberedHome, rememberHome } from "./homeRecovery.js";
+import { withAccountLifecycle } from "./accountLifecycle.js";
 
 // Reserved by our pinned native extension, never a Minecraft inventory slot.
 export const SELL_ALL_PLAYER_SLOTS = -1048576;
@@ -35,6 +36,10 @@ export type SoulFireConfig = BehaviorConfig & { host: string; port: number; user
   cache_dir: string; account_id?: string; version?: string; autosell_pause_after_ms?: number; autosell_resume_after_ms?: number };
 
 export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort: AbortController, queued: Record<string, any>[]): Promise<void> {
+  return withAccountLifecycle(config.cache_dir, abort.signal, () => runSession(config, emit, abort, queued));
+}
+
+async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortController, queued: Record<string, any>[]): Promise<void> {
   const rpc = soulFireRpc();
   const signal = abort.signal;
   const call = () => ({ signal, timeoutMs: 15_000 });
@@ -101,7 +106,7 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
     "auto-reconnect": { enabled: false }, "auto-respawn": { enabled: false },
     "client-settings": { "render-distance": 2 }, "bot": { "restore-on-reboot": false, "protocol-version": selected.id },
     "afk-service": { "auto-button": (config.auto_button || "off").toUpperCase(), "crouch-enabled": !!config.crouch_enabled,
-      "native-auto-sell": initialSellConfig, "sell-manual-until": 0, "sell-home-pending": homePending,
+      "native-auto-sell": initialSellConfig, "sell-manual-until": 0, "sell-manual-menu-until": 0, "sell-home-pending": homePending,
       "sell-pause-from": resumeMs ? configuredAt + (config.autosell_pause_after_ms ?? 0) : 0,
       "sell-pause-until": resumeMs ? configuredAt + resumeMs : 0 },
   }) };
@@ -115,6 +120,7 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
   let heldButton: string | undefined = (config.auto_button || "off").toUpperCase(),
     heldCrouch: boolean | undefined = !!config.crouch_enabled, nativeSellConfig: string | undefined = initialSellConfig;
   let nativeSellEnabled = false, nextSellLease = 0, sellLeaseBusy = false;
+  let nativeSellCommand = (config.autosell_command || "/sell").trim();
   let sellSuspendedUntil = 0;
   const renewSellLease = async () => {
     await rpc.bot.updateBotConfigEntry({ ...ids, namespace: "afk-service", key: "sell-lease-until", value: fromJson(ValueSchema, Date.now() + 90_000) }, { signal, timeoutMs: 3000 });
@@ -131,11 +137,17 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
       if (homePending !== pending) { await setting("afk-service", "sell-home-pending", pending); homePending = pending; }
     },
     rememberHome: home => rememberHome(config.cache_dir, homeOwner, home),
-    suspendSell: async duration => {
+    suspendSell: async (duration, command) => {
       const until = Date.now() + duration;
       if (nativeSellEnabled && until > sellSuspendedUntil) {
         await setting("afk-service", "sell-manual-until", until);
         sellSuspendedUntil = until;
+      }
+      // Only an explicit sale command may own a sale GUI. A /home or /tpahere
+      // pause must still allow a delayed native reply to be discarded.
+      if (command && (/^\/(?:[^ :/]+:)?sell(?:\s|$)/i.test(command)
+          || command.trim() === nativeSellCommand)) {
+        await setting("afk-service", "sell-manual-menu-until", until);
       }
     },
     held: async cfg => {
@@ -143,6 +155,7 @@ export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort
       if (button !== heldButton) { await setting("afk-service", "auto-button", button); heldButton = button; }
       if (crouch !== heldCrouch) { await setting("afk-service", "crouch-enabled", crouch); heldCrouch = crouch; }
       const sellConfig = JSON.stringify({ enabled: !!cfg.autosell_enabled, intervalMs: Math.max(250, (cfg.autosell_interval_seconds ?? 60) * 1000), command: (cfg.autosell_command || "/sell").trim() });
+      nativeSellCommand = (cfg.autosell_command || "/sell").trim();
       nativeSellEnabled = !!cfg.autosell_enabled;
       if (sellConfig !== nativeSellConfig) { await setting("afk-service", "native-auto-sell", sellConfig); nativeSellConfig = sellConfig; }
       if (nativeSellEnabled && Date.now() >= nextSellLease) await renewSellLease();

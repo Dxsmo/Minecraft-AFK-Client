@@ -313,7 +313,7 @@ describe("recovery without command bursts", () => {
     expect(f.game.chat).not.toHaveBeenCalled();
     f.advance(1000); await f.engine.tick();
     expect(f.game.chat).toHaveBeenCalledExactlyOnceWith("/homes");
-    expect(f.game.suspendSell).toHaveBeenCalledExactlyOnceWith(5000);
+    expect(f.game.suspendSell).toHaveBeenCalledExactlyOnceWith(5000, "/homes");
   });
   it("bounds and deduplicates pending commands", async () => {
     const f = fixture(); await f.engine.spawned();

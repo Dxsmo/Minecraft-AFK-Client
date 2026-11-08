@@ -1,0 +1,7 @@
+{
+  "expectedFailure": "SoulFire smoke check timed out",
+  "spawnedClients": 2,
+  "confirmedTransfers": 0,
+  "connectionFailures": 0,
+  "delayedMenuMs": 20000
+}

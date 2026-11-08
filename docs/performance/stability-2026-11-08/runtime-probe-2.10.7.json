@@ -1,0 +1,64 @@
+{
+  "negative": {
+    "ambientSamples": 26680,
+    "bedrockAddresses": [
+      {
+        "input": "example.invalid:19132",
+        "nethernet": false,
+        "host": "example.invalid",
+        "port": 19132
+      },
+      {
+        "input": "127.0.0.1:19133",
+        "nethernet": false,
+        "host": "127.0.0.1",
+        "port": 19133
+      },
+      {
+        "input": "[::1]:19134",
+        "nethernet": false,
+        "host": "::1",
+        "port": 19134
+      },
+      {
+        "input": "nethernet://example.invalid:19135",
+        "nethernet": true,
+        "host": "nethernet.viafabricplus.localhost",
+        "port": 25565
+      }
+    ],
+    "javaPort": 25565,
+    "javaNethernet": false
+  },
+  "positive": {
+    "ambientSamples": 0,
+    "bedrockAddresses": [
+      {
+        "nethernet": false,
+        "input": "example.invalid:19132",
+        "port": 19132,
+        "host": "example.invalid"
+      },
+      {
+        "nethernet": false,
+        "input": "127.0.0.1:19133",
+        "port": 19133,
+        "host": "127.0.0.1"
+      },
+      {
+        "nethernet": false,
+        "input": "[::1]:19134",
+        "port": 19134,
+        "host": "::1"
+      },
+      {
+        "nethernet": true,
+        "input": "nethernet://example.invalid:19135",
+        "port": 25565,
+        "host": "nethernet.viafabricplus.localhost"
+      }
+    ],
+    "javaPort": 25565,
+    "javaNethernet": false
+  }
+}

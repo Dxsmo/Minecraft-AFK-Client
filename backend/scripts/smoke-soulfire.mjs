@@ -31,6 +31,10 @@ const breakStream=process.env.AFK_SMOKE_BREAK_EVENT_STREAM==='1';
 const itemPickups=process.env.AFK_SMOKE_ITEM_PICKUPS==='1';
 const blockInventory=process.env.AFK_SMOKE_BLOCK_INVENTORY==='1';
 const lateBlockedMenu=process.env.AFK_SMOKE_LATE_BLOCKED_MENU==='1';
+const latePausedMenu=process.env.AFK_SMOKE_LATE_PAUSED_MENU==='1';
+const lateMenuDelay=Number(process.env.AFK_SMOKE_LATE_MENU_DELAY_MS||20000);
+const navigationDuringOpen=process.env.AFK_SMOKE_NAVIGATION_DURING_OPEN==='1';
+const manualSaleMenu=process.env.AFK_SMOKE_MANUAL_SALE_MENU==='1';
 let delayedMenuReplies=0;
 const blockOnClick=process.env.AFK_SMOKE_BLOCK_ON_CLICK==='1'; let blockArmed=false;
 const ackDelay=Number(process.env.AFK_SMOKE_ACK_DELAY_MS||0);
@@ -42,6 +46,7 @@ let lostMenuReplies=0;
 assert.ok(Number.isInteger(droppedItems)&&droppedItems>=0&&droppedItems<=10000);
 assert.ok(Number.isInteger(sellStacks)&&sellStacks>=1&&sellStacks<=36);
 assert.ok(sellInterval>=0.25&&sellInterval<=3600);
+assert.ok(Number.isFinite(lateMenuDelay)&&lateMenuDelay>=16000&&lateMenuDelay<=60000);
 const stockSlots=Array.from({length:sellStacks},(_,i)=>(sellStacks<=9?54:27)+i);
 const rpcCalls=[], rpcDurations=[], originalFetch=globalThis.fetch;
 let streamResyncs=0;
@@ -73,7 +78,7 @@ let teleports=0;
 const server=mc.createServer({ host:process.env.MINECRAFT_FIXTURE_HOST ? '0.0.0.0' : '127.0.0.1', port:0, version:'1.8.8', 'online-mode':false, motd:'AFK isolated smoke fixture', maxPlayers:clientCount });
 const timers=[];
 const empty={blockId:-1};
-const saleItems=()=>Array.from({length:63},(_,i)=>(refillSales?stockSlots.includes(i):i===54)?{blockId:260,itemCount:64,itemDamage:0}:empty);
+const saleItems=()=>Array.from({length:63},(_,i)=>stockSlots.includes(i)?{blockId:260,itemCount:64,itemDamage:0}:empty);
 server.on('playerJoin', client=>{
   clients.push(client);
   client.on('packet',(data,meta)=>{ if(['entity_action','block_place','block_dig','chat','window_click','settings'].includes(meta.name)) packets.push({name:client.username,type:meta.name,data,at:Date.now()}); });
@@ -104,6 +109,16 @@ server.on('playerJoin', client=>{
   client.on('chat',data=>{if(data.message==='/sell') {
     if(Date.now()<inventoryBlockedUntil){blockedCommands++;return;}
     if(dropFirstMenu && lostMenuReplies===0){lostMenuReplies++;return;}
+    if((latePausedMenu || navigationDuringOpen) && delayedMenuReplies===0){
+      delayedMenuReplies++;
+      if(latePausedMenu) controllers[0].stdin.write(JSON.stringify({type:'pause_autosell',autosell_pause_after_ms:0,autosell_resume_after_ms:lateMenuDelay+1000})+'\n');
+      else controllers[0].stdin.write('{"type":"chat","text":"/home fixture"}\n');
+      timers.push(setTimeout(()=>{
+        client.write('open_window',{windowId:1,inventoryType:'minecraft:chest',windowTitle:JSON.stringify({text:'Items verkaufen'}),slotCount:27});
+        client.write('window_items',{windowId:1,items:saleItems()});
+      },latePausedMenu?lateMenuDelay:4000));
+      return;
+    }
     if(lateBlockedMenu && delayedMenuReplies===0){
       delayedMenuReplies++;
       // The native request has already timed out when this response arrives.
@@ -154,7 +169,7 @@ server.on('playerJoin', client=>{
   }
   timers.push(setTimeout(()=>{client.write('position',{x:2.5,y:64,z:0.5,yaw:0,pitch:30,flags:0});teleports++;},10000));
 });
-const waitFor=async check=>{const deadline=Date.now()+15000;while(!check()){const failure=events.flat().find(event=>event.type==='connection_failed');if(failure)throw new Error(failure.error);assert.ok(Date.now()<deadline,'SoulFire smoke check timed out');await new Promise(resolve=>setTimeout(resolve,100));}};
+const waitFor=async check=>{const deadline=Date.now()+(latePausedMenu?lateMenuDelay+15000:15000);while(!check()){const failure=events.flat().find(event=>event.type==='connection_failed');if(failure)throw new Error(failure.error);assert.ok(Date.now()<deadline,'SoulFire smoke check timed out');await new Promise(resolve=>setTimeout(resolve,100));}};
 try {
   await once(server,'listening'); const port=server.socketServer.address().port;
   const names=Array.from({length:clientCount},(_,i)=>`Afk${i}_${randomUUID().slice(0,6)}`);
@@ -225,6 +240,18 @@ try {
   }
   controllers[0].stdin.write('{"type":"chat","text":"/homes"}\n');
   await waitFor(()=>packets.some(packet=>packet.name===names[0]&&packet.type==='chat'&&packet.data.message==='/homes'));
+  if(manualSaleMenu) {
+    const before=packets.filter(packet=>packet.name===names[0]&&packet.type==='chat'&&packet.data.message==='/sell').length;
+    controllers[0].stdin.write('{"type":"chat","text":"/sell"}\n');
+    await waitFor(()=>events[0].some(event=>event.type==='behavior_log'&&event.message==='Command dispatched: /sell'));
+    await new Promise(resolve=>setTimeout(resolve,500));
+    const clicks=packets.filter(packet=>packet.type==='window_click').length;
+    await new Promise(resolve=>setTimeout(resolve,5500));
+    assert.equal(packets.filter(packet=>packet.type==='window_click').length,clicks,'Native selling took over an explicit manual sale menu');
+    assert.equal(packets.filter(packet=>packet.name===names[0]&&packet.type==='chat'&&packet.data.message==='/sell').length,before+1,'Native selling typed through a manual sale menu');
+    clients.find(client=>client.username===names[0]).write('close_window',{windowId:1});
+    await waitFor(()=>packets.filter(packet=>packet.type==='window_click').length>clicks);
+  }
   const inventoryRpcCalls=rpcCalls.filter(method=>method.endsWith('/GetInventoryState')).length;
   const povRenderRpcCalls=rpcCalls.filter(method=>/\/(?:RenderBotPov|WatchBotPov)$/.test(method)).length;
   assert.equal(inventoryRpcCalls,0,'Automation must not call the icon-rendering inventory RPC');
@@ -240,12 +267,12 @@ try {
   const before=events[1].filter(event=>event.type==='heartbeat').length;
   const stopped=once(controllers[0],'close');controllers[0].stdin.write('{"type":"disconnect"}\n');await stopped;
   await waitFor(()=>events[1].filter(event=>event.type==='heartbeat').length>before);
-  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,injectedStreamFailures,pickups,blockInventory,lateBlockedMenu,delayedMenuReplies,blockOnClick,blockedClicks,blockedCommands,ackDelay,maxInFlight,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
+  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,injectedStreamFailures,pickups,blockInventory,lateBlockedMenu,latePausedMenu,navigationDuringOpen,manualSaleMenu,lateMenuDelay,delayedMenuReplies,blockOnClick,blockedClicks,blockedCommands,ackDelay,maxInFlight,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
 } catch (error) {
   console.error(JSON.stringify({events,packetTypes:packets.map(p=>({name:p.name,type:p.type,data:p.type==='entity_action'?p.data:undefined}))}));
   const rpc=soulFireRpc();
   for(let i=0;i<clientCount;i++) {try {const ids=JSON.parse(await readFile(path.join(root,String(i),'soulfire.json'),'utf8'));
-    console.error(JSON.stringify({player:await rpc.world.getPlayerSnapshot(ids),block:await rpc.world.getWorldBlock({...ids,position:{x:0,y:64,z:2}}),ray:await rpc.world.raycast({...ids,maximumDistance:4.5,includeEntities:true})}));}catch(error){console.error("World diagnostic:", error.message);}}
+    console.error(JSON.stringify({player:await rpc.world.getPlayerSnapshot(ids),block:await rpc.world.getWorldBlock({...ids,position:{x:0,y:64,z:2}}),ray:await rpc.world.raycast({...ids,maximumDistance:4.5,includeEntities:true})},(_,value)=>typeof value==='bigint'?value.toString():value));}catch(error){console.error("World diagnostic:", error.message);}}
   throw error;
 } finally {
   for(const timer of timers)clearTimeout(timer);

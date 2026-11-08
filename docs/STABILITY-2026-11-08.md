@@ -1,0 +1,142 @@
+# Erneute Account-Prüfung und Menü-/Reconnect-Korrektur
+
+Controls-Version 1.8.0, SoulFire und SDK checksum-/versionsgepinnt auf 2.10.7.
+
+## Aktueller produktiver Befund
+
+Am 8. November wurden über die authentifizierte Website-API alle 31 sichtbaren
+Accounts und 544.119 aufbewahrte Logzeilen ausgelesen. Die Rohdaten, Sitzungsdaten
+und einzelnen Account-Berichte liegen privat außerhalb des Repositories.
+
+Im Zeitfenster nach dem vorherigen Update enthalten die aufbewahrten Logs zehn
+Bedrock-Decoderfehler für `clientbound/minecraft:set_entity_data`, 18 Meldungen
+`End of stream`, drei `RakMagic does not match` und eine Meldung
+`Invalid encrypted packet`. Hinzu kommen Servertransfers, Fallback-Meldungen
+und Inventarsperren. Die Aufbewahrungsgrenze von 20.000 Zeilen je Account
+verhindert eine vollständige historische Fehlerzählung.
+
+Bei der Stichprobe waren 13 Accounts online. Mehrere aktivierte Verkäufer
+bestätigten aktuelle Auszahlungen; in der Historie gibt es zugleich mehrstündige
+Auszahlungslücken. Eine Lücke allein beweist ohne Inventar-/Menüzustand keinen
+Automatisierungsfehler. Die Website meldete eine Last von 5,3 bei vier Kernen.
+Ihr einfacher freier RAM-Wert ersetzt weder `MemAvailable` noch eine Heap-/GC-
+Untersuchung.
+
+Nach Bereitstellung der SSH-Masterverbindung wurden direkt auf dem Pi die
+Docker-/Spiel-Logs, alle 13 aktiven Profile, Heap-Histogramm, GC-Protokoll und
+eine 30-Sekunden-JFR untersucht. Alle 13 waren in der Anfangsprobe online;
+fünf Verkäufer hatten aktuelle Auszahlungen, zwei weitere aktivierte Verkäufer
+ein leeres Inventar. VNC lieferte keinen zusätzlich erreichbaren Sitzungsinhalt.
+Die vollständigen privaten Rohdaten wurden außerhalb des Repositories gesichert.
+
+Die JVM belegte etwa 5,5 GiB residenten RAM bei 4 GiB maximalem Heap und
+weitgehend belegtem 2-GiB-Swap. Eine 30-Sekunden-Probe maß 294,5 % CPU und
+nur etwa 0,7 GiB verfügbaren RAM. Das Histogramm zeigte keinen erneuten
+Emote-Callback-Leak; große Bedrock-Modellbestände und hohe temporäre Allokation
+waren dagegen sichtbar. Das Profil zeigte neben Bedrock-Lichtberechnungen
+viele zufällige Blockabfragen für rein visuelle Umgebungsanimationen.
+
+## Clientlast und Protokoll-Update
+
+`ClientLevel.animateTick` führt pro Bot-Spiel-Tick 1.334 Blockprüfungen für
+Partikel und Umgebungsgeräusche aus. `HeadlessAmbientMixin` überspringt nur
+diese Darstellung im Bot-Kontext. Normale Spiel-Ticks, Netzwerkupdates,
+Inventar- und Eingabeverarbeitung bleiben bestehen. Eine zusätzliche Mixin-Probe
+im echten Linux-Client misst bei 20 Aufrufen vorher 26.680, nachher null
+`doAnimateTick`-Aufrufe. Die Test-JARs werden nicht produktiv installiert.
+
+SoulFire 2.10.7 aktualisiert unter anderem StackAnvil auf 0.4.4 und ViaFabricPlus.
+Der Release-Hash wird vor dem Build geprüft. Da das Release einfache
+Bedrock-Adressen neu als NetherNet interpretiert, erhält `BedrockTransportMixin`
+die vorhandene RakNet-Semantik für `host:port`. Explizite `nethernet://`-Adressen
+behalten die neue Engine-Verarbeitung. Die Laufzeitprobe prüft Hostname,
+IPv4, IPv6, explizites NetherNet und unveränderte Java-Portauswahl; siehe
+[Laufzeitmessung](performance/stability-2026-11-08/runtime-probe-2.10.7.json).
+
+Die bisherigen Dienst-Logs enthielten selbst für `set_entity_data` keine
+vollständige Decoder-Ursache. `ConnectionDiagnosticsMixin` protokolliert nun
+den Throwable-Stack ohne Paketinhalt, höchstens einmal je Verbindung und
+30 Sekunden. Ein Engine-Update allein beweist keine Korrektur aller historischen
+Decoderfehler.
+
+## Dauerhaft offenes Verkaufsmenü
+
+Die native Menüzuordnung verfiel nach 15 Sekunden. Kam die Antwort erst während
+einer längeren Lade-/Neustartpause, blieb das Menü anschließend ohne Zuordnung
+offen. Die weitere Automatik behandelte es unbegrenzt als fremdes Menü.
+
+`SellMenuRequests` verfolgt eigene offene Anfragen jetzt unabhängig von der
+endlichen Transfer-/Wiederholungsfrist. Verspätete Antworten werden geschlossen,
+wenn ihr Verkaufsdurchlauf bereits aufgegeben wurde. Die begrenzte Zählung
+berücksichtigt auch mehrere durch Wiederholungen ausstehende Antworten.
+
+Außerdem sind Verkaufsunterbrechung und manuelle Menüzuordnung getrennt:
+`/home` oder `/tpahere` pausieren Verkäufe weiterhin, machen eine verspätete
+native Antwort aber nicht zu einem manuellen Menü. Ein ausdrücklich manuell
+gesendeter Verkaufsbefehl verwirft vorherige native Menüansprüche vor dem
+Senden. Sein Menü bleibt geschützt, auch nach Ablauf der kurzen Befehlspause.
+Die normalen Bestätigungsfenster, Lease und Verkaufsintervalle bleiben aktiv.
+
+## Alte Sitzung darf die nächste Verbindung nicht stoppen
+
+Der alte Controller kann seine asynchrone Bereinigung noch ausführen, nachdem
+der Supervisor bereits einen Ersatzcontroller erzeugt hat. Sowohl dessen
+`finally` als auch der zusätzliche Supervisor-Stopp setzen dieselbe entfernte
+Profil-ID auf STOPPED. Ohne Reihenfolge können sie damit den Ersatz stoppen.
+
+Die Sitzung und der explizite Stopp werden jetzt pro Account-Cacheverzeichnis
+serialisiert. Die nächste Sitzung startet erst nach beiden Vorgängern.
+Abgebrochene wartende Versuche werden entfernt; andere Accounts warten nicht
+mit. Das schließt diesen reproduzierten Wettlauf. Eine Zuordnung dieses Wettlaufs zu bestimmten
+produktiven Disconnects wird nicht behauptet.
+
+## Prüfung
+
+- 527 Backend-Tests in 58 Dateien bestanden; Backend und native Erweiterung
+  gegen das gepinnte Release kompiliert.
+- Java-Prüfungen für Menüzuordnung, manuelle Ansprüche, begrenzte Anfragen,
+  Fehlerpausen und Transferbestätigungen bestanden.
+- Zwei echte Clients in einer getrennten Linux-/Java-25-SoulFire-Instanz:
+  erster Menü-Reply um 20 Sekunden verzögert und währenddessen Verkaufspause.
+  Der bisherige Code bleibt ohne Transfers hängen, obwohl beide Clients
+  verbunden sind. Mit Korrektur: 204 Transfers, anschließend Abstände von
+  2003–2043 ms bei eingestellten zwei Sekunden. Ein manuelles Verkaufsmenü
+  bleibt während einer sechs Sekunden langen Prüfung unangetastet; nach
+  dessen Schließen verkauft der Client weiter. Siehe
+  [Gegenversuch](performance/stability-2026-11-08/late-menu-negative-control.json)
+  und [Korrektur](performance/stability-2026-11-08/late-menu-fixed.json).
+- Zweiter Gegenversuch: Antwort nach vier Sekunden während eines `/home`-
+  Befehls. Der alte Code bleibt erneut ohne Transfers hängen. Mit der fertigen
+  Erweiterung 1.7.2 laufen Menüerholung, echtes manuelles Verkaufsmenü,
+  Inventarsperre und anschließende Verkaufsfortsetzung durch. Dabei: zwei
+  Clients, je 10.000 Item-Entities, 36 nachgefüllte Stacks, 120 ms verzögerte
+  Bestätigungen, 2.635 Pickups, 323 Stream-Resynchronisationen und ein
+  absichtlicher Stream-Abbruch. Höchstens 16 Transfers sind unbestätigt; die
+  während der Sperre bereits gesendeten 16 Klicks werden abgewiesen, weitere
+  Verkaufsbefehle werden währenddessen nicht gesendet. Der separate Stopp
+  eines Clients lässt den anderen verbunden. Siehe
+  [Gegenversuch](performance/stability-2026-11-08/navigation-negative-control.json)
+  und [Korrektur](performance/stability-2026-11-08/navigation-fixed.json).
+  Der dort historisch `confirmedSales` genannte Fixture-Zähler erfasst
+  gesendete Klickpakete einschließlich abgewiesener Klicks, keine separaten
+  Auszahlungen. Die gemessenen Verkaufsabstände unter dieser Last liegen
+  bei etwa 3,1–3,2 Sekunden trotz eingestellter zwei Sekunden; diese
+  verbleibende Verlangsamung wird nicht als behoben ausgegeben.
+- Ein Session-Test hält den alten STOPPED-Aufruf absichtlich offen: weder
+  expliziter Supervisor-Stopp noch neue Sitzung überholen ihn. Nach Freigabe
+  startet der Ersatz; abgebrochene Wartende blockieren ihn nicht.
+
+Mit dem Produktionsimage 1.8.0 / 2.10.7 wurde der Navigationstest wiederholt:
+752 gesendete Klickpakete, 2.413 Pickups, 346 Resynchronisationen, genau ein
+absichtlicher Stream-Abbruch, maximal 16 ausstehende Klicks und kein
+Verkaufsbefehl während der Sperre. Der getrennte Stopp funktioniert. Die
+Verkaufsabstände dieser Probe liegen im Median bei 2.119 ms. Siehe
+[Produktionsimage-Test](performance/stability-2026-11-08/release-1.8.0-stress.json).
+Ein erster paralleler Lauf wurde durch einen OOM-Kill der lokalen Docker-Test-VM
+während zweier Image-Builds unterbrochen. Der erfolgreiche Wiederholungslauf
+nutzte das fertige Produktionsimage ohne parallele Builds.
+
+## Produktiver Rollout
+
+Rollout und anschließende Account-/Ressourcenprüfung laufen noch; diese
+Dokumentation wird nach den Messungen ergänzt.

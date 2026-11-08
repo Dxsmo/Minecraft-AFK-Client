@@ -13,8 +13,8 @@ import urllib.request
 import zipfile
 import json
 
-VERSION = "2.10.6"
-SHA256 = "f033a3c1a88b6f3d303a4d9baee926cc8c3712069dcf30bcb631d368b25e5454"
+VERSION = "2.10.7"
+SHA256 = "1afded9628c9732f0a0c982894e9fb023a7d94ab24f9b7e3e8db1cb96f16b4ea"
 
 
 def main():
@@ -34,7 +34,7 @@ def main():
         for asset in manifest["assets"]:
             if not asset["path"].endswith(".jar"):
                 continue
-            if "resource" not in asset and not asset["name"].startswith(("org.ow2.asm:", "com.mojang:brigadier:", "com.google.protobuf:protobuf-java:", "io.grpc:grpc-api:", "io.grpc:grpc-stub:", "io.netty:netty-common:", "io.netty:netty-transport:", "net.kyori:adventure-api:")) and asset["name"] not in ["Minecraft client", "net.fabricmc:sponge-mixin:0.17.4+mixin.0.8.7", "com.google.code.gson:gson:2.14.0", "net.lenni0451:LambdaEvents:2.4.2", "org.jspecify:jspecify:1.0.1", "it.unimi.dsi:fastutil:8.5.19"]:
+            if "resource" not in asset and not asset["name"].startswith(("org.ow2.asm:", "net.fabricmc:sponge-mixin:", "com.mojang:brigadier:", "com.google.protobuf:protobuf-java:", "io.grpc:grpc-api:", "io.grpc:grpc-stub:", "io.netty:netty-common:", "io.netty:netty-transport:", "io.netty:netty-codec", "net.kyori:adventure-api:")) and asset["name"] not in ["Minecraft client", "com.google.code.gson:gson:2.14.0", "net.lenni0451:LambdaEvents:2.4.2", "org.jspecify:jspecify:1.0.1", "it.unimi.dsi:fastutil:8.5.19"]:
                 continue
             target = cache / (asset["sha256"] + ".jar")
             if not target.exists():

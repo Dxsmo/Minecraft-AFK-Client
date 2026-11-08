@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { create } from "@bufbuild/protobuf";
 import { Code, ConnectError } from "@connectrpc/connect";
-import { BotInventoryStateResponseSchema, BotRuntimeState } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
+import { BotDesiredState, BotInventoryStateResponseSchema, BotRuntimeState } from "@soulfiremc/sdk/generated/soulfire/bot_pb";
 import { BlockFace, BotActionStatus, BotLifecycleKind, Hand } from "@soulfiremc/sdk/generated/soulfire/bot_live_pb";
 import { writePrivateJson } from "../../src/soulfire/auth.js";
 
@@ -390,6 +390,24 @@ it("passes restart pause windows to native selling", async () => {
   expect(setting("sell-pause-until") - setting("sell-pause-from")).toBe(120000);
 });
 
+it("protects explicit manual sale menus while allowing late native replies during navigation commands", async () => {
+  const f = await fixture(); await f.start();
+  f.queue.push({ type: "chat", text: "/home melon" });
+  await vi.advanceTimersByTimeAsync(100);
+  const settings = (key: string) => f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === key);
+  expect(settings("sell-manual-until")).toHaveLength(1);
+  expect(settings("sell-manual-menu-until")).toHaveLength(0);
+  f.queue.push({ type: "chat", text: "/sell" });
+  await vi.advanceTimersByTimeAsync(100);
+  expect(settings("sell-manual-menu-until")).toHaveLength(1);
+  const marker = settings("sell-manual-menu-until")[0];
+  const command = f.rpc.live.sendChat.mock.calls.findIndex(([request]) => request.message === "/sell");
+  expect(command).toBeGreaterThanOrEqual(0);
+  expect(marker[0].value.kind.value).toBeGreaterThan(Date.now());
+  expect(f.rpc.bot.updateBotConfigEntry.mock.invocationCallOrder[f.rpc.bot.updateBotConfigEntry.mock.calls.indexOf(marker)])
+    .toBeLessThan(f.rpc.live.sendChat.mock.invocationCallOrder[command]);
+});
+
 it("distinguishes an unresponsive game thread from an unreachable control service without faking game heartbeats", async () => {
   const f = await fixture(); await f.start(); f.emit.mockClear();
   f.rpc.bot.getBotInfo.mockRejectedValue(new ConnectError("game task timed out", Code.DeadlineExceeded));
@@ -422,4 +440,35 @@ it("atomically gates native selling before a reconnect to a remembered home and 
   await f.frame("chat", { senderName: "", plainText: "[HugoSMP] Du wurdest zu deinem Home melon teleportiert!" });
   await vi.advanceTimersByTimeAsync(100);
   expect(f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === "sell-home-pending").map(([request]) => request.value.kind.value)).toEqual([false]);
+});
+
+it("waits for delayed session cleanup and the supervisor stop before starting the same account again", async () => {
+  const f = await fixture(); await f.start();
+  const { stopRemoteAccount } = await import("../../src/soulfire/lifecycle.js");
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  let stops = 0;
+  f.rpc.bot.setBotsDesiredState.mockImplementation(async request => {
+    if (request.desiredState === BotDesiredState.STOPPED && ++stops === 1) await pending;
+    return {};
+  });
+  const nextAbort = new AbortController();
+  let replacement: Promise<void> | undefined, stop: Promise<void> | undefined;
+  try {
+    f.abort.abort(); await flush();
+    expect(stops).toBe(1);
+    stop = stopRemoteAccount(f.directory);
+    replacement = runSoulFire(f.config, () => {}, nextAbort, []);
+    await flush();
+    expect(f.rpc.instance.getOrCreateInstance).toHaveBeenCalledTimes(1);
+    expect(stops).toBe(1);
+    release();
+    await stop;
+    await vi.waitFor(() => expect(f.rpc.bot.setBotsDesiredState.mock.calls.filter(([request]) => request.desiredState === BotDesiredState.RUNNING)).toHaveLength(2));
+    expect(stops).toBe(2);
+    expect(f.rpc.instance.getOrCreateInstance).toHaveBeenCalledTimes(2);
+  } finally {
+    release(); nextAbort.abort();
+    await replacement?.catch(() => {}); await stop?.catch(() => {});
+  }
 });

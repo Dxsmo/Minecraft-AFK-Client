@@ -31,6 +31,7 @@ public final class NativeAutoSell {
     final Map<Integer, ItemStack> beforeTransfer = new HashMap<>();
     boolean contentReady;
     final SellRecovery recovery = new SellRecovery();
+    final SellMenuRequests menus = new SellMenuRequests();
   }
   public static void disconnected(BotConnection bot) { STATES.remove(bot); }
   public static void opened(BotConnection bot, int menu) {
@@ -38,14 +39,17 @@ public final class NativeAutoSell {
     if (state == null) return;
     state.contentMenu = menu; state.contentReady = false;
     var mc = bot.minecraft();
-    long now = System.currentTimeMillis();
-    if (state.requested > 0 && now - state.requested < 15_000
-        && mc.player != null && mc.gui.screen() instanceof AbstractContainerScreen<?> screen
-        && saleTitle(screen.getTitle().getString())) {
+    var settings = bot.settingsSource().stem().settings().get("afk-service");
+    if (state.menus.manual(number(settings, "sell-manual-menu-until"))) {
+      state.waiting = false; state.sellingMenu.clear();
+      state.transfers.reset(); state.beforeTransfer.clear();
+    }
+    if (mc.player != null && mc.gui.screen() instanceof AbstractContainerScreen<?> screen
+        && saleTitle(screen.getTitle().getString()) && state.menus.opened()) {
       if (state.waiting) {
         state.sellingMenu = new WeakReference<>(mc.player.containerMenu);
         state.nextSlot = 0; state.transfers.reset(); state.beforeTransfer.clear();
-      } else if (number(bot.settingsSource().stem().settings().get("afk-service"), "sell-manual-until") <= now) {
+      } else {
         // An abandoned native open request replied late. Discard its own sale
         // GUI without transferring; manual-command menus remain untouched.
         mc.player.closeContainer();
@@ -102,6 +106,9 @@ public final class NativeAutoSell {
     if (settings == null) return;
     var state = STATES.computeIfAbsent(bot, ignored -> new State());
     long now = System.currentTimeMillis();
+    if (state.menus.manual(number(settings, "sell-manual-menu-until"))) {
+      cancel(bot, state); state.waiting = false;
+    }
     var encoded = settings.get("native-auto-sell");
     String config = encoded != null && encoded.isJsonPrimitive() ? encoded.getAsString() : "";
     if (!config.equals(state.config)) {
@@ -135,7 +142,7 @@ public final class NativeAutoSell {
       if (!saleTitle(title)) return;
       if (!state.waiting && state.sellingMenu.get() != menu) return;
       if (now - state.requested >= 15_000) { state.recovery.rejected(now); cancel(bot, state); return; }
-      if (state.sellingMenu.get() != menu) { state.sellingMenu = new WeakReference<>(menu); state.nextSlot = 0; state.transfers.reset(); state.beforeTransfer.clear(); }
+      if (state.sellingMenu.get() != menu) { state.menus.opened(); state.sellingMenu = new WeakReference<>(menu); state.nextSlot = 0; state.transfers.reset(); state.beforeTransfer.clear(); }
       if (state.contentMenu != menu.containerId || !state.contentReady) return;
       if (state.transfers.stalled(now)) { state.recovery.rejected(now); cancel(bot, state); return; }
       // A small, bounded window overlaps roundtrips. Retain the cursor so
@@ -180,6 +187,7 @@ public final class NativeAutoSell {
     if (!stock) return;
     if (state.command.isEmpty() || state.command.matches("(?i)^/?(?:[^ :/]+:)?afk(?:\\s.*)?$")) return;
     state.requested = now; state.waiting = true; state.next = now + state.interval;
+    state.menus.requested();
     if (state.command.startsWith("/")) mc.player.connection.sendCommand(state.command.substring(1));
     else mc.player.connection.sendChat(state.command);
   }
@@ -188,8 +196,8 @@ public final class NativeAutoSell {
     var owned = state.sellingMenu.get();
     if (owned != null && mc.player != null && mc.player.containerMenu == owned) mc.player.closeContainer();
     state.transfers.reset(); state.beforeTransfer.clear(); state.sellingMenu.clear();
-    // Keep a still-outstanding open request recognizable until its finite
-    // deadline, so a delayed sale menu can be closed safely when it arrives.
+    // The request ledger retains abandoned opens independently of this active
+    // cycle, including replies delayed beyond a loading/restart pause.
     if (System.currentTimeMillis() - state.requested >= 3000 || owned != null) state.waiting = false;
   }
   private static long number(Map<String, com.google.gson.JsonElement> settings, String key) {

@@ -25,7 +25,7 @@
     "@fastify/rate-limit": "^10.2.2",
     "@fastify/websocket": "^11.0.2",
     "@prisma/client": "^6.2.1",
-    "@soulfiremc/sdk": "2.10.6",
+    "@soulfiremc/sdk": "2.10.7",
     "argon2": "^0.41.1",
     "dotenv": "^16.4.7",
     "effect": "4.1.0",

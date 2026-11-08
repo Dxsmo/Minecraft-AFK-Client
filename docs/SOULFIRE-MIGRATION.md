@@ -1,6 +1,6 @@
 # SoulFire migration
 
-The active Java and Bedrock controllers now use SoulFire **2.10.6** through its
+The active Java and Bedrock controllers now use SoulFire **2.10.7** through its
 matching TypeScript SDK. Docker Compose adds `afk-soulfire`; the website and
 its database remain in the existing backend/web containers. All account controllers
 share the backend Node runtime; no extra Node worker/process is started per account. The old Rust and
@@ -139,7 +139,7 @@ export SOULFIRE_SECRET_KEY_FILE=/absolute/path/to/soulfire-data/secret-key.bin
 ```
 
 Compile the extension with `python3 soulfire/build-plugin.py --soulfire-jar
-/path/to/SoulFireDedicated-2.10.6.jar --output
+/path/to/SoulFireDedicated-2.10.7.jar --output
 /path/to/soulfire-data/minecraft/mods/afk-service-controls.jar`. Set `JAVA_HOME`
 to a Java 25 JDK. Keep the RPC service and its root signing key private.
 For systemd, run SoulFire alongside the backend and allow its service user to
@@ -165,7 +165,7 @@ capacity or prove why an unavailable production container stopped.
 
 ### Slow ARM resource loading
 
-SoulFire 2.10.6 has a [hard-coded 30-second deadline](https://github.com/soulfiremc-com/SoulFire/blob/2.10.6/mod/src/main/java/com/soulfiremc/mod/mixin/soulfire/lifecycle/MixinMain.java) for the base Minecraft
+SoulFire 2.10.7 has a [hard-coded 30-second deadline](https://github.com/soulfiremc-com/SoulFire/blob/2.10.7/mod/src/main/java/com/soulfiremc/mod/mixin/soulfire/lifecycle/MixinMain.java) for the base Minecraft
 resource/model load. On a Raspberry Pi this can expire even while the texture
 atlases are still being created. The controls extension increases only that
 deadline to 300 seconds; the original readiness checks and failure remain.
@@ -186,7 +186,7 @@ reproduces the reported exception, while the default 300 seconds reaches
 mixin. The fixture uses a separate empty data volume; it is not shipped in the
 production image. This simulates a slow load rather than measuring a real Pi.
 
-SoulFire is [AGPL-3.0](https://github.com/soulfiremc-com/SoulFire/blob/2.10.6/LICENSE).
+SoulFire is [AGPL-3.0](https://github.com/soulfiremc-com/SoulFire/blob/2.10.7/LICENSE).
 The input extension's complete source and reproducible build are in `soulfire/`.
 
 ## Reproducing the local integration check

@@ -26,7 +26,7 @@ Minecraft Client Manager (ClientManager)
 MinecraftClient instances → SoulFire controllers (shared Node scheduler)
         │                    │ authenticated SDK / private RPC
         │                    ▼
-        │              SoulFire 2.10.6 + native held-input extension (Java 25)
+        │              SoulFire 2.10.7 + native held-input extension (Java 25)
         ▼                    │ Java / ViaBedrock
 Minecraft Server(s) ◀─────────┘
 ```
@@ -34,7 +34,7 @@ Minecraft Server(s) ◀─────────┘
 | Layer     | Choice                                                        |
 |-----------|----------------------------------------------------------------|
 | Backend   | Node.js 24+, TypeScript, Fastify, `@fastify/websocket`         |
-| Minecraft | [SoulFire 2.10.6](https://github.com/soulfiremc-com/SoulFire) shared Java/Bedrock engine |
+| Minecraft | [SoulFire 2.10.7](https://github.com/soulfiremc-com/SoulFire) shared Java/Bedrock engine |
 | Database  | SQLite via Prisma ORM                                          |
 | Auth      | Argon2id password hashing, **server-side sessions** (cookie + DB), CSRF double-submit cookie |
 | Logging   | Pino (structured JSON), secrets redacted                       |
@@ -221,7 +221,7 @@ login form to sign in.
 
 ## 6. Minecraft account configuration
 
-All Java and Bedrock accounts use **SoulFire 2.10.6** through the same scheduler.
+All Java and Bedrock accounts use **SoulFire 2.10.7** through the same scheduler.
 The website framework, roles, account IDs and existing data remain in place.
 The input extension, authentication migration and complete deployment procedure
 are documented in [SoulFire migration](docs/SOULFIRE-MIGRATION.md).
