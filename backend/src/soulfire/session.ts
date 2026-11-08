@@ -18,6 +18,7 @@ import { SoulFireInventory } from "./inventory.js";
 import { mergeBotSettings } from "./settings.js";
 import { readRuntimeStatus } from "./runtimeStatus.js";
 import { rememberedHome, rememberHome } from "./homeRecovery.js";
+import { reserveStartup } from "./startupGate.js";
 import { withAccountLifecycle } from "./accountLifecycle.js";
 
 // Reserved by our pinned native extension, never a Minecraft inventory slot.
@@ -36,7 +37,15 @@ export type SoulFireConfig = BehaviorConfig & { host: string; port: number; user
   cache_dir: string; account_id?: string; version?: string; autosell_pause_after_ms?: number; autosell_resume_after_ms?: number };
 
 export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort: AbortController, queued: Record<string, any>[]): Promise<void> {
-  return withAccountLifecycle(config.cache_dir, abort.signal, () => runSession(config, emit, abort, queued));
+  return withAccountLifecycle(config.cache_dir, abort.signal, async () => {
+    const release = await reserveStartup(`${config.host.toLowerCase()}:${config.port}`, abort.signal);
+    try {
+      return await runSession(config, event => {
+        if (event.type === "spawn" || event.type === "msa_code") release();
+        emit(event);
+      }, abort, queued);
+    } finally { release(); }
+  });
 }
 
 async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortController, queued: Record<string, any>[]): Promise<void> {
@@ -396,7 +405,7 @@ async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortC
     // A pending private home write must finish before this account's cache can
     // be removed or a replacement controller starts writing the same file.
     await schedulerTask;
-    await rpc.bot.setBotsDesiredState({ instanceId, botIds: [botId], desiredState: BotDesiredState.STOPPED }, { timeoutMs: 3000 }).catch(() => undefined);
+    await rpc.bot.setBotsDesiredState({ instanceId, botIds: [botId], desiredState: BotDesiredState.STOPPED }, { timeoutMs: 30_000 }).catch(() => undefined);
     await stream?.catch(() => undefined);
   }
 }

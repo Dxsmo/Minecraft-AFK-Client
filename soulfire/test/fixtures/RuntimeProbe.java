@@ -39,6 +39,33 @@ public final class RuntimeProbe implements ModInitializer {
         var javaAddress = parse.invoke(null, "example.invalid", protocolType.getField("v1_8").get(null));
         result.put("javaPort", javaAddress.getClass().getMethod("getPort").invoke(javaAddress));
         result.put("javaNethernet", access.invoke(javaAddress) != null);
+        var bufferClass = Class.forName("net.raphimc.viabedrock.protocol.storage.WorldPacketBuffer");
+        var packetClass = Class.forName("net.raphimc.viabedrock.protocol.ClientboundBedrockPackets");
+        Object packet = packetClass.getEnumConstants()[0];
+        var queue = bufferClass.getMethod("queue", packetClass, byte[].class);
+        Object buffer = bufferClass.getConstructor().newInstance();
+        int count = 0;
+        for (; count < 70_000; count++) {
+          try { queue.invoke(buffer, packet, new byte[1]); }
+          catch (java.lang.reflect.InvocationTargetException error) {
+            if (!(error.getCause() instanceof IllegalStateException)) throw error;
+            break;
+          }
+        }
+        result.put("worldBufferPacketLimit", count);
+        Object bounded = bufferClass.getConstructor().newInstance();
+        boolean byteLimit = false;
+        try { queue.invoke(bounded, packet, new byte[64 * 1024 * 1024 + 1]); }
+        catch (java.lang.reflect.InvocationTargetException error) {
+          if (!(error.getCause() instanceof IllegalStateException)) throw error;
+          byteLimit = true;
+        }
+        result.put("worldBufferRejectsOver64MiB", byteLimit);
+        var sink = new java.util.concurrent.atomic.AtomicInteger();
+        bufferClass.getMethod("drain", java.util.function.BiConsumer.class).invoke(buffer,
+            (java.util.function.BiConsumer<Object, byte[]>) (type, payload) -> sink.addAndGet(payload.length));
+        result.put("worldBufferDrainedBytes", sink.get());
+        result.put("worldBufferAfterDrain", bufferClass.getMethod("packetCount").invoke(buffer));
       } catch (Throwable error) { result.put("error", error.toString()); }
       try { Files.writeString(Path.of("/data/afk-runtime-probe.json"), new Gson().toJson(result)); }
       catch (Exception error) { throw new IllegalStateException(error); }

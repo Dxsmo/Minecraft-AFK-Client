@@ -1,6 +1,6 @@
 # Erneute Account-Prüfung und Menü-/Reconnect-Korrektur
 
-Controls-Version 1.8.0, SoulFire und SDK checksum-/versionsgepinnt auf 2.10.7.
+Controls-Version 1.8.1, SoulFire und SDK checksum-/versionsgepinnt auf 2.10.7.
 
 ## Aktueller produktiver Befund
 
@@ -135,6 +135,41 @@ Verkaufsabstände dieser Probe liegen im Median bei 2.119 ms. Siehe
 Ein erster paralleler Lauf wurde durch einen OOM-Kill der lokalen Docker-Test-VM
 während zweier Image-Builds unterbrochen. Der erfolgreiche Wiederholungslauf
 nutzte das fertige Produktionsimage ohne parallele Builds.
+
+## Im Wiederanlauf zusätzlich nachgewiesene Fehler
+
+Der erste Pi-Wiederanlauf mit 1.8.0 zeigte 3-Sekunden-Timeouts bei redundanten
+STOPPED-Transaktionen und 15-Sekunden-Timeouts beim gleichzeitigen Start aller
+Accounts. Darauf folgende Wiederanmeldungen lösten `You are logging in too fast`
+aus. Die Engine-Gesundheitsprüfung allein beweist keine Bereitschaft aller Bots.
+
+`stopRemoteAccount` liest deshalb zuerst den vom Spiel-Thread unabhängigen
+Status. Nur wenn gewünschter und tatsächlicher Zustand beide STOPPED sind,
+entfällt die doppelte dauerhafte Transaktion. Ein gewünschter START oder eine
+laufende Verbindung werden weiterhin gestoppt. Für nötige Stopp-Transaktionen
+bleibt die Account-Sperre bis zur Antwort, nun mit 30 statt drei Sekunden Budget.
+
+`startupGate` verteilt Vorbereitungen je Server auf zwei Plätze mit mindestens
+zwei Sekunden Abstand innerhalb einer Startwelle. Weltbeitritt, Authentifizierungs-
+prompt, Abbruch oder Fehler geben den Platz frei; nach 30 Sekunden wird die
+Zulassung auch bei einem nicht antwortenden Ziel freigegeben. Verschiedene
+Server warten nicht aufeinander; wartende abgebrochene Starts werden entfernt.
+
+Zwei Bedrock-Weltbeitritte scheiterten ausdrücklich mit `World packets exceeded
+the Java initialization buffer`. Die mitgelieferte ViaBedrock-Version begrenzt
+auf 10.000 Pakete oder 64 MiB. Viele kleine Entity-/Metadatenpakete können die
+Paketgrenze vor der Java-Initialisierungsbestätigung überschreiten.
+`BedrockWorldBufferMixin` erhöht ausschließlich diese Grenze auf 65.536.
+Die 64-MiB-Grenze bleibt unverändert. Ein echter Fabric-Laufzeittest belegt
+10.000 vorher und 65.536 nachher, vollständiges Leeren und weiterhin die
+Ablehnung eines einzelnen Pakets über 64 MiB. Siehe
+[Puffer-Gegenversuch und Korrektur](performance/stability-2026-11-08/world-buffer-1.8.1.json).
+
+533 Backend-Tests in 60 Dateien bestanden einschließlich Startabständen,
+begrenzter Zulassung, Abbruch, unabhängigen Servern und idempotenter Stopps.
+Der Belastungstest mit 1.8.1 wiederholt Inventarsperren, manuellen Menüs,
+Stream-Abbruch, 36 nachgefüllten Stacks und je 10.000 Items für zwei Clients;
+siehe [Ergebnis](performance/stability-2026-11-08/release-1.8.1-stress.json).
 
 ## Produktiver Rollout
 

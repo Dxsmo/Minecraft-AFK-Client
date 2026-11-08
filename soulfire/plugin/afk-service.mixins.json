@@ -22,7 +22,8 @@
     "LiveCamEncodingMixin",
     "LiveCamPacingMixin",
     "ItemCollisionMixin",
-    "ItemCollisionCandidatesMixin"
+    "ItemCollisionCandidatesMixin",
+    "BedrockWorldBufferMixin"
   ],
   "injectors": {
     "defaultRequire": 1

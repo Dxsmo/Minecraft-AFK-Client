@@ -1,0 +1,72 @@
+{
+  "negative": {
+    "ambientSamples": 0,
+    "bedrockAddresses": [
+      {
+        "nethernet": false,
+        "host": "example.invalid",
+        "port": 19132,
+        "input": "example.invalid:19132"
+      },
+      {
+        "nethernet": false,
+        "host": "127.0.0.1",
+        "port": 19133,
+        "input": "127.0.0.1:19133"
+      },
+      {
+        "nethernet": false,
+        "host": "::1",
+        "port": 19134,
+        "input": "[::1]:19134"
+      },
+      {
+        "nethernet": true,
+        "host": "nethernet.viafabricplus.localhost",
+        "port": 25565,
+        "input": "nethernet://example.invalid:19135"
+      }
+    ],
+    "javaPort": 25565,
+    "javaNethernet": false,
+    "worldBufferPacketLimit": 10000,
+    "worldBufferRejectsOver64MiB": true,
+    "worldBufferDrainedBytes": 10000,
+    "worldBufferAfterDrain": 0
+  },
+  "positive": {
+    "ambientSamples": 0,
+    "bedrockAddresses": [
+      {
+        "nethernet": false,
+        "host": "example.invalid",
+        "port": 19132,
+        "input": "example.invalid:19132"
+      },
+      {
+        "nethernet": false,
+        "host": "127.0.0.1",
+        "port": 19133,
+        "input": "127.0.0.1:19133"
+      },
+      {
+        "nethernet": false,
+        "host": "::1",
+        "port": 19134,
+        "input": "[::1]:19134"
+      },
+      {
+        "nethernet": true,
+        "host": "nethernet.viafabricplus.localhost",
+        "port": 25565,
+        "input": "nethernet://example.invalid:19135"
+      }
+    ],
+    "javaPort": 25565,
+    "javaNethernet": false,
+    "worldBufferPacketLimit": 65536,
+    "worldBufferRejectsOver64MiB": true,
+    "worldBufferDrainedBytes": 65536,
+    "worldBufferAfterDrain": 0
+  }
+}

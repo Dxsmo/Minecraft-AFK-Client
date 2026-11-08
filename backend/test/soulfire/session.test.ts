@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+vi.mock("../../src/soulfire/startupGate.js", () => ({ reserveStartup: async () => () => {} }));
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

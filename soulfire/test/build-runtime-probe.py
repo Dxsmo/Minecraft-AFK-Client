@@ -9,6 +9,9 @@ import tempfile
 
 source = Path(__file__).resolve().parents[1]
 args = sys.argv[1:]
+without_buffer = "--without-buffer" in args
+if without_buffer:
+    args.remove("--without-buffer")
 without_ambient = "--without-ambient" in args
 if without_ambient:
     args.remove("--without-ambient")
@@ -28,5 +31,7 @@ with tempfile.TemporaryDirectory(prefix="afk-runtime-probe-") as directory:
     data["mixins"].append("AmbientProbeMixin")
     if without_ambient:
         data["mixins"].remove("HeadlessAmbientMixin")
+    if without_buffer:
+        data["mixins"].remove("BedrockWorldBufferMixin")
     mixins.write_text(json.dumps(data))
     subprocess.run([sys.executable, str(root / "build-plugin.py"), *args], check=True)
