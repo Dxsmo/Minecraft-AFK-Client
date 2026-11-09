@@ -1,6 +1,6 @@
 # Erneute Account-Prüfung und Menü-/Reconnect-Korrektur
 
-Controls-Version 1.8.3, SoulFire und SDK checksum-/versionsgepinnt auf 2.10.7.
+Controls-Version 1.8.4, SoulFire und SDK checksum-/versionsgepinnt auf 2.10.7.
 
 ## Aktueller produktiver Befund
 
@@ -222,6 +222,28 @@ Das fertige Produktions-JAR 1.8.2 bestand außerdem den bisherigen Belastungstes
 588 Klickpakete, 2.467 Pickups, 323 Resynchronisationen, Inventarsperre,
 verzögerte Menüs, manuelles Verkaufsmenü und unabhängiger Stopp;
 siehe [Messung](performance/stability-2026-11-08/release-1.8.2-stress.json).
+
+## Verbliebene Abbrüche differenzieren
+
+Mit 1.8.3 verschwanden die Himmelstextur-Warnungen und die UDP-Dropzähler
+blieben in der produktiven Nachprüfung bei null. `End of stream` trat trotzdem
+weiter auf. Beim kalten Wiederanlauf blieb zudem ein Weltpufferüberlauf sichtbar.
+Diese Fehler werden ausdrücklich nicht als durch die Pufferänderung behoben
+gewertet.
+
+1.8.4 sichert den RakNet-Schließgrund im Channel-Attribut und protokolliert ihn
+mit lokaler Socketzuordnung im privaten Dienst-Log. Der bisher generische
+Weltpufferfehler nennt zusätzlich die tatsächliche Paket-/Bytebelegung.
+Der Transportablauf und beide Speichergrenzen bleiben unverändert. Ein echter
+Fabric-Test prüft ein `CLOSED_BY_REMOTE_PEER`-Event und den Fehler bei genau
+65.536 Ein-Byte-Paketen; siehe
+[Laufzeitprüfung](performance/stability-2026-11-08/diagnostics-1.8.4.json).
+
+Das fertige Produktions-JAR 1.8.3 bestand zusätzlich den Aktions-/Kameratest:
+480×270-JPEGs für zwei Zuschauer über einen gemeinsamen Stream, Weltwechsel,
+Beenden nach dem letzten Zuschauer, Verkaufs-Multiplikatoren, Spawner-Drops und
+-Verkäufe sowie unveränderte Schleich-/Befehlsreihenfolge;
+siehe [Messung](performance/stability-2026-11-08/release-1.8.3-actions.json).
 
 ## Produktiver Rollout
 

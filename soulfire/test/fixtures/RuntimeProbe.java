@@ -26,6 +26,12 @@ public final class RuntimeProbe implements ModInitializer {
         for (int i = 0; i < 20; i++) mc.level.animateTick(0, 64, 0);
         result.put("ambientSamples", SAMPLES.get());
         result.put("botContext", com.soulfiremc.server.bot.BotConnection.currentOptional().isPresent());
+        var disconnectHandler = (io.netty.channel.ChannelHandler) Class.forName("net.raphimc.viabedrock.netty.DisconnectHandler").getConstructor().newInstance();
+        var transport = new io.netty.channel.embedded.EmbeddedChannel(disconnectHandler);
+        var disconnectReason = Class.forName("org.cloudburstmc.netty.channel.raknet.RakDisconnectReason").getField("CLOSED_BY_REMOTE_PEER").get(null);
+        transport.pipeline().fireUserEventTriggered(disconnectReason);
+        result.put("bedrockTransportCloseReason", transport.attr(io.netty.util.AttributeKey.<String>valueOf("afk-service:bedrock-disconnect")).get());
+        transport.finishAndReleaseAll();
         var sky = Class.forName("com.viaversion.viafabricplus.bedrock.appearance.BedrockEndSkyTexture");
         sky.getMethod("clear").invoke(null);
         for (int i = 0; i < 20; i++) sky.getMethod("tick").invoke(null);
@@ -81,6 +87,7 @@ public final class RuntimeProbe implements ModInitializer {
           try { queue.invoke(buffer, packet, new byte[1]); }
           catch (java.lang.reflect.InvocationTargetException error) {
             if (!(error.getCause() instanceof IllegalStateException)) throw error;
+            result.put("worldBufferOverflow", error.getCause().getMessage());
             break;
           }
         }

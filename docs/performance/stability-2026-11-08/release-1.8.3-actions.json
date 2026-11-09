@@ -1,0 +1,21 @@
+{
+  "nativeCamera": {
+    "width": 480,
+    "height": 270,
+    "sharedUpstreams": 1,
+    "viewerFrames": [
+      4,
+      4
+    ],
+    "stoppedAfterLastViewer": true,
+    "survivedWorldChange": true
+  },
+  "sneakPreserved": true,
+  "nativeMultipliers": 9,
+  "nativeSpawnerDrop": true,
+  "nativeSpawnerSell": true,
+  "retainedStackPerItem": true,
+  "retainedForeignItems": true,
+  "manualCommandOrder": true,
+  "warnings": 0
+}
