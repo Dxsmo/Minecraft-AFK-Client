@@ -90,11 +90,9 @@ it("delegates selling to the native client and suspends it before manual command
   expect(f.rpc.live.sendChat).not.toHaveBeenCalled();
   await f.frame("inventory", { state: f.inventory("sell", "Items verkaufen") });
   f.queue.push({ type: "chat", text: "/homes" }); await vi.advanceTimersByTimeAsync(100);
-  const suspension = f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === "sell-manual-until").at(-1)![0].value.kind.value;
-  expect(suspension).toBeGreaterThanOrEqual(Date.now() + 4900);
-  expect(suspension).toBeLessThanOrEqual(Date.now() + 5000);
+  expect(f.rpc.bot.updateBotConfigEntry.mock.calls.some(([request]) => request.key.startsWith("sell-manual"))).toBe(false);
   expect(f.rpc.live.sendChat).toHaveBeenLastCalledWith(expect.objectContaining({ message: "/homes" }), expect.anything());
-  expect(f.rpc.bot.closeContainer).toHaveBeenCalledTimes(1);
+  expect(f.rpc.bot.closeContainer).not.toHaveBeenCalled(); // Native action owns its current menu.
   expect(f.rpc.bot.clickInventorySlot).not.toHaveBeenCalled();
   expect(f.rpc.bot.getInventoryState).not.toHaveBeenCalled();
 });
@@ -236,7 +234,7 @@ it("still sends a manual command when the server has already replaced its old me
   f.rpc.bot.closeContainer.mockRejectedValueOnce(new ConnectError("The container changed", Code.Aborted));
   f.queue.push({ type: "chat", text: "/homes" }); await vi.advanceTimersByTimeAsync(100);
   expect(f.rpc.live.sendChat).toHaveBeenCalledWith(expect.objectContaining({ message: "/homes" }), expect.anything());
-  expect(f.rpc.bot.closeContainer).toHaveBeenCalledTimes(1);
+  expect(f.rpc.bot.closeContainer).not.toHaveBeenCalled();
   expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "warning" }));
 });
 
@@ -391,22 +389,17 @@ it("passes restart pause windows to native selling", async () => {
   expect(setting("sell-pause-until") - setting("sell-pause-from")).toBe(120000);
 });
 
-it("protects explicit manual sale menus while allowing late native replies during navigation commands", async () => {
+it("dispatches native manual commands without persistent pause writes or inventory RPCs", async () => {
   const f = await fixture(); await f.start();
-  f.queue.push({ type: "chat", text: "/home melon" });
-  await vi.advanceTimersByTimeAsync(100);
-  const settings = (key: string) => f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === key);
-  expect(settings("sell-manual-until")).toHaveLength(1);
-  expect(settings("sell-manual-menu-until")).toHaveLength(0);
-  f.queue.push({ type: "chat", text: "/sell" });
-  await vi.advanceTimersByTimeAsync(100);
-  expect(settings("sell-manual-menu-until")).toHaveLength(1);
-  const marker = settings("sell-manual-menu-until")[0];
-  const command = f.rpc.live.sendChat.mock.calls.findIndex(([request]) => request.message === "/sell");
-  expect(command).toBeGreaterThanOrEqual(0);
-  expect(marker[0].value.kind.value).toBeGreaterThan(Date.now());
-  expect(f.rpc.bot.updateBotConfigEntry.mock.invocationCallOrder[f.rpc.bot.updateBotConfigEntry.mock.calls.indexOf(marker)])
-    .toBeLessThan(f.rpc.live.sendChat.mock.invocationCallOrder[command]);
+  f.rpc.bot.closeContainer.mockRejectedValue(new Error("unavailable inventory action"));
+  f.rpc.bot.updateBotConfigEntry.mockImplementation(async request => {
+    if (request.key.startsWith("sell-manual")) throw new Error("database busy");
+    return {};
+  });
+  for (const text of ["/home melon", "/sell"]) { f.queue.push({ type: "chat", text }); await vi.advanceTimersByTimeAsync(100); }
+  expect(f.rpc.live.sendChat.mock.calls.map(([request]) => request.message)).toEqual(["/home melon", "/sell"]);
+  expect(f.rpc.bot.closeContainer).not.toHaveBeenCalled();
+  expect(f.rpc.bot.updateBotConfigEntry.mock.calls.some(([request]) => request.key.startsWith("sell-manual"))).toBe(false);
 });
 
 it("distinguishes an unresponsive game thread from an unreachable control service without faking game heartbeats", async () => {

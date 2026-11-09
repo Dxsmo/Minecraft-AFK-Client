@@ -328,7 +328,7 @@ export default async function accountsRoutes(app: FastifyInstance) {
       targetId: id,
       details: { command: body.command },
     });
-    reply.send({ ok: true });
+    reply.send(result);
   });
 
   async function guardedLifecycle(

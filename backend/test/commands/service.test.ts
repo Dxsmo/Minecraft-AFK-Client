@@ -5,10 +5,11 @@ import { setAssignments } from "../../src/accounts/service.js";
 import type { SessionContext } from "../../src/auth/session.js";
 
 const sendCommandMock = vi.fn();
+const receipt = { id: "accepted-command", minecraftAccountId: "online-account", type: "USER_COMMAND", message: "/say hi", timestamp: new Date().toISOString() };
 
 vi.mock("../../src/minecraft/ClientManager.js", () => ({
   clientManager: {
-    get: vi.fn((id: string) => (id === "online-account" ? { sendCommand: sendCommandMock } : undefined)),
+    get: vi.fn((id: string) => (id === "online-account" ? { queueCommand: sendCommandMock } : undefined)),
   },
 }));
 
@@ -47,10 +48,10 @@ describe("command execution permission checks", () => {
       data: { id: "online-account", name: "Bot_Cmd_2", serverHost: "h", serverPort: 25565 },
     });
     await setAssignments(account.id, [user.id]);
-    sendCommandMock.mockReturnValue(true);
+    sendCommandMock.mockReturnValue(receipt);
 
     const result = await executeCommand(toSession(user as any), account.id, "/say hi");
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, accepted: receipt });
     expect(sendCommandMock).toHaveBeenCalledWith("/say hi");
   });
 
@@ -61,10 +62,10 @@ describe("command execution permission checks", () => {
     await prisma.minecraftAccount.create({
       data: { id: "online-account", name: "Bot_Cmd_3", serverHost: "h", serverPort: 25565 },
     });
-    sendCommandMock.mockReturnValue(true);
+    sendCommandMock.mockReturnValue(receipt);
 
     const result = await executeCommand(toSession(admin as any), "online-account", "/say hi");
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, accepted: receipt });
   });
 
   it("returns NOT_FOUND when the account has no running client", async () => {

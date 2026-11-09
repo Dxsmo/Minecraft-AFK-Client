@@ -28,7 +28,8 @@
     "ItemCollisionMixin",
     "ItemCollisionCandidatesMixin",
     "BedrockWorldBufferMixin",
-    "BedrockMovementTimelineMixin"
+    "BedrockMovementTimelineMixin",
+    "BedrockClientStateMixin"
   ],
   "injectors": {
     "defaultRequire": 1

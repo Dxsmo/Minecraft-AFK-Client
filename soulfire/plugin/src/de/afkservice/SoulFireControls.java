@@ -48,7 +48,9 @@ public final class SoulFireControls implements ModInitializer {
       mc.options.cloudStatus().set(net.minecraft.client.CloudStatus.OFF);
       mc.options.particles().set(net.minecraft.server.level.ParticleStatus.MINIMAL);
       mc.options.entityShadows().set(false);
-      mc.options.renderDistance().set(2);
+      // A tiny advertised radius also limits chunks sent by servers that
+      // honor client send distance. Keep the original six-chunk request.
+      mc.options.renderDistance().set(6);
     }
     NativeAutoSell.tick(bot);
     boolean crouch = flag(settings, "crouch-enabled");

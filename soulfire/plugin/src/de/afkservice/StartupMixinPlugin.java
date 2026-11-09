@@ -11,6 +11,7 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
+import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.JumpInsnNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
@@ -26,6 +27,10 @@ public final class StartupMixinPlugin implements IMixinConfigPlugin {
 
   @Override
   public void postApply(String target, ClassNode node, String mixin, IMixinInfo info) {
+    if (mixin.equals("de.afkservice.mixin.BedrockClientStateMixin")) {
+      isolateBedrockState(node);
+      return;
+    }
     if (mixin.equals("de.afkservice.mixin.BedrockMovementTimelineMixin")) {
       synchronizeMovementTimeline(node);
       return;
@@ -71,6 +76,38 @@ public final class StartupMixinPlugin implements IMixinConfigPlugin {
     System.out.println("[afk-service] Initial Minecraft resource load timeout: " + seconds + " seconds");
   }
 
+  private static void isolateBedrockState(ClassNode node) {
+    var expected = BedrockStateFields.FIELDS.get(node.name);
+    if (expected != null) {
+      var actual = node.fields.stream().filter(field -> (field.access & Opcodes.ACC_STATIC) != 0).map(field -> field.name).toList();
+      if (!actual.containsAll(expected)) throw new IllegalStateException("Unexpected pinned Bedrock state layout: " + node.name);
+    }
+    for (var method : node.methods) {
+      if (method.name.equals("<clinit>")) continue;
+      for (var instruction : method.instructions.toArray()) {
+        if (!(instruction instanceof FieldInsnNode field)) continue;
+        var fields = BedrockStateFields.FIELDS.get(field.owner);
+        if (fields == null || !fields.contains(field.name)) continue;
+        boolean read = field.getOpcode() == Opcodes.GETSTATIC;
+        if (!read && field.getOpcode() != Opcodes.PUTSTATIC) continue;
+        var hook = new InsnList();
+        if (read) hook.add(new FieldInsnNode(Opcodes.GETSTATIC, field.owner, field.name, field.desc));
+        String boxed = switch (field.desc) { case "Z" -> "java/lang/Boolean"; case "J" -> "java/lang/Long"; default -> null; };
+        if (boxed != null) hook.add(new MethodInsnNode(Opcodes.INVOKESTATIC, boxed, "valueOf", "(" + field.desc + ")L" + boxed + ";", false));
+        else if (!field.desc.startsWith("L") && !field.desc.startsWith("[")) throw new IllegalStateException("Unexpected Bedrock state type: " + field.desc);
+        hook.add(new LdcInsnNode(field.owner + "#" + field.name));
+        hook.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "de/afkservice/BedrockClientState", read ? "read" : "write",
+            read ? "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;" : "(Ljava/lang/Object;Ljava/lang/String;)V", false));
+        if (read) {
+          hook.add(new TypeInsnNode(Opcodes.CHECKCAST, boxed != null ? boxed : field.desc.substring(1, field.desc.length() - 1)));
+          if (boxed != null) hook.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, boxed, field.desc.equals("Z") ? "booleanValue" : "longValue", "()" + field.desc, false));
+        }
+        method.instructions.insertBefore(field, hook);
+        method.instructions.remove(field);
+      }
+    }
+  }
+
   /** All external reads/writes use one timeline monitor, including resets.
    * JVM synchronized methods release it on exceptional exits as well. The
    * timeline only mutates in-memory movement records; no network waits occur
@@ -101,6 +138,18 @@ public final class StartupMixinPlugin implements IMixinConfigPlugin {
     method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
     method.instructions.add(new InsnNode(Opcodes.ICONST_0));
     method.instructions.add(new FieldInsnNode(Opcodes.PUTFIELD, node.name, fields.getFirst().name, "Z"));
+    // Invoke VFP's existing version guards immediately. Re-arming alone
+    // leaves delivery dependent on their later tick/injection order, notably
+    // across player reconstruction. Guards keep modern/Bedrock paths intact.
+    var guarded = node.methods.stream().filter(candidate ->
+      (candidate.name.endsWith("$sendSneakingPacket") || candidate.name.endsWith("$sendSneakingAfterSprinting"))
+      && candidate.desc.equals("(Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfo;)V")).toList();
+    if (guarded.size() != 2) throw new IllegalStateException("Expected two pinned ViaFabricPlus sneak version guards");
+    for (var guard : guarded) {
+      method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+      method.instructions.add(new InsnNode(Opcodes.ACONST_NULL));
+      method.instructions.add(new MethodInsnNode(Opcodes.INVOKESPECIAL, node.name, guard.name, guard.desc, false));
+    }
     method.instructions.add(new InsnNode(Opcodes.RETURN));
     method.maxStack = 2; method.maxLocals = 1;
   }

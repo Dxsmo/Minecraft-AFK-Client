@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "re
 import { useParams, Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../lib/useAuth";
-import { useAccountConsole } from "../lib/sockets";
+import { useAccountConsole, type ConsoleEventMsg } from "../lib/sockets";
 import type { MinecraftAccount } from "../lib/types";
 import { StatusBadge } from "../components/StatusBadge";
 import { ConsoleView } from "../components/ConsoleView";
@@ -20,6 +20,7 @@ export function AccountDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [command, setCommand] = useState("");
   const [sendingCommand, setSendingCommand] = useState(false);
+  const [consoleFollowRequest, setConsoleFollowRequest] = useState(0);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [earningsExpanded, setEarningsExpanded] = useState(false);
   const consolePageRef = useRef<HTMLDivElement>(null);
@@ -33,7 +34,7 @@ export function AccountDetailPage() {
     }
     setSearchParams((params) => { params.set("tab", next); return params; });
   }
-  const { logs, status, historyError } = useAccountConsole(id, tab === "console");
+  const { logs, status, historyError, acceptCommand, refreshAfterCommand } = useAccountConsole(id, tab === "console");
   const inputRef = useRef<HTMLInputElement>(null);
   const isAdmin = user?.role === "ADMIN";
   const compact = useCompactLayout();
@@ -157,8 +158,11 @@ export function AccountDetailPage() {
     setSendingCommand(true);
     setCommandError(null);
     try {
-      await api.post(`/minecraft/accounts/${id}/command`, { command: text });
+      const result = await api.post<{ accepted?: NonNullable<ConsoleEventMsg["event"]> }>(`/minecraft/accounts/${id}/command`, { command: text });
       if (accountIdRef.current === requestAccount) {
+        if (result.accepted) acceptCommand(result.accepted);
+        refreshAfterCommand();
+        setConsoleFollowRequest(value => value + 1);
         setCommand((draft) => draft.trim() === text ? "" : draft);
         inputRef.current?.focus();
       }
@@ -326,7 +330,7 @@ export function AccountDetailPage() {
       {/* Tab content — keyed so it re-mounts and animates on switch. */}
       {tab === "console" && (
         <div key="console" className="tab-panel account-console-tab">
-          <ConsoleView key={id} logs={logs} className="account-console-output" />
+          <ConsoleView key={id} followRequest={consoleFollowRequest} logs={logs} className="account-console-output" />
           {historyError && <p className="alert-error">{historyError}</p>}
           <form onSubmit={handleSendCommand} className="account-command flex gap-2">
             <input

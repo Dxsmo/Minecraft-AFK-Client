@@ -17,13 +17,14 @@ import net.minecraft.world.item.ItemStack;
  * The short renewable lease stops automation if the website controller dies.
  */
 public final class NativeAutoSell {
+  private static final ThreadLocal<Boolean> AUTOMATIC_COMMAND = ThreadLocal.withInitial(() -> false);
   private static final System.Logger LOG = System.getLogger("afk-service.auto-sell");
   private static final Map<BotConnection, State> STATES = Collections.synchronizedMap(new WeakHashMap<>());
   private static final class State {
     String config = "";
     boolean enabled, waiting;
     int player, level;
-    long next, requested, lastWarning, interval = 2000;
+    long next, requested, lastWarning, manualUntil, manualMenuUntil, interval = 2000;
     double x, y, z;
     WeakReference<AbstractContainerMenu> sellingMenu = new WeakReference<>(null);
     int nextSlot, contentMenu = -1;
@@ -33,6 +34,27 @@ public final class NativeAutoSell {
     final SellRecovery recovery = new SellRecovery();
     final SellMenuRequests menus = new SellMenuRequests();
   }
+  /** Called inside the native SendChat action, immediately before the packet.
+   * Pause/close on the same game thread, with no database or telemetry RPCs.
+   * A typed sale owns its reply; navigation must still discard abandoned sale
+   * replies. An automated sale never enters this manual-command path. */
+  public static void manualCommand(BotConnection bot, String command) {
+    if (AUTOMATIC_COMMAND.get()) return;
+    var settings = bot.settingsSource().stem().settings().get("afk-service");
+    var mc = bot.minecraft();
+    if (settings == null || mc.player == null) return;
+    var state = STATES.computeIfAbsent(bot, ignored -> new State());
+    long until = System.currentTimeMillis() + 5000;
+    state.manualUntil = until;
+    cancel(bot, state);
+    state.waiting = false;
+    if (command.matches("(?i)^/?(?:[^ :/]+:)?sell(?:\\s.*)?$")) {
+      state.manualMenuUntil = until;
+      state.menus.manual(until);
+    }
+    if (mc.player.containerMenu != mc.player.inventoryMenu) mc.player.closeContainer();
+  }
+
   public static void disconnected(BotConnection bot) { STATES.remove(bot); }
   public static void opened(BotConnection bot, int menu) {
     var state = STATES.get(bot);
@@ -40,7 +62,7 @@ public final class NativeAutoSell {
     state.contentMenu = menu; state.contentReady = false;
     var mc = bot.minecraft();
     var settings = bot.settingsSource().stem().settings().get("afk-service");
-    if (state.menus.manual(number(settings, "sell-manual-menu-until"))) {
+    if (state.menus.manual(Math.max(state.manualMenuUntil, number(settings, "sell-manual-menu-until")))) {
       state.waiting = false; state.sellingMenu.clear();
       state.transfers.reset(); state.beforeTransfer.clear();
     }
@@ -106,7 +128,7 @@ public final class NativeAutoSell {
     if (settings == null) return;
     var state = STATES.computeIfAbsent(bot, ignored -> new State());
     long now = System.currentTimeMillis();
-    if (state.menus.manual(number(settings, "sell-manual-menu-until"))) {
+    if (state.menus.manual(Math.max(state.manualMenuUntil, number(settings, "sell-manual-menu-until")))) {
       cancel(bot, state); state.waiting = false;
     }
     var encoded = settings.get("native-auto-sell");
@@ -126,7 +148,7 @@ public final class NativeAutoSell {
     state.x = mc.player.getX(); state.y = mc.player.getY(); state.z = mc.player.getZ();
     if (moved) { state.next = now + 2000; cancel(bot, state); }
     if (!state.enabled || !SellLease.valid(bot.instanceManager().id(), bot.accountProfileId(), now)
-        || number(settings, "sell-manual-until") > now
+        || Math.max(state.manualUntil, number(settings, "sell-manual-until")) > now
         || state.recovery.paused(now)
         || (now >= number(settings, "sell-pause-from") && now < number(settings, "sell-pause-until"))) {
       cancel(bot, state);
@@ -185,7 +207,9 @@ public final class NativeAutoSell {
     if (!stock) return;
     state.requested = now; state.waiting = true; state.next = now + state.interval;
     state.menus.requested();
-    mc.player.connection.sendCommand("sell");
+    AUTOMATIC_COMMAND.set(true);
+    try { mc.player.connection.sendCommand("sell"); }
+    finally { AUTOMATIC_COMMAND.remove(); }
   }
   private static void cancel(BotConnection bot, State state) {
     var mc = bot.minecraft();

@@ -19,6 +19,7 @@ export type ConsoleEventType =
   | "WARNING";
 
 export interface ConsoleEvent {
+  id?: string;
   minecraftAccountId: string;
   type: ConsoleEventType;
   message: string;

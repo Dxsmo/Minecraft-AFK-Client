@@ -107,6 +107,9 @@ export default async function registerWebsocketRoutes(app: FastifyInstance) {
     subscribe(clientManager.onStatusEvent((status) => {
       if (status.id === accountId) publish({ type: "status", status }, "status");
     }));
+    const heartbeat = setInterval(() => run(() => send({ type: "heartbeat" })), 10_000);
+    heartbeat.unref();
+    subscribe(() => clearInterval(heartbeat));
     let messages = 0, windowStart = Date.now();
     socket.on("message", (raw, binary) => {
       if (Date.now() - windowStart > 10_000) { messages = 0; windowStart = Date.now(); }

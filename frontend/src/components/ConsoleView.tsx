@@ -31,7 +31,7 @@ const ConsoleRow = memo(function ConsoleRow({ log }: { log: ConsoleLogEntry }) {
   );
 });
 
-export const ConsoleView = memo(function ConsoleView({ logs, className = "h-[440px]" }: { logs: ConsoleLogEntry[]; className?: string }) {
+export const ConsoleView = memo(function ConsoleView({ logs, className = "h-[440px]", followRequest = 0 }: { logs: ConsoleLogEntry[]; className?: string; followRequest?: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
   const following = useRef(true);
@@ -60,6 +60,12 @@ export const ConsoleView = memo(function ConsoleView({ logs, className = "h-[440
       });
     },
   });
+  useLayoutEffect(() => {
+    following.current = true; adjusting.current = true;
+    virtualizer.scrollToEnd();
+    clearTimeout(settled.current);
+    settled.current = setTimeout(() => { adjusting.current = false; }, 150);
+  }, [followRequest, virtualizer]);
   useLayoutEffect(() => {
     const element = containerRef.current;
     if (!element) return;

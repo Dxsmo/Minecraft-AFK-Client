@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { isSlashCommand, isBlockedAfkCommand, AFK_BLOCK_MESSAGE } from "./slashCommands.js";
 import { parseSellEarning } from "./sellEarnings.js";
@@ -178,23 +179,25 @@ export class MinecraftClient extends EventEmitter {
     }, MANUAL_RESTART_DELAY_MS);
   }
 
-  sendCommand(command: string): boolean {
+  sendCommand(command: string): boolean { return !!this.queueCommand(command); }
+
+  /** Returns the exact accepted console event for HTTP/live reconciliation. */
+  queueCommand(command: string): ConsoleEvent | undefined {
     if (isBlockedAfkCommand(command)) {
-      this.emitConsole("WARNING", AFK_BLOCK_MESSAGE);
-      return true; // Locally handled; no command reaches the game server.
+      return this.emitConsole("WARNING", AFK_BLOCK_MESSAGE); // Locally handled.
     }
     if (!isSlashCommand(command)) {
       this.emitConsole("ERROR", "Nur Slash-Befehle mit / am Anfang sind erlaubt");
-      return false;
+      return undefined;
     }
     if (this.status !== "ONLINE" || !this.subprocess) {
       this.emitConsole("ERROR", "Bot is not online, cannot send command");
-      return false;
+      return undefined;
     }
     const sent = this.sendToBot(command === "/desmo" ? { type: "read_sell_multipliers" } : { type: "chat", text: command });
-    if (sent) this.emitConsole("USER_COMMAND", command);
-    else this.emitConsole("ERROR", "Command konnte nicht an den Bot übermittelt werden");
-    return sent;
+    if (sent) return this.emitConsole("USER_COMMAND", command);
+    this.emitConsole("ERROR", "Command konnte nicht an den Bot übermittelt werden");
+    return undefined;
   }
 
   sendChat(message: string): void {
@@ -655,13 +658,16 @@ export class MinecraftClient extends EventEmitter {
     }
   }
 
-  private emitConsole(type: ConsoleEventType, message: string): void {
-    this.emit("console", {
+  private emitConsole(type: ConsoleEventType, message: string): ConsoleEvent {
+    const event: ConsoleEvent = {
+      id: randomUUID(),
       minecraftAccountId: this.config.id,
       type,
       message,
       timestamp: new Date().toISOString(),
-    } as ConsoleEvent);
+    };
+    this.emit("console", event);
+    return event;
   }
 
 }

@@ -220,7 +220,7 @@ try {
   assert.ok(!sneak.some(packet=>packet.data.actionId==='stop_sneaking'));
   assert.ok(!packets.some(packet=>packet.name===names[1]&&packet.type==='entity_action'&&packet.data.actionId==='start_sneaking'));
   assert.ok(packets.some(packet=>packet.name===names[0]&&packet.type==='block_place'));
-  for(const name of names) assert.ok(packets.some(packet=>packet.name===name&&packet.type==='settings'&&packet.data.viewDistance===2));
+  for(const name of names) assert.ok(packets.some(packet=>packet.name===name&&packet.type==='settings'&&packet.data.viewDistance===6));
   assert.ok(!events.flat().some(event=>event.type==='connection_failed'));
   assert.ok(!events.flat().some(event=>event.type==='warning'&&event.message.startsWith('AutoSell:')),'Confirmed sales must not time out');
   if(refillSales)assert.deepEqual(packets.filter(packet=>packet.type==='window_click').slice(0,Math.min(3,sellStacks)).map(packet=>packet.data.slot),stockSlots.slice(0,3));
@@ -296,7 +296,7 @@ try {
   const before=events[1].filter(event=>event.type==='heartbeat').length;
   const stopped=once(controllers[0],'close');controllers[0].stdin.write('{"type":"disconnect"}\n');await stopped;
   await waitFor(()=>events[1].filter(event=>event.type==='heartbeat').length>before);
-  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,injectedStreamFailures,pickups,blockInventory,lateBlockedMenu,latePausedMenu,navigationDuringOpen,manualSaleMenu,lateMenuDelay,delayedMenuReplies,blockOnClick,blockedClicks,blockedCommands,ackDelay,maxInFlight,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,sneakAfterTeleport:true,sneakAfterSilentReset:true,sneakAfterRespawn:process.env.AFK_SMOKE_RESPAWN==='1',viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
+  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,injectedStreamFailures,pickups,blockInventory,lateBlockedMenu,latePausedMenu,navigationDuringOpen,manualSaleMenu,lateMenuDelay,delayedMenuReplies,blockOnClick,blockedClicks,blockedCommands,ackDelay,maxInFlight,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,sneakAfterTeleport:true,sneakAfterSilentReset:true,sneakAfterRespawn:process.env.AFK_SMOKE_RESPAWN==='1',viewDistance:6,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
 } catch (error) {
   console.error(JSON.stringify({events,packetTypes:packets.map(p=>({name:p.name,type:p.type,data:p.type==='entity_action'?p.data:undefined}))}));
   const rpc=soulFireRpc();

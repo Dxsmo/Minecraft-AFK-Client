@@ -302,28 +302,25 @@ describe("common SoulFire automation", () => {
 });
 
 describe("recovery without command bursts", () => {
-  it("keeps server loading locks separate from manual menu ownership and holds queued commands until recovery", async () => {
+  it("dispatches typed commands despite repeated inventory saving rejections and broken telemetry", async () => {
     const f = fixture({ autosell_enabled: true }); f.game.nativeAutosell = true;
-    f.game.suspendSell = vi.fn(async () => {});
+    f.game.suspendSell = vi.fn(async () => { throw Error("settings blocked"); });
+    f.game.inventory = vi.fn(async () => { throw Error("telemetry missing"); });
     await f.engine.spawned();
     for (let i = 0; i < 365; i++) f.engine.onChat(null, "[HugoSMP] Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird.");
-    f.engine.enqueue("chat", "/homes");
-    await f.engine.tick(); f.advance(1000); await f.engine.tick();
-    expect(f.game.suspendSell).not.toHaveBeenCalled();
-    expect(f.game.chat).not.toHaveBeenCalled();
-    f.advance(1000); await f.engine.tick();
+    f.engine.enqueue("chat", "/homes"); await f.engine.tick();
     expect(f.game.chat).toHaveBeenCalledExactlyOnceWith("/homes");
-    expect(f.game.suspendSell).toHaveBeenCalledExactlyOnceWith(5000, "/homes");
+    expect(f.game.suspendSell).not.toHaveBeenCalled(); expect(f.game.inventory).not.toHaveBeenCalled();
   });
-  it("bounds and deduplicates pending commands", async () => {
-    const f = fixture(); await f.engine.spawned();
-    for (let i = 0; i < 100; i++) f.engine.enqueue("chat", "/homes");
+  it("preserves intentional repeated typed commands in order, while bounding the queue", async () => {
+    const f = fixture(); f.game.nativeAutosell = true; await f.engine.spawned();
+    for (let i = 0; i < 2; i++) f.engine.enqueue("chat", "/homes");
     await f.engine.tick(); await f.engine.tick();
-    expect(f.game.chat).toHaveBeenCalledTimes(1);
+    expect(f.game.chat).toHaveBeenCalledTimes(2);
     for (let i = 0; i < 100; i++) f.engine.enqueue("chat", `/test${i}`);
-    expect(f.emit).toHaveBeenCalledTimes(2); // Dispatch log and one queue warning.
     for (let i = 0; i < 100; i++) { f.advance(1500); await f.engine.tick(); }
-    expect(f.game.chat).toHaveBeenCalledTimes(33);
+    expect(f.game.chat).toHaveBeenCalledTimes(34);
+    expect(f.emit).toHaveBeenCalledWith(expect.objectContaining({ type: "warning", message: expect.stringContaining("Befehlswarteschlange voll") }));
   });
   it("never returns home or replays manual navigation after reconnects", async () => {
     // Old controller fields may still arrive from a stale browser/process.

@@ -46,7 +46,6 @@ export class SoulFireBehaviors {
   private lastFailure = -Infinity;
   private generation = 0;
   private inventoryBlockedUntil = 0;
-  private lastQueuedChat: { text: string; at: number } | undefined;
   private lastQueueWarning = -Infinity;
 
   constructor(config: BehaviorConfig, private game: GameGateway, private emit: BotOutput, private clock = Date.now) {
@@ -84,8 +83,7 @@ export class SoulFireBehaviors {
 
   enqueue(type: string, text?: string): void {
     const now = this.clock();
-    if (this.commands.some(command => command.type === type && command.text === text)) return;
-    if (type === "chat" && text && this.lastQueuedChat?.text === text && now - this.lastQueuedChat.at < 2000) return;
+    if (type !== "chat" && this.commands.some(command => command.type === type && command.text === text)) return;
     if (this.commands.length >= 32) {
       if (now - this.lastQueueWarning >= 30_000) {
         this.lastQueueWarning = now;
@@ -93,7 +91,6 @@ export class SoulFireBehaviors {
       }
       return;
     }
-    if (type === "chat" && text) this.lastQueuedChat = { text, at: now };
     this.commands.push({ type, text });
   }
 
@@ -135,7 +132,6 @@ export class SoulFireBehaviors {
       catch { this.nextSneak = now + 1000; } // Checks are intentionally silent.
 
     }
-    if (now < this.inventoryBlockedUntil) return;
     if (this.commands.length) {
       const command = this.commands[0];
       if (!this.creditReady(now)) return;
@@ -146,6 +142,7 @@ export class SoulFireBehaviors {
       }
       return;
     }
+    if (now < this.inventoryBlockedUntil) return;
     const paused = now >= this.pauseStart && now < this.pauseEnd;
     if (paused) { await this.cancelSell(); return; }
     if (now < this.readyAt) return;
@@ -169,6 +166,17 @@ export class SoulFireBehaviors {
   }
 
   private async runCommand(command: { type: string; text?: string }): Promise<void> {
+    if (this.game.nativeAutosell && command.type === "chat" && command.text) {
+      // The native SendChat action atomically pauses selling and closes its
+      // actual current menu. Inventory telemetry/settings writes must not hold
+      // or discard a typed command, including during server loading locks.
+      this.sell = null; this.foreground = null;
+      await this.dispatch(command.text);
+      this.manualUntil = this.clock() + 5000;
+      if (/^\/(?:tpaccept|tpyes)(?:\s|$)/i.test(command.text)) this.scheduleSneak();
+      this.emit({ type: "behavior_log", message: `Command dispatched: ${command.text}` });
+      return;
+    }
     await this.game.suspendSell?.(5000, command.type === "chat" ? command.text : undefined);
     const generation = this.generation;
     this.sell = null;

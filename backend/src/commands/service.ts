@@ -1,9 +1,10 @@
+import type { ConsoleEvent } from "../minecraft/types.js";
 import { clientManager } from "../minecraft/ClientManager.js";
 import { canAccessAccount } from "../accounts/service.js";
 import type { SessionContext } from "../auth/session.js";
 
 export type CommandResult =
-  | { ok: true }
+  | { ok: true; accepted: ConsoleEvent }
   | { ok: false; reason: "FORBIDDEN" | "NOT_FOUND" | "OFFLINE" };
 
 /**
@@ -25,6 +26,6 @@ export async function executeCommand(
   const client = clientManager.get(accountId);
   if (!client) return { ok: false, reason: "NOT_FOUND" };
 
-  const sent = client.sendCommand(command);
-  return sent ? { ok: true } : { ok: false, reason: "OFFLINE" };
+  const accepted = client.queueCommand(command);
+  return accepted ? { ok: true, accepted } : { ok: false, reason: "OFFLINE" };
 }

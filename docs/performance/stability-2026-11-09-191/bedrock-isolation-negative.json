@@ -1,0 +1,6 @@
+{
+  "fieldsInitializedPerClient": 29,
+  "independentMutableObjects": 13,
+  "passed": false,
+  "error": "java.lang.IllegalStateException: Transformed Bedrock frameId used another client's timeline: expected=1 actual=0"
+}

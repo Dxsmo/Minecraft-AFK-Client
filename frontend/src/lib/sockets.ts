@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConsoleLogEntry, LiveStatus } from "./types";
 import { api, clearApiReadCache, invalidateAccountHistory } from "./api";
-import { MAX_CONSOLE_LOGS, mergeConsoleHistory } from "./consoleBuffer";
+import { MAX_CONSOLE_LOGS, mergeConsoleHistory, appendConsoleLogs } from "./consoleBuffer";
 
 const MAX_ACCOUNT_CONSOLE_LOGS = MAX_CONSOLE_LOGS;
 const CONSOLE_HISTORY_PAGE_SIZE = 2000;
 
 export interface ConsoleEventMsg {
-  type: "history" | "console" | "status" | "error";
+  type: "history" | "console" | "status" | "error" | "heartbeat";
   logs?: ConsoleLogEntry[];
-  event?: { minecraftAccountId: string; type: ConsoleLogEntry["type"]; message: string; timestamp: string };
+  event?: { id?: string; minecraftAccountId: string; type: ConsoleLogEntry["type"]; message: string; timestamp: string };
   status?: LiveStatus;
   reason?: string;
 }
@@ -28,6 +28,8 @@ export function useAccountConsole(accountId: string | undefined, renderLogs = tr
   const [historyError, setHistoryError] = useState<string | null>(null);
   const renderLogsRef = useRef(renderLogs);
   renderLogsRef.current = renderLogs;
+  const acceptRef = useRef<(event: NonNullable<ConsoleEventMsg["event"]>) => void>(() => {});
+  const refreshRef = useRef<() => void>(() => {});
   const flushRef = useRef<() => void>(() => {});
   useEffect(() => { if (renderLogs) flushRef.current(); }, [renderLogs]);
 
@@ -50,16 +52,50 @@ export function useAccountConsole(accountId: string | undefined, renderLogs = tr
       const batch = pending; pending = [];
       const history = pendingHistory; pendingHistory = undefined;
       setLogs(previous => history ? mergeConsoleHistory(history, [...previous, ...batch])
-        : [...previous, ...batch].slice(-MAX_ACCOUNT_CONSOLE_LOGS));
+        : appendConsoleLogs(previous, batch));
     }
     flushRef.current = flush;
+    function accept(event: NonNullable<ConsoleEventMsg["event"]>) {
+      if (cancelled || event.minecraftAccountId !== accountId) return;
+      pending.push({ id: event.id ?? `${event.timestamp}-${Math.random()}`, minecraftAccountId: event.minecraftAccountId,
+        type: event.type, message: event.message, createdAt: event.timestamp });
+      flush();
+    }
+    acceptRef.current = accept;
+    let refreshing = false;
+    async function refresh() {
+      if (cancelled || refreshing) return;
+      refreshing = true;
+      try {
+        const [history, account] = await Promise.all([
+          api.get<ConsoleLogEntry[]>(`/minecraft/accounts/${accountId}/logs?limit=${CONSOLE_HISTORY_PAGE_SIZE}`, { signal: controller.signal }),
+          api.get<{ live?: LiveStatus }>(`/minecraft/accounts/${accountId}`, { signal: controller.signal }),
+        ]);
+        if (cancelled) return;
+        pendingHistory = history; flush();
+        if (account.live) setStatus(account.live);
+        setHistoryError(null);
+      } catch { if (!cancelled) setHistoryError("Live-Konsole unterbrochen; Verlauf konnte nicht nachgeladen werden."); }
+      finally { refreshing = false; }
+    }
+    let receiptRefresh: ReturnType<typeof setTimeout> | undefined;
+    refreshRef.current = () => { clearTimeout(receiptRefresh); receiptRefresh = setTimeout(() => void refresh(), 1500); };
+    let lastMessage = Date.now();
+    const recoveryTimer = setInterval(() => {
+      if (document.hidden || !renderLogsRef.current) return;
+      if (socketRef.current?.readyState !== WebSocket.OPEN || Date.now() - lastMessage > 25_000) {
+        void refresh();
+        if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.close();
+      }
+    }, 10_000);
     document.addEventListener("visibilitychange", flush);
     const controller = new AbortController();
+    const historyController = new AbortController();
     // HTTP history remains available when a proxy delays/blocks the socket.
     // Normal connections deliver history first and never need this request.
     const historyTimer = setTimeout(() => {
       if (receivedHistory) return;
-      void api.get<ConsoleLogEntry[]>(`/minecraft/accounts/${accountId}/logs?limit=${CONSOLE_HISTORY_PAGE_SIZE}`, { signal: controller.signal })
+      void api.get<ConsoleLogEntry[]>(`/minecraft/accounts/${accountId}/logs?limit=${CONSOLE_HISTORY_PAGE_SIZE}`, { signal: historyController.signal })
         .then(history => {
           if (cancelled || receivedHistory) return;
           receivedHistory = true;
@@ -75,8 +111,9 @@ export function useAccountConsole(accountId: string | undefined, renderLogs = tr
       socketRef.current = socket;
       let opened = false;
 
-      socket.onopen = () => { opened = true; if (!cancelled) setConnected(true); };
+      socket.onopen = () => { opened = true; lastMessage = Date.now(); if (!cancelled && socketRef.current === socket) setConnected(true); };
       socket.onclose = event => {
+        if (socketRef.current !== socket) return;
         if (!cancelled) {
           setConnected(false);
           if (!opened || event?.code === 4401 || event?.code === 4403) void api.get("/auth/me").catch(() => undefined);
@@ -89,17 +126,18 @@ export function useAccountConsole(accountId: string | undefined, renderLogs = tr
       socket.onerror = () => socket.close();
       socket.onmessage = (ev) => {
         if (cancelled || socketRef.current !== socket) return;
+        lastMessage = Date.now();
         let msg: ConsoleEventMsg;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.type === "history" && msg.logs) {
           receivedHistory = true;
           clearTimeout(historyTimer);
-          controller.abort();
+          historyController.abort();
           setHistoryError(null);
           pendingHistory = msg.logs.slice(-MAX_ACCOUNT_CONSOLE_LOGS); flush();
         } else if (msg.type === "console" && msg.event) {
           const e = msg.event;
-          pending.push({ id: `${e.timestamp}-${Math.random()}`, minecraftAccountId: e.minecraftAccountId, type: e.type, message: e.message, createdAt: e.timestamp });
+          pending.push({ id: e.id ?? `${e.timestamp}-${Math.random()}`, minecraftAccountId: e.minecraftAccountId, type: e.type, message: e.message, createdAt: e.timestamp });
           // Keep the newest complete buffer while a camera/settings/hidden
           // tab does not need console renders; bound the temporary queue too.
           if (pending.length > MAX_ACCOUNT_CONSOLE_LOGS * 2) pending = pending.slice(-MAX_ACCOUNT_CONSOLE_LOGS);
@@ -114,15 +152,18 @@ export function useAccountConsole(accountId: string | undefined, renderLogs = tr
     return () => {
       cancelled = true;
       clearTimeout(retryTimer);
+      clearInterval(recoveryTimer);
+      clearTimeout(receiptRefresh);
       clearTimeout(historyTimer);
       clearTimeout(flushTimer);
       document.removeEventListener("visibilitychange", flush);
       controller.abort();
+      historyController.abort();
       socketRef.current?.close();
     };
   }, [accountId]);
 
-  return { logs, status, connected, historyError };
+  return { logs, status, connected, historyError, acceptCommand: (event: NonNullable<ConsoleEventMsg["event"]>) => acceptRef.current(event), refreshAfterCommand: () => refreshRef.current() };
 }
 
 /** Live status snapshots for every account visible to the current user. */

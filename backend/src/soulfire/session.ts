@@ -109,7 +109,7 @@ async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortC
   const resumeMs = config.autosell_resume_after_ms ?? 0;
   account = { ...account, config: mergeBotSettings(account.config ?? [], {
     "auto-reconnect": { enabled: false }, "auto-respawn": { enabled: false },
-    "client-settings": { "render-distance": 2 }, "bot": { "restore-on-reboot": false, "protocol-version": selected.id },
+    "client-settings": { "render-distance": 6 }, "bot": { "restore-on-reboot": false, "protocol-version": selected.id },
     "afk-service": { "auto-button": (config.auto_button || "off").toUpperCase(), "crouch-enabled": !!config.crouch_enabled,
       "native-auto-sell": initialSellConfig, "sell-manual-until": 0, "sell-manual-menu-until": 0, "sell-home-pending": false,
       "sell-pause-from": resumeMs ? configuredAt + (config.autosell_pause_after_ms ?? 0) : 0,
@@ -392,8 +392,7 @@ async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortC
     clearInterval(timer);
     wakeScheduler = undefined;
     abort.abort();
-    // A pending private home write must finish before this account's cache can
-    // be removed or a replacement controller starts writing the same file.
+    // Finish in-flight actions before stopping this account or its replacement.
     await schedulerTask;
     await rpc.bot.setBotsDesiredState({ instanceId, botIds: [botId], desiredState: BotDesiredState.STOPPED }, { timeoutMs: 30_000 }).catch(() => undefined);
     await stream?.catch(() => undefined);

@@ -1,6 +1,7 @@
 package de.afkservice.mixin;
 
 import com.soulfiremc.server.bot.BotConnection;
+import de.afkservice.NativeAutoSell;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.chat.Component;
 import org.spongepowered.asm.mixin.Mixin;
@@ -20,10 +21,12 @@ public final class BlockedCommandMixin {
   }
   @Inject(method = "sendCommand", at = @At("HEAD"), cancellable = true)
   private void blockCommand(String command, CallbackInfo ci) {
-    if (blocked(command)) { explain(); ci.cancel(); }
+    if (blocked(command)) { explain(); ci.cancel(); return; }
+    BotConnection.currentOptional().ifPresent(bot -> NativeAutoSell.manualCommand(bot, command));
   }
   @Inject(method = "sendChat", at = @At("HEAD"), cancellable = true)
   private void blockChatCommand(String message, CallbackInfo ci) {
-    if (message.startsWith("/") && blocked(message)) { explain(); ci.cancel(); }
+    if (message.startsWith("/") && blocked(message)) { explain(); ci.cancel(); return; }
+    BotConnection.currentOptional().ifPresent(bot -> NativeAutoSell.manualCommand(bot, message));
   }
 }

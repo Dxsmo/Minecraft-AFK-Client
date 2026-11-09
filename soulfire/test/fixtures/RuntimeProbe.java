@@ -18,6 +18,7 @@ public final class RuntimeProbe implements ModInitializer {
 
   @Override public void onInitialize() {
     SoulFireAPI.registerListener(BotPreTickEvent.class, event -> {
+      BedrockIsolationProbe.observe(event.connection());
       var mc = event.connection().minecraft();
       if (mc.player == null || mc.level == null || !RAN.compareAndSet(false, true)) return;
       var result = new LinkedHashMap<String, Object>();

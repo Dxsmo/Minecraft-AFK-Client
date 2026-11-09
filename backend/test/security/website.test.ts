@@ -35,7 +35,7 @@ vi.mock("../../src/soulfire/versions.js", async importOriginal => {
     { id: "SPECIAL|2193", displayName: "Bedrock 1.26.51", keywords: ["Bedrock 1.26.51", "2193"] },
   ]) };
 });
-const sendCommand = vi.fn(() => true);
+const sendCommand = vi.fn((command: string) => ({ id: "command-receipt", minecraftAccountId: accounts[0]?.id, type: "USER_COMMAND", message: command, timestamp: new Date().toISOString() }));
 const headers = (index = 0, csrf = true) => ({ cookie: `${config.session.cookieName}=${sessions[index].sessionId}`, ...(csrf ? {"x-csrf-token": sessions[index].csrfToken} : {}) });
 const snapshot = (account: {id:string;name:string}) => ({ id:account.id, name:account.name, status:"ONLINE", serverHost:"minecraft.example", serverPort:25565,
   msaSignIn:{userCode:account.id === accounts[1]?.id ? "FOREIGN-SECRET-CODE" : "OWN-CODE",verificationUri:"https://microsoft.com/link"} });
@@ -56,7 +56,7 @@ async function socket(path:string,index=0) {
 beforeAll(async()=>{
   passwordHash = await hashPassword("security-test-password");
   vi.spyOn(clientManager,"getAllStatuses").mockImplementation(()=>accounts.map(snapshot) as any);
-  vi.spyOn(clientManager,"get").mockImplementation(id=>({getStatus:()=>snapshot(accounts.find(a=>a.id===id)!),sendCommand}) as any);
+  vi.spyOn(clientManager,"get").mockImplementation(id=>({getStatus:()=>snapshot(accounts.find(a=>a.id===id)!),queueCommand:sendCommand}) as any);
   vi.spyOn(clientManager,"onStatusEvent").mockImplementation(cb=>{statusListeners.add(cb);return()=>{statusListeners.delete(cb);};});
   vi.spyOn(clientManager,"onConsoleEvent").mockImplementation(cb=>{consoleListeners.add(cb);return()=>{consoleListeners.delete(cb);};});
   vi.spyOn(clientManager,"onSellEvent").mockImplementation(cb=>{sellListeners.add(cb);return()=>{sellListeners.delete(cb);};});
@@ -225,6 +225,13 @@ it("requires CSRF for state changes and rejects requests from untrusted origins"
   for(const origin of ["https://evil.example","null",config.publicOrigin+".evil.example"])
     expect((await app.inject({method:"POST",url:"/api/notes",headers:{...headers(),origin},payload:{}})).statusCode).toBe(403);
   expect((await app.inject({url:"/api/auth/me",headers:headers()})).statusCode).toBe(200);
+});
+
+it("returns the accepted command event so the console can recover without its socket", async () => {
+  const response = await app.inject({ method: "POST", url: `/api/minecraft/accounts/${accounts[0].id}/command`, headers: headers(), payload: { command: "/fixture receipt" } });
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toMatchObject({ ok: true, accepted: { id: "command-receipt", minecraftAccountId: accounts[0].id, type: "USER_COMMAND", message: "/fixture receipt" } });
+  expect(sendCommand).toHaveBeenCalledExactlyOnceWith("/fixture receipt");
 });
 
 it("uses generic login failures and creates an opaque HttpOnly session cookie",async()=>{
