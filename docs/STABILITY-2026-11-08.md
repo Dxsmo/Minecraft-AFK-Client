@@ -303,6 +303,32 @@ NVMe-Controller. Der Alias `pciex1` verweist auf den bereits aktivierten
 `/axi/pcie@1000110000`-Knoten; der deaktivierte `pcie0`-Knoten ist nicht dieser
 externe Anschluss. Daher wurde keine vermeintlich fehlende PCIe-Aktivierung
 blind gesetzt. [Offizielle PCIe-Dokumentation](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#enable-pcie).
-Die Anschlussart (M.2-HAT/FPC oder USB-Adapter) wurde beim Benutzer erfragt und
-ist noch offen. Es wurde kein Laufwerk formatiert, keine Firmware aktualisiert,
+Der Benutzer hat den Anschluss über ein M.2-HAT bestätigt. HAT- und SSD-Modell
+sind noch offen. Es wurde kein Laufwerk formatiert, keine Firmware aktualisiert,
 kein Pi-Neustart ausgelöst und keine Datenmigration vorgenommen.
+
+
+## M.2-HAT nach Bestätigung der Anschlussart
+
+Am 9. November wurde der externe PCIe-x1-Anschluss weiter geprüft. Sein
+Device-Tree-Knoten ist `okay`, `max-link-speed` ist Gen 2, aber der Controller
+ist nicht an `brcm-pcie` gebunden. Die Lieferanten-/Reset-Abhängigkeiten melden
+keine ausstehende Initialisierung. Weder ein HAT-EEPROM-Knoten noch ein
+NVMe-Controller oder -Blockgerät ist sichtbar; ein fehlender HAT-Knoten allein
+beweist bei Drittanbieter-HATs jedoch keinen Defekt.
+
+Der ungebundene externe Controller `1000110000.pcie` wurde einmal gezielt über
+das Bind-Interface erneut initialisiert. Der interne RP1-Controller
+`1000120000.pcie` wurde nicht gelöst. Die neue Kernelmeldung lautet ausdrücklich
+`brcm-pcie 1000110000.pcie: link down`; anschließend bleiben ausschließlich
+microSD und der interne RP1-PCIe-Zweig sichtbar. Alle vier AFK-Dienste liefen
+nach dem Versuch weiter, Backend und SoulFire meldeten sich gesund.
+
+Damit ist der nächste Engpass die fehlende PCIe-Verbindung zum Laufwerk,
+nicht dessen Dateisystem oder ein noch nicht ausgeführter Datenumzug. HAT- und
+SSD-Modell wurden erfragt, um Verkabelung, Stromversorgung, NVMe-/SATA-Typ und
+herstellerspezifische Anforderungen zu prüfen. Bei einer physischen Prüfung
+muss der Pi zuerst heruntergefahren und von der Stromversorgung getrennt werden;
+siehe [Herstelleranleitung](https://www.raspberrypi.com/documentation/accessories/m2-hat-plus.html#install-the-m-2-hat).
+Es wurden weder Boot-Konfiguration noch Firmware verändert und kein Neustart
+ausgelöst. Die Datenmigration bleibt bis zur Laufwerkserkennung offen.

@@ -1,0 +1,28 @@
+{
+  "checkedAt": "2026-11-09T06:01:48.045568+00:00",
+  "connectionConfirmedByUser": "M.2 HAT",
+  "kernel": "6.18.39+rpt-rpi-2712",
+  "externalController": "1000110000.pcie",
+  "externalDeviceTreeStatus": "okay",
+  "maximumLinkGeneration": 2,
+  "driverBoundBeforeProbe": false,
+  "waitingForSupplier": false,
+  "reprobeAttempted": true,
+  "kernelResult": "brcm-pcie 1000110000.pcie: link down",
+  "nvmeControllerDetected": false,
+  "nvmeBlockDeviceDetected": false,
+  "internalRp1ControllerRebound": false,
+  "rebootPerformed": false,
+  "bootConfigurationChanged": false,
+  "formatOrMigrationPerformed": false,
+  "afkServicesAfterProbe": {
+    "backend": "healthy",
+    "soulfire": "healthy",
+    "web": "running",
+    "tunnel": "running"
+  },
+  "missingInformation": [
+    "HAT manufacturer/model",
+    "SSD manufacturer/model"
+  ]
+}
