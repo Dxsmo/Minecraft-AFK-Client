@@ -1,0 +1,158 @@
+{
+  "measurement": {
+    "at": "2026-11-09T06:33:37+0100",
+    "durationSeconds": 30.000810647004982,
+    "cpuPercent": 304.0,
+    "start": {
+      "ticks": 85254,
+      "rssKiB": 4231200,
+      "swapKiB": 119616,
+      "availableKiB": 2713648,
+      "swapUsedKiB": 515488,
+      "pswpin": 1030435,
+      "pswpout": 1311208
+    },
+    "end": {
+      "ticks": 94373,
+      "rssKiB": 4246592,
+      "swapKiB": 117696,
+      "availableKiB": 2765088,
+      "swapUsedKiB": 513360,
+      "pswpin": 1030562,
+      "pswpout": 1311208
+    },
+    "swapInPages": 127,
+    "swapOutPages": 0
+  },
+  "udpWindow": {
+    "at": "2026-11-09T06:34:39+0100",
+    "durationSeconds": 30.000608567002928,
+    "start": {
+      "InDatagrams": 46898,
+      "NoPorts": 0,
+      "InErrors": 0,
+      "OutDatagrams": 6912,
+      "RcvbufErrors": 0,
+      "SndbufErrors": 0,
+      "InCsumErrors": 0,
+      "IgnoredMulti": 0,
+      "MemErrors": 0
+    },
+    "end": {
+      "InDatagrams": 51736,
+      "NoPorts": 0,
+      "InErrors": 0,
+      "OutDatagrams": 7903,
+      "RcvbufErrors": 0,
+      "SndbufErrors": 0,
+      "InCsumErrors": 0,
+      "IgnoredMulti": 0,
+      "MemErrors": 0
+    },
+    "delta": {
+      "InDatagrams": 4838,
+      "NoPorts": 0,
+      "InErrors": 0,
+      "OutDatagrams": 991,
+      "RcvbufErrors": 0,
+      "SndbufErrors": 0,
+      "InCsumErrors": 0,
+      "IgnoredMulti": 0,
+      "MemErrors": 0
+    }
+  },
+  "executionSamples": 7625,
+  "topMethods": [
+    [
+      "com/viaversion/viaversion/connection/UserConnectionImpl.get",
+      1082
+    ],
+    [
+      "java/util/ImmutableCollections$MapN.probe",
+      252
+    ],
+    [
+      "net/raphimc/viabedrock/api/chunk/blockstate/BlockStateUpgradeSchema.upgrade",
+      135
+    ],
+    [
+      "java/lang/ThreadLocal$ThreadLocalMap.getEntry",
+      123
+    ],
+    [
+      "net/minecraft/client/Minecraft.handler$zkm000$soulfire$getInstance",
+      119
+    ],
+    [
+      "net/lenni0451/lambdaevents/LambdaManager.call",
+      109
+    ],
+    [
+      "io/netty/buffer/AbstractByteBuf.ensureAccessible",
+      106
+    ],
+    [
+      "java/util/HashMap$TreeNode.find",
+      106
+    ],
+    [
+      "java/util/concurrent/ConcurrentHashMap.get",
+      100
+    ],
+    [
+      "java/util/HashMap$HashIterator.<init>",
+      96
+    ],
+    [
+      "java/util/HashMap.putVal",
+      86
+    ],
+    [
+      "net/raphimc/viabedrock/api/chunk/light/LightEngine.spread",
+      84
+    ]
+  ],
+  "sampledThreads": [
+    [
+      "Netty Epoll IO #2",
+      2530
+    ],
+    [
+      "SoulFireScheduler-Task-1",
+      2363
+    ],
+    [
+      "Netty Epoll IO #3",
+      2092
+    ],
+    [
+      "ViaBedrock Light Worker",
+      236
+    ],
+    [
+      "SoulFireScheduler-Management-0",
+      120
+    ],
+    [
+      "Netty Epoll IO #0",
+      91
+    ],
+    [
+      "Netty Epoll IO #6",
+      39
+    ],
+    [
+      "armeria-common-worker-4-6",
+      33
+    ],
+    [
+      "Netty Epoll IO #4",
+      32
+    ],
+    [
+      "Netty Epoll IO #7",
+      30
+    ]
+  ],
+  "interpretation": "CPU remains high; no CPU improvement claimed. The sample shows Bedrock block translation on network threads. Raw JFR remains private."
+}

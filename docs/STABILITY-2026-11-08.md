@@ -247,5 +247,62 @@ siehe [Messung](performance/stability-2026-11-08/release-1.8.3-actions.json).
 
 ## Produktiver Rollout
 
-Rollout und anschließende Account-/Ressourcenprüfung laufen noch; diese
-Dokumentation wird nach den Messungen ergänzt.
+Am 9. November wurden zunächst 1.8.1 (06:14–06:17 Uhr) und danach 1.8.3
+(06:27–06:29 Uhr) mit konsistenter Sicherung von Backend-Daten und veränderlichem
+SoulFire-Zustand installiert. Die vollständige Sicherung vom 8. November und die
+bisherigen Images bleiben zusätzlich erhalten. 1.8.4 wurde um 06:41 Uhr als reine
+Erweiterungs-/Diagnoseänderung mit vorherigem Image als Rückweg installiert;
+die Website blieb bei diesem letzten Spiel-Dienst-Neustart erreichbar.
+Backend-Logik: 1.8.1; native Erweiterung: 1.8.4; Engine/SDK: 2.10.7.
+
+Um 06:54 Uhr waren alle 13 beabsichtigt aktiven Accounts sowohl über die Website
+als auch per RPC mit vorhandenem Spieler online (zehn Java, drei Bedrock).
+Alle 31 Website-Accounts und deren aktuelle Kontologs wurden authentifiziert
+nachgeprüft. Drei der sieben aktivierten Verkäufer hatten zusammen 215
+Auszahlungsnachrichten in den letzten fünf Minuten. Die vier anderen hatten in
+der Stichprobe leere Inventare. Die temporären Diagnose-Websitzungen wurden
+anschließend gezielt entfernt. Siehe [Abschlussprobe](performance/stability-2026-11-08/pi-final-2026-11-09.json).
+
+**Die Disconnect-Aufgabe ist nicht vollständig gelöst.** 1.8.4 belegt bei
+verbliebenen Bedrock-Abbrüchen `CLOSED_BY_REMOTE_PEER`, daneben einmal
+`TIMED_OUT`. Das eingehende Schließen durch die Gegenstelle erklärt noch nicht,
+weshalb sie schließt. Eine alleinige Schuldzuweisung an den Server ist daraus
+nicht zulässig. Für eine vollständige Ursache werden ein passender Server-/
+Geyser-Fehlerbericht oder ein reproduzierbarer Protokoll-Gegenversuch benötigt.
+Es wurden keine Nachrichten an Serverbetreiber versandt.
+
+Die native 4-MiB-Anforderung wurde direkt an den laufenden Linux-Sockets geprüft:
+8 MiB tatsächlicher Kernelpuffer. Nach zunächst fehlerfreien Messfenstern waren
+unter weiterer Last wieder 5.545 UDP-Empfangsfehler gezählt worden. Ein begrenzter
+Live-Gegenversuch erhöhte bestehende und neu verbundene Bedrock-Sockets temporär
+auf 32 MiB Kernelpuffer. Der UDP-Fehlerzähler stieg in diesem Versuch nicht weiter;
+eine neue vergrößerte Verbindung wurde trotzdem nach 76 Sekunden von der
+Gegenstelle geschlossen. Alle experimentellen Socket-/Kerneländerungen wurden
+zurückgesetzt; keine dauerhaften Sysctl-Änderungen oder Hilfscontainer bleiben.
+Siehe [Transportprüfung](performance/stability-2026-11-08/bedrock-transport-1.8.4.json).
+
+Die 30-Sekunden-Messung nach 1.8.3 ergab 304 % CPU, etwa 4,05 GiB residenten
+JVM-Speicher und etwa 2,64 GiB verfügbaren RAM. Die CPU bleibt hoch; eine
+CPU-Verbesserung wird nicht behauptet. Die JFR zeigt viel Bedrock-Blockübersetzung
+auf Netzwerk-Threads. Die Rohaufnahme bleibt privat, die aggregierte
+[Messung](performance/stability-2026-11-08/pi-1.8.3-resources.json) enthält keine
+Sitzungs-/Kontodaten.
+
+## microSD und nicht erkannte NVMe
+
+Auf dem Pi 5 mit 8 GiB RAM liegen Projekt, Docker-Images, Containerd-Daten,
+Datenbanken und beide AFK-Datenvolumes weiterhin auf der 119,2-GiB-microSD.
+Die Root-Partition war zu etwa 85 % belegt. Eine SSD kann insbesondere diese
+Datenträgerzugriffe und die bisher sehr langsamen Sicherungen/Imports verbessern;
+sie ersetzt keinen Arbeitsspeicher und behebt Protokollfehler nicht automatisch.
+Nur das Git-Arbeitsverzeichnis zu verschieben würde die laufenden Datenbank-/
+Volume-Zugriffe nicht verlagern.
+
+`lsblk`, PCIe- und USB-Inventar zeigen aktuell kein NVMe-/USB-Laufwerk und keinen
+NVMe-Controller. Der Alias `pciex1` verweist auf den bereits aktivierten
+`/axi/pcie@1000110000`-Knoten; der deaktivierte `pcie0`-Knoten ist nicht dieser
+externe Anschluss. Daher wurde keine vermeintlich fehlende PCIe-Aktivierung
+blind gesetzt. [Offizielle PCIe-Dokumentation](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#enable-pcie).
+Die Anschlussart (M.2-HAT/FPC oder USB-Adapter) wurde beim Benutzer erfragt und
+ist noch offen. Es wurde kein Laufwerk formatiert, keine Firmware aktualisiert,
+kein Pi-Neustart ausgelöst und keine Datenmigration vorgenommen.

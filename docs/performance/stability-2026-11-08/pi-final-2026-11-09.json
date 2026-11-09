@@ -1,0 +1,25 @@
+{
+  "checkedAt": "2026-11-09T05:54:07.177Z",
+  "controlsVersion": "1.8.4",
+  "soulfireVersion": "2.10.7",
+  "websiteHealth": 200,
+  "visibleAccounts": 31,
+  "websiteActive": 13,
+  "intendedActive": 13,
+  "runtimeRunningWithPlayer": 13,
+  "activeJava": 10,
+  "activeBedrock": 3,
+  "enabledSellers": 7,
+  "sellersWithPayoutsLastFiveMinutes": 3,
+  "payoutMessagesLastFiveMinutes": 215,
+  "enabledSellersWithEmptyInventory": 5,
+  "remainingIssue": "Bedrock connections continue to close and reconnect; not all disconnects resolved.",
+  "storage": {
+    "projectAndDockerAndVolumes": "microSD",
+    "nvmeDetected": false,
+    "externalPcieNodeStatus": "okay",
+    "migrationPerformed": false
+  },
+  "temporaryAuditSessionsDeleted": true,
+  "experimentalSocketTuningRestored": true
+}
