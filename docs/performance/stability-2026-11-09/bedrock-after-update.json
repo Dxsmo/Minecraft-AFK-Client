@@ -1,0 +1,47 @@
+{
+  "controlsVersion": "1.9.0",
+  "result": "Unresolved remote transport closure reproduced",
+  "observations": [
+    {
+      "observation": 1,
+      "capturedLifetimeSeconds": 85.8,
+      "disconnectNotification": "Incoming RakNet 0x15",
+      "lastClientDatagramSecondsAgo": 0.476,
+      "lastClientAckSecondsAgo": 0.175,
+      "lastServerAckSecondsAgo": 0.444,
+      "maximumClientGapSeconds": 2.921,
+      "outgoingSequenceGapsInCapture": null
+    },
+    {
+      "observation": 2,
+      "capturedLifetimeSeconds": 69.41,
+      "disconnectNotification": "Incoming RakNet 0x15",
+      "lastClientDatagramSecondsAgo": 0.114,
+      "lastClientAckSecondsAgo": 0.082,
+      "lastServerAckSecondsAgo": 0.078,
+      "maximumClientGapSeconds": 6.98,
+      "outgoingSequenceGapsInCapture": null
+    },
+    {
+      "observation": 3,
+      "capturedLifetimeSeconds": 52.73,
+      "disconnectNotification": "Incoming RakNet 0x15",
+      "lastClientDatagramSecondsAgo": 0.218,
+      "lastClientAckSecondsAgo": 0.218,
+      "lastServerAckSecondsAgo": 0.188,
+      "maximumClientGapSeconds": 1.202,
+      "outgoingSequenceGapsInCapture": []
+    },
+    {
+      "observation": 4,
+      "capturedLifetimeSeconds": 156.71,
+      "disconnectNotification": "Incoming RakNet 0x15",
+      "lastClientDatagramSecondsAgo": 0.019,
+      "lastClientAckSecondsAgo": 0.019,
+      "lastServerAckSecondsAgo": 0.077,
+      "maximumClientGapSeconds": 1.832,
+      "outgoingSequenceGapsInCapture": []
+    }
+  ],
+  "inferenceLimit": "These observations show recent bidirectional traffic before closure, not its cause. Incorrect client protocol behavior remains possible. No Minecraft account credentials, packet payloads or server IPs were retained in this report."
+}

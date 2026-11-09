@@ -1,0 +1,127 @@
+{
+  "at": "2026-11-09T06:37:58.333Z",
+  "apiStatus": 200,
+  "accounts": 31,
+  "homeSettingExposed": false,
+  "nonSellCommands": 0,
+  "forbiddenAutoCommandStatus": 400,
+  "active": [
+    {
+      "name": "desmoslucyvanille",
+      "edition": "JAVA",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": true,
+      "payoutsAfterUpdate": 0,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "gurkenweqrtsad",
+      "edition": "JAVA",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": true,
+      "payoutsAfterUpdate": 124,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "aangjandebo",
+      "edition": "JAVA",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": false,
+      "payoutsAfterUpdate": 0,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "schrumpfen",
+      "edition": "JAVA",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": false,
+      "payoutsAfterUpdate": 0,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "frustrieren",
+      "edition": "JAVA",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": true,
+      "payoutsAfterUpdate": 89,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "geworfen",
+      "edition": "JAVA",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": false,
+      "payoutsAfterUpdate": 0,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "spontaner",
+      "edition": "JAVA",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": true,
+      "payoutsAfterUpdate": 0,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "Bedaangjandebo",
+      "edition": "BEDROCK",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": false,
+      "payoutsAfterUpdate": 0,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "Desm000",
+      "edition": "JAVA",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": true,
+      "payoutsAfterUpdate": 0,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "bedeingeschleimt",
+      "edition": "BEDROCK",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": false,
+      "payoutsAfterUpdate": 0,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "sirogane1124",
+      "edition": "JAVA",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": true,
+      "payoutsAfterUpdate": 0,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "bedsirogane1124",
+      "edition": "BEDROCK",
+      "status": "RECONNECTING",
+      "crouchEnabled": true,
+      "autoSellEnabled": false,
+      "payoutsAfterUpdate": 0,
+      "automaticHomeRequests": 0
+    },
+    {
+      "name": "TQQ_MIKU",
+      "edition": "JAVA",
+      "status": "ONLINE",
+      "crouchEnabled": true,
+      "autoSellEnabled": true,
+      "payoutsAfterUpdate": 70,
+      "automaticHomeRequests": 0
+    }
+  ]
+}

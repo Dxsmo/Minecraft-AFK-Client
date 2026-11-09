@@ -70,3 +70,47 @@ Transportgrund allein erklärt nicht, weshalb die Gegenstelle schließt.
 
 [Messdaten](performance/stability-2026-11-09/) enthalten ausschließlich isolierte
 Fixture-Ergebnisse; keine Microsoft-Daten oder Produktionssitzungen.
+
+## Pi-Update und Live-Prüfung
+
+Am 9. November wurde 1.9.0 mit Backup der gesamten veränderlichen Backend-Daten
+und des SoulFire-Kernzustands eingespielt. Sicherung:
+`/home/desmo/afk-backups/20261109-072823-before-controls190`.
+Die Datenbankmigration wurde erfolgreich angewendet. Backend, SoulFire und
+Website wurden gesund gestartet; die öffentliche Health-API liefert HTTP 200.
+Native JAR-SHA256:
+`02642230abe8bb0781019c86d92c2ef895bd65cdbeec3a6d54a7203846fdd61b`.
+
+Die warme RPC-/Weltprüfung um 07:39 Uhr bestätigt alle 13 gewünschten Konten
+laufend, mit vorhandenem Spieler und `pose: crouching`, darunter alle drei
+Bedrock-Konten. Das bestätigt den aktuellen lokalen Zustand; die Prüfung der
+Schleichpakete nach Zustandsverlust erfolgt zusätzlich mit dem Offline-Server.
+Die bestehende Start-/Stop-Auswahl der Konten wurde beibehalten.
+
+Die authentifizierte Prüfung über `https://desmo.club` liefert alle 31 Konten,
+keine Home-Einstellung und ausschließlich `/sell` als AutoSell-Befehl.
+Ein Änderungsversuch auf `/home must-not-run` wird mit HTTP 400 verworfen.
+Der tatsächlich ausgelieferte Einstellungs-Build enthält die neue `/sell`-Anzeige
+und kein Home-Feld mehr. Alle temporären Prüfsitzungen wurden wieder entfernt.
+
+Nach dem Update wurden bis 07:38 Uhr unter anderem 124, 89 und 70
+Verkaufsbestätigungen der drei Konten mit laufendem Wareneingang protokolliert.
+Für die übrigen aktivierten Verkäufer lässt das allein keine Aussage über
+vorhandenen Wareneingang zu. Es wurde keine automatische Home-Anforderung
+protokolliert.
+
+**Die Bedrock-Disconnects sind weiterhin nicht vollständig behoben.** In der
+anschließenden Messung wurden zusätzliche eingehende RakNet-`0x15`-
+Schließnachrichten beobachtet. Zwei vollständig erfasste Beispiele bestätigen
+noch 77 bzw. 188 ms vorher Server-ACKs; die gesendeten Datagramm-Sequenzen weisen
+im Mitschnitt keine Lücken auf. Verbundene Pings wurden beantwortet.
+Das belegt aktive Kommunikation unmittelbar vor der Schließung, erklärt aber
+nicht den Auslöser. Ein Fehler der vom Client gesendeten Protokolldaten bleibt
+möglich. Es ist daher keine belastbare Schuldzuweisung an den Server.
+
+Der zuvor nachgewiesene Timeline-Absturz trat im anschließenden beobachteten
+Logfenster nicht erneut auf; das ersetzt keinen Langzeittest. Für den übrigen
+Kickgrund wurde nach vorhandenen Minecraft-/Geyser-Serverlogs gefragt. Während
+der Diagnose wurden keine Spielbefehle außer regulärem AutoSell ausgeführt.
+Die Netzwerkprüfung speicherte nur Zähler, Sequenznummern und Zeitabstände;
+keine Anmelde- oder Minecraft-Paketinhalte wurden in die Messdaten übernommen.
