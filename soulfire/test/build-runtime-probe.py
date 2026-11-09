@@ -21,11 +21,15 @@ if without_sky:
 without_udp = "--without-udp" in args
 if without_udp:
     args.remove("--without-udp")
+without_timeline = "--without-timeline" in args
+if without_timeline:
+    args.remove("--without-timeline")
 with tempfile.TemporaryDirectory(prefix="afk-runtime-probe-") as directory:
     root = Path(directory)
     shutil.copytree(source / "plugin", root / "plugin")
     shutil.copy2(source / "build-plugin.py", root / "build-plugin.py")
     for name, destination in [("RuntimeProbe.java", "plugin/src/de/afkservice/RuntimeProbe.java"),
+                              ("TimelineRace.java", "plugin/src/de/afkservice/TimelineRace.java"),
                               ("AmbientProbeMixin.java", "plugin/src/de/afkservice/mixin/AmbientProbeMixin.java")]:
         shutil.copy2(source / "test/fixtures" / name, root / destination)
     fabric = root / "plugin/fabric.mod.json"
@@ -41,6 +45,8 @@ with tempfile.TemporaryDirectory(prefix="afk-runtime-probe-") as directory:
         data["mixins"].remove("BedrockWorldBufferMixin")
     if without_sky:
         data["mixins"].remove("HeadlessSkyTextureMixin")
+    if without_timeline:
+        data["mixins"].remove("BedrockMovementTimelineMixin")
     if without_udp:
         data["mixins"].remove("BedrockReceiveBufferMixin")
     mixins.write_text(json.dumps(data))

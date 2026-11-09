@@ -5,6 +5,7 @@
   "compatibilityLevel": "JAVA_25",
   "mixins": [
     "HeldKeyMixin",
+    "LegacySneakMixin",
     "HeldMouseMixin",
     "StartupTimeoutMixin",
     "BlockedCommandMixin",
@@ -26,7 +27,8 @@
     "LiveCamPacingMixin",
     "ItemCollisionMixin",
     "ItemCollisionCandidatesMixin",
-    "BedrockWorldBufferMixin"
+    "BedrockWorldBufferMixin",
+    "BedrockMovementTimelineMixin"
   ],
   "injectors": {
     "defaultRequire": 1

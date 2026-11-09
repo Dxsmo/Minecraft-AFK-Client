@@ -11,7 +11,7 @@ describe("slash-only Minecraft commands", () => {
 });
 
 const removedAutomation = {
-  autoAddOtherEdition: true, linkedAccountId: "retired-link",
+  autoReturnHome: true, autoAddOtherEdition: true, linkedAccountId: "retired-link",
   autoCommandEnabled: true, autoCommandText: "/home farm",
   autoCommandIntervalMinutes: 10, autoCommandSpanEnabled: true,
   autoCommandSpanMinSeconds: 300, autoCommandSpanMaxSeconds: 3600,
@@ -45,4 +45,12 @@ describe("removed account automation", () => {
     for (const key of Object.keys(removedAutomation)) expect(parsed).not.toHaveProperty(key);
     expect(parsed).toMatchObject({ crouchEnabled: true, autoSellEnabled: true });
   });
+});
+
+it("accepts only /sell as an automatic command, including configuration from stale clients", () => {
+  for (const command of ["/home farm", "/sell all", "/AFK", "hello", "/sell\n/home farm"]) {
+    expect(updateAccountSchema.safeParse({ autoSellCommand: command }).success).toBe(false);
+    expect(createAccountSchema.safeParse({ name: "Bot", serverHost: "localhost", credentialsSecret: "bot@example.com", autoSellCommand: command }).success).toBe(false);
+  }
+  expect(updateAccountSchema.parse({ autoSellCommand: "/sell" })).toEqual({ autoSellCommand: "/sell" });
 });

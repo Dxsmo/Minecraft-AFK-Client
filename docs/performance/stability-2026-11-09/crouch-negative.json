@@ -1,0 +1,6 @@
+{
+  "controlsVersion": "1.8.4",
+  "fixture": "Java 1.8.8 offline",
+  "result": "FAILED",
+  "assertion": "No fresh START_SNEAKING after server teleport while local Shift stayed true"
+}

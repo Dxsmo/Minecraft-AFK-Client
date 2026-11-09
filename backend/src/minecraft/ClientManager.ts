@@ -9,8 +9,6 @@ import { logger } from "../logging/logger.js";
 import { invalidateEarningsHistory } from "../accounts/service.js";
 import { createStatusPersistence } from "./statusPersistence.js";
 import { persistSellEarning } from "./earningPersistence.js";
-import { readRemoteAccount } from "../soulfire/auth.js";
-import { hasHomeRecord, homeFromHistory, rememberHome } from "../soulfire/homeRecovery.js";
 import { parseSpawnerActions, resolveSpawnerActions } from "./spawners.js";
 import type { MinecraftAccount } from "@prisma/client";
 
@@ -35,7 +33,6 @@ function toRuntimeConfig(account: MinecraftAccount): ClientRuntimeConfig {
     crouchEnabled: account.crouchEnabled,
     autoButton: account.autoButton,
     autoReconnect: account.autoReconnect,
-    autoReturnHome: account.autoReturnHome,
     autoSellEnabled: account.autoSellEnabled,
     autoSellIntervalSeconds: account.autoSellIntervalSeconds,
     autoSellCommand: account.autoSellCommand,
@@ -84,20 +81,6 @@ export class ClientManager {
     await prisma.minecraftAccount.updateMany({ where: { status: { not: "OFFLINE" } }, data: { status: "OFFLINE" } });
     for (const account of accounts) {
       this.register(account);
-    }
-    for (const account of accounts.filter(a => a.autoReturnHome)) {
-      try {
-        const directory = path.join(config.dataDir, "bot-cache", account.id);
-        if (await hasHomeRecord(directory)) continue;
-        const remote = await readRemoteAccount(directory);
-        if (!remote) continue;
-        const rows = await prisma.consoleLog.findMany({ where: { minecraftAccountId: account.id, OR: [
-          { type: "USER_COMMAND" }, { type: "SERVER_MESSAGE", message: { contains: "zu deinem Home" } },
-          { type: "SYSTEM", message: { startsWith: "Starte Minecraft-Verbindung zu " } },
-        ] }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 200 });
-        const home = homeFromHistory(rows.reverse(), account.serverHost, account.serverPort);
-        await rememberHome(directory, { host: account.serverHost, port: account.serverPort, edition: account.edition, botId: remote.botId }, home);
-      } catch (err) { logger.warn({ err, accountId: account.id }, "Confirmed home history could not be imported"); }
     }
     // Reconcile controllers after a backend crash while SoulFire stayed alive.
     for (let offset = 0; offset < accounts.length; offset += 8) {

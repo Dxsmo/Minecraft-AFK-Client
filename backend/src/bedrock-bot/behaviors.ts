@@ -204,7 +204,7 @@ export class BehaviorState {
       const interval = Math.max(0.25, this.cfg.autosell_interval_seconds ?? 60) * 1000;
       if (now >= this.nextAutosellAt) {
         this.nextAutosellAt = now + interval;
-        const command = (this.cfg.autosell_command ?? "/sell").trim() || "/sell";
+        const command = "/sell";
         this.inventory.request(now);
         this.sender.command(command);
       }

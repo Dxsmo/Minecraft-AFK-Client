@@ -22,6 +22,7 @@ public final class RuntimeProbe implements ModInitializer {
       if (mc.player == null || mc.level == null || !RAN.compareAndSet(false, true)) return;
       var result = new LinkedHashMap<String, Object>();
       try {
+        result.put("movementTimelineRace", TimelineRace.run());
         SAMPLES.set(0);
         for (int i = 0; i < 20; i++) mc.level.animateTick(0, 64, 0);
         result.put("ambientSamples", SAMPLES.get());

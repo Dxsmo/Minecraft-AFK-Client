@@ -248,14 +248,14 @@ are documented in [SoulFire migration](docs/SOULFIRE-MIGRATION.md).
   until **2 minutes after** the restart, including controller reconnects.
 - Manual commands take priority. `/desmo` reads nine `/sellmulti` categories.
   CleanSpawner finds a reachable spawner and applies the configured keep/drop/
-  sell actions. The client requests **6 chunks** view distance; simulation
+  sell actions. The client requests **2 chunks** view distance; simulation
   distance remains controlled by the server.
 - Clicking an account icon opens the searchable, alphabetically sorted chooser
   containing **1,489 transparent PNGs**, with custom upload still available.
 - Ordinary disconnects retry after 15 seconds. Server login throttles wait
   60–300 seconds; repeated unavailable-service failures back off to 120 seconds.
-  Manual restarts wait five seconds. Optional home recovery returns to the last
-  manually visited, server-confirmed `/home` before AutoSell resumes.
+  Manual restarts wait five seconds. Automatic game commands are limited to
+  `/sell`; reconnects never return home or replay manual commands.
   Real game-state checks feed the existing frozen-client watchdog.
 
 ### Feature visibility

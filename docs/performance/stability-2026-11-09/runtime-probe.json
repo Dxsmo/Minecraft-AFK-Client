@@ -1,0 +1,52 @@
+{
+  "movementTimelineRace": {
+    "error": "",
+    "completed": true,
+    "readerSynchronized": true,
+    "resetSynchronized": true,
+    "writerSynchronized": true
+  },
+  "ambientSamples": 0,
+  "botContext": true,
+  "bedrockTransportCloseReason": "CLOSED_BY_REMOTE_PEER",
+  "skyLoadScheduled": false,
+  "skyResourcesChanged": false,
+  "udpReceiveBufferBefore": 106496,
+  "udpReceiveBufferAfter": 212992,
+  "udpBurstSent": 600,
+  "udpBurstReceived": 185,
+  "bedrockAddresses": [
+    {
+      "input": "example.invalid:19132",
+      "port": 19132,
+      "host": "example.invalid",
+      "nethernet": false
+    },
+    {
+      "input": "127.0.0.1:19133",
+      "port": 19133,
+      "host": "127.0.0.1",
+      "nethernet": false
+    },
+    {
+      "input": "[::1]:19134",
+      "port": 19134,
+      "host": "::1",
+      "nethernet": false
+    },
+    {
+      "input": "nethernet://example.invalid:19135",
+      "port": 25565,
+      "host": "nethernet.viafabricplus.localhost",
+      "nethernet": true
+    }
+  ],
+  "javaPort": 25565,
+  "javaNethernet": false,
+  "worldBufferOverflow": "World packets exceeded the Java initialization buffer (packets=65536, bytes=65536)",
+  "worldBufferPacketLimit": 65536,
+  "worldBufferRejectsOver64MiB": true,
+  "worldBufferDrainedBytes": 65536,
+  "worldBufferAfterDrain": 0,
+  "note": "Local Docker VM retains its default low rmem_max; UDP burst here is not the prior high-buffer test. Movement race result uses the actual transformed upstream class."
+}

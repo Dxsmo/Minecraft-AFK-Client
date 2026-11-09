@@ -20,7 +20,7 @@ public final class NativeAutoSell {
   private static final System.Logger LOG = System.getLogger("afk-service.auto-sell");
   private static final Map<BotConnection, State> STATES = Collections.synchronizedMap(new WeakHashMap<>());
   private static final class State {
-    String config = "", command = "/sell";
+    String config = "";
     boolean enabled, waiting;
     int player, level;
     long next, requested, lastWarning, interval = 2000;
@@ -117,7 +117,6 @@ public final class NativeAutoSell {
         var json = JsonParser.parseString(config).getAsJsonObject();
         state.enabled = json.get("enabled").getAsBoolean();
         state.interval = Math.clamp(json.get("intervalMs").getAsLong(), 250L, 3_600_000L);
-        state.command = json.get("command").getAsString().trim();
       }
     }
     int player = System.identityHashCode(mc.player), level = System.identityHashCode(mc.level);
@@ -127,7 +126,6 @@ public final class NativeAutoSell {
     state.x = mc.player.getX(); state.y = mc.player.getY(); state.z = mc.player.getZ();
     if (moved) { state.next = now + 2000; cancel(bot, state); }
     if (!state.enabled || !SellLease.valid(bot.instanceManager().id(), bot.accountProfileId(), now)
-        || (settings.get("sell-home-pending") != null && settings.get("sell-home-pending").getAsBoolean())
         || number(settings, "sell-manual-until") > now
         || state.recovery.paused(now)
         || (now >= number(settings, "sell-pause-from") && now < number(settings, "sell-pause-until"))) {
@@ -185,11 +183,9 @@ public final class NativeAutoSell {
     boolean stock = false;
     for (int slot = 0; slot < 36; slot++) if (!mc.player.getInventory().getItem(slot).isEmpty()) { stock = true; break; }
     if (!stock) return;
-    if (state.command.isEmpty() || state.command.matches("(?i)^/?(?:[^ :/]+:)?afk(?:\\s.*)?$")) return;
     state.requested = now; state.waiting = true; state.next = now + state.interval;
     state.menus.requested();
-    if (state.command.startsWith("/")) mc.player.connection.sendCommand(state.command.substring(1));
-    else mc.player.connection.sendChat(state.command);
+    mc.player.connection.sendCommand("sell");
   }
   private static void cancel(BotConnection bot, State state) {
     var mc = bot.minecraft();

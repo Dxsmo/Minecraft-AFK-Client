@@ -1,0 +1,7 @@
+{
+  "source": "Unmodified MovementEffectTimeline embedded in SoulFire 2.10.7",
+  "result": "ConcurrentModificationException",
+  "writerSynchronized": false,
+  "readerSynchronized": false,
+  "resetSynchronized": false
+}

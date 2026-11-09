@@ -108,7 +108,6 @@ export class MinecraftClient extends EventEmitter {
     if (this.subprocess && this.status === "ONLINE") {
       this.sendToBot({
         type: "configure",
-        auto_return_home: config.autoReturnHome ?? true,
         crouch_enabled: config.crouchEnabled,
         auto_button: (config.autoButton ?? "OFF").toLowerCase(),
         autosell_enabled: config.autoSellEnabled,
@@ -306,7 +305,6 @@ export class MinecraftClient extends EventEmitter {
       email: this.config.credentialsSecret,
       password: this.config.credentialsPassword,
       cache_dir: cacheDir,
-      auto_return_home: this.config.autoReturnHome ?? true,
       crouch_enabled: this.config.crouchEnabled,
       auto_button: (this.config.autoButton ?? "OFF").toLowerCase(),
       autosell_enabled: this.config.autoSellEnabled,

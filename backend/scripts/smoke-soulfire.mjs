@@ -10,7 +10,8 @@ import os from 'node:os';
 import { once } from 'node:events';
 import { createSoulFireController } from '../dist/soulfire/controller.js';
 import { soulFireRpc } from '../dist/soulfire/rpc.js';
-import { fromBinary, fromJson } from '@bufbuild/protobuf';
+import { fromBinary, fromJson, toBinary } from '@bufbuild/protobuf';
+import { BotUpdateConfigEntryRequestSchema } from '@soulfiremc/sdk/generated/soulfire/bot_pb';
 import { ValueSchema } from '@bufbuild/protobuf/wkt';
 import { BotEventSchema } from '@soulfiremc/sdk/generated/soulfire/bot_live_pb';
 const require = createRequire(import.meta.url);
@@ -49,9 +50,21 @@ assert.ok(sellInterval>=0.25&&sellInterval<=3600);
 assert.ok(Number.isFinite(lateMenuDelay)&&lateMenuDelay>=16000&&lateMenuDelay<=60000);
 const stockSlots=Array.from({length:sellStacks},(_,i)=>(sellStacks<=9?54:27)+i);
 const rpcCalls=[], rpcDurations=[], originalFetch=globalThis.fetch;
-let streamResyncs=0;
+let streamResyncs=0, blockLeaseRenewals=false;
 globalThis.fetch=async(input,init)=>{
   const method=new URL(typeof input==='string'||input instanceof URL?input:input.url).pathname;
+  if (blockLeaseRenewals && method.endsWith('/UpdateBotConfigEntry')) {
+    // Controllers create independent RPC clients. Intercept the actual wire
+    // request, rather than replacing an unrelated client's method.
+    const body=Buffer.from(init.body);
+    const request=fromBinary(BotUpdateConfigEntryRequestSchema,body.subarray(5));
+    if(request.namespace==='afk-service' && request.key==='sell-lease-until') {
+      request.value=fromJson(ValueSchema,Date.now()-1);
+      const payload=toBinary(BotUpdateConfigEntryRequestSchema,request),header=Buffer.alloc(5);
+      header.writeUInt32BE(payload.length,1);
+      init={...init,body:Buffer.concat([header,payload])};
+    }
+  }
   rpcCalls.push(method); const started=Date.now(); const response=await originalFetch(input,init);
   if(!method.endsWith('/WatchBotEvents')) {rpcDurations.push({method:method.split('/').at(-1),ms:Date.now()-started});return response;}
   let pending=Buffer.alloc(0);
@@ -75,6 +88,7 @@ globalThis.fetch=async(input,init)=>{
   }})),{status:response.status,headers:response.headers});
 };
 let teleports=0;
+const teleportAt = new Map();
 const server=mc.createServer({ host:process.env.MINECRAFT_FIXTURE_HOST ? '0.0.0.0' : '127.0.0.1', port:0, version:'1.8.8', 'online-mode':false, motd:'AFK isolated smoke fixture', maxPlayers:clientCount });
 const timers=[];
 const empty={blockId:-1};
@@ -167,7 +181,7 @@ server.on('playerJoin', client=>{
       spawnItem(slot); pickups++;
     },50));
   }
-  timers.push(setTimeout(()=>{client.write('position',{x:2.5,y:64,z:0.5,yaw:0,pitch:30,flags:0});teleports++;},10000));
+  timers.push(setTimeout(()=>{teleportAt.set(client.username, Date.now());client.write('position',{x:2.5,y:64,z:0.5,yaw:0,pitch:30,flags:0});teleports++;},10000));
 });
 const waitFor=async check=>{const deadline=Date.now()+(latePausedMenu?lateMenuDelay+15000:15000);while(!check()){const failure=events.flat().find(event=>event.type==='connection_failed');if(failure)throw new Error(failure.error);assert.ok(Date.now()<deadline,'SoulFire smoke check timed out');await new Promise(resolve=>setTimeout(resolve,100));}};
 try {
@@ -185,9 +199,24 @@ try {
   await new Promise(resolve=>setTimeout(resolve,6500));
   await waitFor(()=>packets.filter(packet=>packet.type==='window_click').length>=3);
   await waitFor(()=>teleports===clientCount);
-  await new Promise(resolve=>setTimeout(resolve,3500));
+  const freshSneakAfter = at => packets.some(packet=>packet.name===names[0] && packet.type==='entity_action' && packet.data.actionId==='start_sneaking' && packet.at>at);
+  let resetAt = Date.now();
+  controllers[0].stdin.write('{"type":"check_crouch"}\n');
+  await waitFor(()=>freshSneakAfter(resetAt));
+  // A server may silently clear its sneak state without a chat message or
+  // player displacement. The bounded native refresh must repair that too.
+  resetAt = Date.now();
+  await waitFor(()=>freshSneakAfter(resetAt));
+  if (process.env.AFK_SMOKE_RESPAWN === '1') {
+    const player = clients.find(client=>client.username===names[0]);
+    resetAt = Date.now();
+    player.write('respawn',{dimension:0,difficulty:1,gamemode:0,levelType:'flat'});
+    player.write('position',{x:2.5,y:64,z:0.5,yaw:0,pitch:30,flags:0});
+    await waitFor(()=>freshSneakAfter(resetAt));
+  }
   const sneak=packets.filter(packet=>packet.name===names[0]&&packet.type==='entity_action');
   assert.ok(sneak.some(packet=>packet.data.actionId==='start_sneaking'));
+  assert.ok(sneak.some(packet=>packet.data.actionId==='start_sneaking' && packet.at > teleportAt.get(names[0])), 'Server must receive a fresh sneak assertion after teleport, even when local shift stayed true');
   assert.ok(!sneak.some(packet=>packet.data.actionId==='stop_sneaking'));
   assert.ok(!packets.some(packet=>packet.name===names[1]&&packet.type==='entity_action'&&packet.data.actionId==='start_sneaking'));
   assert.ok(packets.some(packet=>packet.name===names[0]&&packet.type==='block_place'));
@@ -214,12 +243,12 @@ try {
     configure(true); before=count(); await waitFor(()=>count()>before);
     const rpc=soulFireRpc(),original=rpc.bot.updateBotConfigEntry;
     const ids=JSON.parse(await readFile(path.join(root,'0','soulfire.json'),'utf8'));
-    rpc.bot.updateBotConfigEntry=(request,...options)=>request.key==='sell-lease-until'?Promise.resolve({}):original(request,...options);
+    blockLeaseRenewals=true;
     try {
       await original({...ids,namespace:'afk-service',key:'sell-lease-until',value:fromJson(ValueSchema,Date.now()-1)});
       await new Promise(resolve=>setTimeout(resolve,300)); before=count();
       await new Promise(resolve=>setTimeout(resolve,2500)); assert.equal(count(),before,'Expired website lease did not stop native automation');
-    } finally {rpc.bot.updateBotConfigEntry=original;}
+    } finally {blockLeaseRenewals=false;}
     await waitFor(()=>count()>before);
   }
   if(blockInventory) {
@@ -267,7 +296,7 @@ try {
   const before=events[1].filter(event=>event.type==='heartbeat').length;
   const stopped=once(controllers[0],'close');controllers[0].stdin.write('{"type":"disconnect"}\n');await stopped;
   await waitFor(()=>events[1].filter(event=>event.type==='heartbeat').length>before);
-  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,injectedStreamFailures,pickups,blockInventory,lateBlockedMenu,latePausedMenu,navigationDuringOpen,manualSaleMenu,lateMenuDelay,delayedMenuReplies,blockOnClick,blockedClicks,blockedCommands,ackDelay,maxInFlight,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
+  console.log(JSON.stringify({controllers:clientCount,soakSeconds,droppedItemsPerClient:droppedItems,sellStacks,sellInterval,salePeriodsMs,streamResyncs,droppedInventoryFrames,lostMenuReplies,nativeChecks,injectedStreamFailures,pickups,blockInventory,lateBlockedMenu,latePausedMenu,navigationDuringOpen,manualSaleMenu,lateMenuDelay,delayedMenuReplies,blockOnClick,blockedClicks,blockedCommands,ackDelay,maxInFlight,rpcDurations:rpcDurations.filter(call=>['ClickInventorySlot','SendChat','CloseContainer'].includes(call.method)),extraNodeProcesses:0,javaAutoDetection:!process.env.AFK_SMOKE_VERSION,nativeRightUse:true,nativeLeftMining:true,noUnsneak:true,sneakAfterTeleport:true,sneakAfterSilentReset:true,sneakAfterRespawn:process.env.AFK_SMOKE_RESPAWN==='1',viewDistance:2,confirmedSales:packets.filter(packet=>packet.type==='window_click').length,refilledSlotsConfirmed:refillSales,manualCommandDelivered:true,inventoryRpcCalls,povRenderRpcCalls,independentStop:true},null,2));
 } catch (error) {
   console.error(JSON.stringify({events,packetTypes:packets.map(p=>({name:p.name,type:p.type,data:p.type==='entity_action'?p.data:undefined}))}));
   const rpc=soulFireRpc();

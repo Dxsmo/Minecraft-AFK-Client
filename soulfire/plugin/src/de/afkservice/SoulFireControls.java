@@ -19,8 +19,15 @@ import net.minecraft.network.protocol.game.ServerboundPlayerInputPacket;
 /** Native, persistent input on the bot's own game thread. No POV session,
  * video stream, synthetic release cycles, or network roundtrips per tick. */
 public final class SoulFireControls implements ModInitializer {
-  private static final Map<BotConnection, Integer> CHECKS = Collections.synchronizedMap(new WeakHashMap<>());
+  private static final Map<BotConnection, SneakState> CHECKS = Collections.synchronizedMap(new WeakHashMap<>());
   private static final Map<BotConnection, Boolean> VISUALS = Collections.synchronizedMap(new WeakHashMap<>());
+  private static final class SneakState {
+    int check;
+    int player, level;
+    double x, y, z;
+    long next;
+  }
+
   @Override
   public void onInitialize() {
     SoulFireAPI.registerListener(BotPreTickEvent.class, SoulFireControls::tick);
@@ -47,17 +54,29 @@ public final class SoulFireControls implements ModInitializer {
     boolean crouch = flag(settings, "crouch-enabled");
     bot.controlState().shift(crouch);
     mc.options.keyShift.setDown(crouch);
+    var state = CHECKS.computeIfAbsent(bot, ignored -> new SneakState());
     int check = number(settings, "sneak-check");
-    var previousCheck = CHECKS.put(bot, check);
-    if (crouch && (previousCheck == null || previousCheck != check || !mc.player.isShiftKeyDown())) {
-      // A check must also reassert actual server input when the local control
-      // flag was already true. Never send a release to manufacture an edge.
+    long now = System.nanoTime();
+    int player = System.identityHashCode(mc.player), level = System.identityHashCode(mc.level);
+    boolean moved = state.player != player || state.level != level
+      || Math.abs(mc.player.getX() - state.x) > 2 || Math.abs(mc.player.getY() - state.y) > 2
+      || Math.abs(mc.player.getZ() - state.z) > 2;
+    state.player = player; state.level = level;
+    state.x = mc.player.getX(); state.y = mc.player.getY(); state.z = mc.player.getZ();
+    if (crouch && (moved || state.check != check || now >= state.next || !mc.player.isShiftKeyDown())) {
+      // Native input alone does not re-send legacy START_SNEAKING: VFP has
+      // its own edge cache. Re-arm it on this same game thread, without ever
+      // releasing Shift locally or on the network. The bounded refresh also
+      // repairs silent server resets that have no recognizable chat message.
       var old = mc.player.input.keyPresses;
       var held = new Input(old.forward(), old.backward(), old.left(), old.right(), old.jump(), true, old.sprint());
       mc.player.input.keyPresses = held;
       mc.player.setShiftKeyDown(true);
+      ((SneakReassertion) mc.player).afkService$reassertSneak();
       mc.player.connection.send(new ServerboundPlayerInputPacket(held));
+      state.next = now + 5_000_000_000L;
     }
+    state.check = check;
     var button = text(settings, "auto-button", "OFF");
     boolean left = "LEFT".equals(button), right = "RIGHT".equals(button);
     mc.options.keyAttack.setDown(left);

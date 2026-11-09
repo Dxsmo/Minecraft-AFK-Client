@@ -428,19 +428,16 @@ it("retains SoulFire's specific command failure instead of replacing every rejec
   expect(f.rpc.live.sendChat).toHaveBeenCalledTimes(1);
 });
 
-it("atomically gates native selling before a reconnect to a remembered home and releases only on server confirmation", async () => {
+it("ignores an old home cache and forces the sole automatic command /sell", async () => {
   const f = await fixture();
-  const { rememberHome } = await import("../../src/soulfire/homeRecovery.js");
-  await rememberHome(f.directory, { host: "localhost", port: 25565, edition: "JAVA", botId: "bot" }, "melon");
+  await writePrivateJson(path.join(f.directory, "confirmed-home.json"), { home: "melon", host: "localhost", port: 25565, edition: "JAVA", botId: "bot" });
+  Object.assign(f.config, { auto_return_home: true, recovery_home: "melon", autosell_enabled: true, autosell_command: "/home forbidden" });
   await f.start();
   const entries = f.rpc.instance.replaceInstanceAccounts.mock.calls[0][0].accounts[0].config.find(namespace => namespace.namespace === "afk-service").entries;
-  expect(entries.find(entry => entry.key === "sell-home-pending").value.kind.value).toBe(true);
-  await vi.waitFor(() => expect(f.emit).toHaveBeenCalledWith({ type: "spawn" }));
-  await vi.advanceTimersByTimeAsync(5100);
-  expect(f.rpc.live.sendChat).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: "/home melon" }), expect.anything());
-  await f.frame("chat", { senderName: "", plainText: "[HugoSMP] Du wurdest zu deinem Home melon teleportiert!" });
-  await vi.advanceTimersByTimeAsync(100);
-  expect(f.rpc.bot.updateBotConfigEntry.mock.calls.filter(([request]) => request.key === "sell-home-pending").map(([request]) => request.value.kind.value)).toEqual([false]);
+  expect(entries.find(entry => entry.key === "sell-home-pending").value.kind.value).toBe(false);
+  expect(JSON.parse(entries.find(entry => entry.key === "native-auto-sell").value.kind.value).command).toBe("/sell");
+  await vi.advanceTimersByTimeAsync(130_000);
+  expect(f.rpc.live.sendChat).not.toHaveBeenCalled();
 });
 
 it("waits for delayed session cleanup and the supervisor stop before starting the same account again", async () => {

@@ -84,7 +84,6 @@ export interface MinecraftAccount {
   crouchEnabled: boolean;
   autoButton: "OFF" | "LEFT" | "RIGHT";
   autoReconnect: boolean;
-  autoReturnHome: boolean;
   notes: string;
   autoSellEnabled: boolean;
   autoSellIntervalSeconds: number;

@@ -9,6 +9,8 @@ import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.InsnNode;
+import org.objectweb.asm.tree.VarInsnNode;
 import org.objectweb.asm.tree.JumpInsnNode;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
 import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
@@ -24,6 +26,14 @@ public final class StartupMixinPlugin implements IMixinConfigPlugin {
 
   @Override
   public void postApply(String target, ClassNode node, String mixin, IMixinInfo info) {
+    if (mixin.equals("de.afkservice.mixin.BedrockMovementTimelineMixin")) {
+      synchronizeMovementTimeline(node);
+      return;
+    }
+    if (mixin.equals("de.afkservice.mixin.LegacySneakMixin")) {
+      rearmLegacySneak(node);
+      return;
+    }
     if (mixin.equals("de.afkservice.mixin.CameraFrameMixin")) {
       progressiveCamera(node);
       return;
@@ -59,6 +69,40 @@ public final class StartupMixinPlugin implements IMixinConfigPlugin {
       throw new IllegalStateException("Expected one SoulFire 2.10.7 resource deadline, found " + changed);
     }
     System.out.println("[afk-service] Initial Minecraft resource load timeout: " + seconds + " seconds");
+  }
+
+  /** All external reads/writes use one timeline monitor, including resets.
+   * JVM synchronized methods release it on exceptional exits as well. The
+   * timeline only mutates in-memory movement records; no network waits occur
+   * under this lock. Each bot retains its own timeline and independent lock. */
+  private static void synchronizeMovementTimeline(ClassNode node) {
+    int changed = 0;
+    boolean reader = false, writer = false, reset = false;
+    for (var method : node.methods) {
+      if ((method.access & Opcodes.ACC_PUBLIC) == 0 || (method.access & Opcodes.ACC_STATIC) != 0 || method.name.startsWith("<")) continue;
+      method.access |= Opcodes.ACC_SYNCHRONIZED;
+      changed++;
+      reader |= method.name.equals("pendingPhysicalFrame");
+      writer |= method.name.equals("beginFrame");
+      reset |= method.name.equals("resetHistory");
+    }
+    if (changed < 20 || !reader || !writer || !reset) throw new IllegalStateException("Unexpected pinned Bedrock movement timeline layout");
+  }
+
+  /** Cross-mixin shadows are resolved before VFP introduces this field.
+   * Resolve it only after both mixins have merged, and fail closed if the
+   * checksum-pinned VFP layout ever changes. Never touch actual player input. */
+  private static void rearmLegacySneak(ClassNode node) {
+    var fields = node.fields.stream().filter(field -> field.name.endsWith("viaFabricPlus$lastSneaking") && field.desc.equals("Z")).toList();
+    var methods = node.methods.stream().filter(method -> method.name.equals("afkService$reassertSneak") && method.desc.equals("()V")).toList();
+    if (fields.size() != 1 || methods.size() != 1) throw new IllegalStateException("Expected one pinned ViaFabricPlus sneak cache and reassert hook");
+    var method = methods.getFirst();
+    method.instructions.clear(); method.tryCatchBlocks.clear();
+    method.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+    method.instructions.add(new InsnNode(Opcodes.ICONST_0));
+    method.instructions.add(new FieldInsnNode(Opcodes.PUTFIELD, node.name, fields.getFirst().name, "Z"));
+    method.instructions.add(new InsnNode(Opcodes.RETURN));
+    method.maxStack = 2; method.maxLocals = 1;
   }
 
   /** Use the interactive renderer's existing single-frame exit, including its normal cleanup. */

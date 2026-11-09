@@ -28,7 +28,6 @@ const publicAccountSelect = {
   crouchEnabled: true,
   autoButton: true,
   autoReconnect: true,
-  autoReturnHome: true,
   notes: true,
   autoSellEnabled: true,
   autoSellIntervalSeconds: true,

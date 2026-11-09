@@ -28,10 +28,8 @@ export function AccountSettingsPanel({
   const [serverHost, setServerHost] = useState(account.serverHost);
   const [serverPort, setServerPort] = useState(account.serverPort);
   const [autoReconnect, setAutoReconnect] = useState(account.autoReconnect);
-  const [autoReturnHome, setAutoReturnHome] = useState(account.autoReturnHome ?? true);
   const [autoSellEnabled, setAutoSellEnabled] = useState(account.autoSellEnabled);
   const [autoSellIntervalSeconds, setAutoSellIntervalSeconds] = useState(account.autoSellIntervalSeconds);
-  const [autoSellCommand, setAutoSellCommand] = useState(account.autoSellCommand);
   const [spawnerType, setSpawnerType] = useState(account.spawnerType ?? "");
   const [spawnerActions, setSpawnerActions] = useState<Record<string, SpawnerAction>>(
     account.spawnerActions ?? {},
@@ -58,12 +56,11 @@ export function AccountSettingsPanel({
         crouchEnabled,
         autoButton,
         autoReconnect,
-        autoReturnHome,
         serverHost,
         serverPort,
         autoSellEnabled,
         autoSellIntervalSeconds,
-        autoSellCommand,
+        autoSellCommand: "/sell",
         spawnerType,
         spawnerActions,
       });
@@ -262,8 +259,6 @@ export function AccountSettingsPanel({
               <>
                 <Toggle label="Crouch" description="Continuously sneak while connected." checked={crouchEnabled} onChange={setCrouchEnabled} />
                 <Toggle label="Auto-reconnect" checked={autoReconnect} onChange={setAutoReconnect} />
-                <Toggle label="Nach Reconnect zum zuletzt bestätigten Home" checked={autoReturnHome} onChange={setAutoReturnHome} />
-                <p className="text-xs text-slate-400">Das Ziel wird nach einem erfolgreichen manuellen /home-Befehl gemerkt.</p>
               </>
             )}
 
@@ -300,15 +295,7 @@ export function AccountSettingsPanel({
                   checked={autoSellEnabled}
                   onChange={setAutoSellEnabled}
                 />
-                <div>
-                  <label className="label">Sell command</label>
-                  <input
-                    value={autoSellCommand}
-                    onChange={(e) => setAutoSellCommand(e.target.value)}
-                    placeholder="/sell"
-                    className="input"
-                  />
-                </div>
+                <p className="text-xs text-slate-400">AutoSell verwendet ausschließlich /sell.</p>
                 <Field label="Interval">
                   <NumberInput value={autoSellIntervalSeconds} onChange={setAutoSellIntervalSeconds} min={0.25} max={3600} step={0.05} suffix="s" />
                 </Field>

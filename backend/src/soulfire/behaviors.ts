@@ -1,18 +1,14 @@
 import { isBlockedAfkCommand, AFK_BLOCK_MESSAGE } from "../minecraft/slashCommands.js";
 import { readMultiplier, tooltipText } from "../minecraft/sellMultipliers.js";
 import { parseSellEarning } from "../minecraft/sellEarnings.js";
-import { validHome } from "./homeRecovery.js";
 
 export type BehaviorConfig = { crouch_enabled?: boolean; auto_button?: "off" | "left" | "right"; autosell_enabled?: boolean;
-  autosell_interval_seconds?: number; autosell_command?: string; spawner_type?: string; spawner_drop_items?: string[]; spawner_sell_items?: string[];
-  auto_return_home?: boolean; recovery_home?: string };
+  autosell_interval_seconds?: number; autosell_command?: string; spawner_type?: string; spawner_drop_items?: string[]; spawner_sell_items?: string[] };
 export type GameSlot = { slot: number; itemId: string; count: number; displayName: string; tooltipLines: string[] };
 export type GameInventory = { menuId: string; title: string; containerSlots: number[]; playerSlots: number[]; slots: GameSlot[] };
 export interface GameGateway {
   nativeAutosell?: boolean;
   suspendSell?(durationMs: number, command?: string): Promise<void>;
-  recoveringHome?(pending: boolean): Promise<void>;
-  rememberHome?(home: string): Promise<void>;
   held(config: BehaviorConfig): Promise<void>;
   sneak(): Promise<void>;
   chat(text: string): Promise<void>;
@@ -52,23 +48,14 @@ export class SoulFireBehaviors {
   private inventoryBlockedUntil = 0;
   private lastQueuedChat: { text: string; at: number } | undefined;
   private lastQueueWarning = -Infinity;
-  private home = "";
-  private pendingHome: { name: string; until: number } | undefined;
-  private saveHome: string | undefined;
-  private returningHome = false;
-  private homeDue = 0;
-  private homeAttempts = 0;
-  private lastHomeWarning = -Infinity;
-  private homeGatePending: boolean | undefined;
 
   constructor(config: BehaviorConfig, private game: GameGateway, private emit: BotOutput, private clock = Date.now) {
-    this.cfg = { ...config }; this.home = validHome(config.recovery_home ?? "") ? config.recovery_home! : "";
+    this.cfg = { ...config };
   }
 
   async configure(config: BehaviorConfig): Promise<void> {
     const changed = config.autosell_enabled !== this.cfg.autosell_enabled || config.autosell_interval_seconds !== this.cfg.autosell_interval_seconds || config.autosell_command !== this.cfg.autosell_command;
     this.cfg = { ...config };
-    if (config.auto_return_home === false) { this.returningHome = false; this.homeGatePending = false; }
     await this.game.held(this.cfg);
     if (!config.autosell_enabled) await this.cancelSell();
     if (changed) this.nextSell = this.clock();
@@ -78,9 +65,6 @@ export class SoulFireBehaviors {
     this.online = true;
     this.transition();
     await this.game.held(this.cfg);
-    this.returningHome = this.cfg.auto_return_home !== false && !!this.home;
-    this.homeDue = this.clock() + 5000; this.homeAttempts = 0;
-    await this.game.recoveringHome?.(this.returningHome);
   }
 
   joining(): void { this.online = false; this.resetTasks(); }
@@ -118,13 +102,6 @@ export class SoulFireBehaviors {
   onChat(sender: string | null, message: string): void {
     if (sender && sender.toLowerCase() !== "hugosmp") return;
     if (teleportSuccess(message)) { this.scheduleSneak(); this.nextSneak = 0; }
-    const arrived = plain(message).match(/^(?:\[HugoSMP\]|<HugoSMP>)?\s*Du wurdest zu deinem Home (.+) teleportiert!$/i);
-    if (arrived && this.pendingHome && this.clock() <= this.pendingHome.until && arrived[1] === this.pendingHome.name) {
-      this.home = arrived[1]; this.saveHome = this.home; this.pendingHome = undefined;
-      this.returningHome = false; this.homeGatePending = false;
-      this.readyAt = this.clock() + 2000;
-      this.emit({ type: "behavior_log", message: `Home ${this.home} bestätigt; Automatisierung wird fortgesetzt` });
-    }
     // A hopper can refill the same slot before the next snapshot. A genuine
     // server payout still confirms that pending transfer; unchanged counts
     // alone must not turn a successful sale into a timeout.
@@ -149,18 +126,16 @@ export class SoulFireBehaviors {
   async tick(): Promise<void> {
     const now = this.clock();
     if (!this.online) return;
-    if (this.homeGatePending !== undefined) { await this.game.recoveringHome?.(this.homeGatePending); this.homeGatePending = undefined; }
-    if (this.saveHome !== undefined) { const home = this.saveHome; await this.game.rememberHome?.(home); if (home === this.saveHome) this.saveHome = undefined; }
     // Native selling already handles this rejection on the game thread.
     // Do not turn a server loading lock into a user-command pause: a late
     // native menu would then be protected as "manual" and remain open forever.
-    if (now < this.inventoryBlockedUntil) return;
     while (this.sneakChecks.length && this.sneakChecks[0] <= now) { this.sneakChecks.shift(); this.checkSneak(); }
     if (this.cfg.crouch_enabled && now >= this.nextSneak) {
       try { await this.game.sneak(); this.nextSneak = now + 30 * 60_000; }
       catch { this.nextSneak = now + 1000; } // Checks are intentionally silent.
 
     }
+    if (now < this.inventoryBlockedUntil) return;
     if (this.commands.length) {
       const command = this.commands[0];
       if (!this.creditReady(now)) return;
@@ -175,24 +150,6 @@ export class SoulFireBehaviors {
     if (paused) { await this.cancelSell(); return; }
     if (now < this.readyAt) return;
     if (this.foreground) { await this.tickForeground(now); return; }
-    if (this.returningHome) {
-      if (now < this.homeDue || !this.creditReady(now)) return;
-      this.homeAttempts++;
-      this.homeDue = now + Math.min(120_000, 15_000 * 2 ** Math.min(3, this.homeAttempts - 1));
-      this.pendingHome = { name: this.home, until: now + 120_000 };
-      try {
-        // A single idempotent destination command, never a guessed /homes query
-        // or an immediate replay after an ambiguous transport failure.
-        await this.dispatch(`/home ${this.home}`);
-        this.emit({ type: "behavior_log", message: `Reconnect: Rückkehr zu Home ${this.home} angefordert` });
-      } catch (error) {
-        if (now - this.lastHomeWarning >= 60_000) {
-          this.lastHomeWarning = now;
-          this.emit({ type: "warning", message: `Rückkehr zum bestätigten Home noch nicht möglich: ${error instanceof Error ? error.message : "Verbindungsfehler"}; erneuter Versuch mit Wartezeit` });
-        }
-      }
-      return;
-    }
     if (!this.cfg.autosell_enabled || now < this.manualUntil) return;
     if (!this.game.nativeAutosell) await this.tickSell(now);
   }
@@ -205,6 +162,7 @@ export class SoulFireBehaviors {
   }
 
   private async dispatch(text: string, automatic = false): Promise<void> {
+    if (automatic && text !== "/sell") throw new Error("Automatic commands are limited to /sell");
     if (isBlockedAfkCommand(text)) { this.emit({ type: "warning", message: AFK_BLOCK_MESSAGE }); throw new Error("/afk ist gesperrt"); }
     await this.game.chat(text);
     if (!automatic) this.commandCredits--;
@@ -234,13 +192,6 @@ export class SoulFireBehaviors {
       const now = this.clock();
       this.foreground = { kind: "spawner", deadline: now + 60_000, opened: null, menu: null, previousMenu: inventory.menuId, phase: "drop", pending: null, next: now + 400 };
     } else if (command.text) {
-      const home = command.text.match(/^\/home\s+(\S+)\s*$/i)?.[1];
-      if (home && validHome(home)) this.pendingHome = { name: home, until: this.clock() + 120_000 };
-      // An explicit navigation command takes precedence over the old worksite.
-      if (/^\/(?:home|spawn|hub|lobby|warp|server|tpaccept|tpyes)(?:\s|$)/i.test(command.text)) {
-        this.returningHome = false; await this.game.recoveringHome?.(false);
-        if (!home) { this.home = ""; this.saveHome = ""; }
-      }
       await this.dispatch(command.text);
       this.manualUntil = this.clock() + 5000;
       if (/^\/(?:tpaccept|tpyes)(?:\s|$)/i.test(command.text)) this.scheduleSneak();
@@ -264,7 +215,7 @@ export class SoulFireBehaviors {
       if (now < this.nextSell) return;
       const sale: Sell = { requested: now, opened: null, menu: null, targets: null, pending: null };
       this.sell = sale;
-      try { await this.dispatch((this.cfg.autosell_command || "/sell").trim(), true); }
+      try { await this.dispatch("/sell", true); }
       catch (error) { if (this.sell === sale) { this.sell = null; this.nextSell = this.clock() + 5000; } throw error; }
       if (this.sell !== sale || generation !== this.generation) return;
       sale.requested = this.clock();
