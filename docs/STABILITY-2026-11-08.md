@@ -1,6 +1,6 @@
 # Erneute Account-Prüfung und Menü-/Reconnect-Korrektur
 
-Controls-Version 1.8.1, SoulFire und SDK checksum-/versionsgepinnt auf 2.10.7.
+Controls-Version 1.8.2, SoulFire und SDK checksum-/versionsgepinnt auf 2.10.7.
 
 ## Aktueller produktiver Befund
 
@@ -170,6 +170,28 @@ begrenzter Zulassung, Abbruch, unabhängigen Servern und idempotenter Stopps.
 Der Belastungstest mit 1.8.1 wiederholt Inventarsperren, manuellen Menüs,
 Stream-Abbruch, 36 nachgefüllten Stacks und je 10.000 Items für zwei Clients;
 siehe [Ergebnis](performance/stability-2026-11-08/release-1.8.1-stress.json).
+
+## Nachprüfung am 9. November: visuelle Bedrock-Dauerschleife
+
+Die private Nachtprobe enthält 121.510 Warnungen `Could not load the native
+End sky texture`, jeweils mit `No accepted native world resource context`.
+Die prozessweite Texturverwaltung vergleicht bei jedem Tick den aktuellen
+ResourceManager. Mehrere Bot-Clients wechseln diesen Kontext ständig;
+dadurch werden neue asynchrone Bild-Ladeaufträge gestartet und ihre Fehler
+fortlaufend protokolliert. Dies ist ein nachgewiesener Last-/Logverursacher,
+kein Beweis für die Ursache jedes Netzwerkabbruchs.
+
+`HeadlessSkyTextureMixin` überspringt diesen Anzeige-Tick ausschließlich im
+BotConnection-Kontext. Die eigentliche Ressourcenverwaltung, Paketverarbeitung
+und normalen Client-Ticks werden weiter ausgeführt. Eine spezielle native
+End-Himmelstextur wird für Bots damit nicht mehr geladen.
+
+Der Gegenversuch im echten Fabric-Client ruft den Tick 20-mal auf: ohne
+Korrektur wird ein Ladeauftrag angelegt und der globale Ressourcenkontext
+geändert; mit Korrektur bleiben beide unverändert. Zwei getrennte Offline-Clients
+prüfen weiterhin Verkauf, gehaltene Maus-/Schleichtasten und unabhängigen Stopp.
+Siehe [Gegenversuch und Korrektur](performance/stability-2026-11-08/sky-texture-1.8.2.json).
+Die Test-Erweiterung wird nicht auf dem Pi installiert.
 
 ## Produktiver Rollout
 

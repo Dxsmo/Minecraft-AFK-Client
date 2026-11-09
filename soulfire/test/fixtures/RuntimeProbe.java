@@ -25,6 +25,17 @@ public final class RuntimeProbe implements ModInitializer {
         SAMPLES.set(0);
         for (int i = 0; i < 20; i++) mc.level.animateTick(0, 64, 0);
         result.put("ambientSamples", SAMPLES.get());
+        result.put("botContext", com.soulfiremc.server.bot.BotConnection.currentOptional().isPresent());
+        var sky = Class.forName("com.viaversion.viafabricplus.bedrock.appearance.BedrockEndSkyTexture");
+        sky.getMethod("clear").invoke(null);
+        for (int i = 0; i < 20; i++) sky.getMethod("tick").invoke(null);
+        var pendingSky = sky.getDeclaredField("pending");
+        pendingSky.setAccessible(true);
+        var skyResources = sky.getDeclaredField("resources");
+        skyResources.setAccessible(true);
+        result.put("skyLoadScheduled", pendingSky.get(null) != null);
+        result.put("skyResourcesChanged", skyResources.get(null) != null);
+        sky.getMethod("clear").invoke(null);
         var protocolType = Class.forName("com.viaversion.viaversion.api.protocol.version.ProtocolVersion");
         var bedrock = Class.forName("net.raphimc.viabedrock.api.BedrockProtocolVersion").getField("BEDROCK_LATEST").get(null);
         var parse = Class.forName("com.soulfiremc.server.bot.BotConnectionFactory").getMethod("parseAddress", String.class, protocolType);
