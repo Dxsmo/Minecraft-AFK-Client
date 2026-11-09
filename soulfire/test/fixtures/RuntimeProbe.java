@@ -85,7 +85,7 @@ public final class RuntimeProbe implements ModInitializer {
         var queue = bufferClass.getMethod("queue", packetClass, byte[].class);
         Object buffer = bufferClass.getConstructor().newInstance();
         int count = 0;
-        for (; count < 70_000; count++) {
+        for (; count < 270_000; count++) {
           try { queue.invoke(buffer, packet, new byte[1]); }
           catch (java.lang.reflect.InvocationTargetException error) {
             if (!(error.getCause() instanceof IllegalStateException)) throw error;

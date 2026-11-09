@@ -134,3 +134,34 @@ Die produktive 1.9.2-JAR besteht danach den kombinierten Test mit 36 Stacks,
 Frames, Respawn, Aus-/Einschalten, Lease-Auslauf und Inventarsperre. Manueller
 Verkauf/Navigation und Java-1.21.4-Neustarts bestehen ebenfalls. Es sind keine
 Diagnose-Probes in der produktiven JAR enthalten.
+
+## Konkreter Initialisierungsabbruch (Controls 1.9.3)
+
+1.9.2 wurde um 12:05–12:07 Uhr bei weiter laufendem Backend installiert.
+Backup: `/home/desmo/afk-backups/20261109-120523-before-controls192`.
+Die Konten wurden wieder verbunden. Weitere EOF-Abbrüche blieben sichtbar;
+1.9.2 löst deshalb ebenfalls nicht sämtliche Bedrock-Disconnects.
+
+Um 12:07:22 Uhr erreicht `bedsirogane1124` beim Weltbeitritt die zuvor erhöhte
+Paketanzahlgrenze: 65.536 Pakete bei nur 3.071.461 Nutzdatenbytes. Der
+Decoder beendet daraufhin nachvollziehbar die Verbindung. Das ist ein
+internes RAM-Warteschlangenlimit, kein Datenträgerfehler.
+
+1.9.3 erhöht nur die Anzahl auf höchstens 262.144 Pakete. Die zusätzliche
+Nutzdatenobergrenze von 64 MiB bleibt unverändert; auch die Zahl der
+Warteschlangenobjekte bleibt somit begrenzt. Es werden weder Weltpakete
+verworfen noch Initialisierungsbestätigungen vorgetäuscht. Eine Überlaufmeldung
+enthält zusätzlich die tatsächliche Wartezeit in Millisekunden.
+
+Die echte transformierte Klasse akzeptiert im Test genau 262.144 kleine
+Pakete, verwirft den nächsten Versuch mit aussagekräftigem Fehler, lehnt
+mehr als 64 MiB weiterhin ab und liefert beim Leeren alle 262.144 Nutzbytes
+aus; anschließend ist die Warteschlange leer. Welt-/Bewegungs-Isolation und
+der Minecraft-1.21.4-Neustarttest bestehen mit dem erweiterten Patch.
+Produktive JAR-SHA256:
+`4c899ff265a2b5aa38fd754607bf34b861d313f43c568334128963b1bc245969`.
+
+Die Ursache einer eingehenden RakNet-Schließung ohne Minecraft-Kicknachricht
+ist damit weiterhin nicht bewiesen. Zugriff auf die Minecraft-/Geyser-
+Serverlogs wurde angefragt; in den zugänglichen Clientlogs ist hierfür nur
+`CLOSED_BY_REMOTE_PEER` beziehungsweise EOF sichtbar.
