@@ -29,3 +29,15 @@ it("backs off repeated world-entry timeouts instead of repeating a 90s start/15s
   expect(Array.from({ length: 6 }, () => policy.delay("Connection timed out after authentication (no world entry)", 0)))
     .toEqual([15_000, 15_000, 30_000, 60_000, 120_000, 120_000]);
 });
+
+it.each(["End of stream", "java.io.EOFException: EOF", "Connection timed out", "Read timed out"])("bounds reconnect storms after repeated transport failures: %s", reason => {
+  const policy = new ReconnectPolicy();
+  expect(Array.from({ length: 6 }, () => policy.delay(reason, 0)))
+    .toEqual([15_000, 15_000, 30_000, 60_000, 120_000, 120_000]);
+  expect(policy.delay(reason, 120_000)).toBe(15_000);
+});
+it("allows an already-online server session to expire before retrying", () => {
+  const policy = new ReconnectPolicy();
+  expect(policy.delay("You are already online!", 0)).toBe(60_000);
+  expect(policy.delay("You are already online!", 0)).toBe(120_000);
+});
