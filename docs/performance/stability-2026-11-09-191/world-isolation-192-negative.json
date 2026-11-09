@@ -1,0 +1,9 @@
+{
+  "fieldsInitializedPerClient": 44,
+  "independentMutableObjects": 19,
+  "timelineA": 1,
+  "timelineB": 0,
+  "otherClientClearPreservedState": true,
+  "passed": false,
+  "error": "java.lang.IllegalStateException: Native block lookup lost client 0 world state: null"
+}

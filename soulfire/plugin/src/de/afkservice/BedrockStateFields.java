@@ -19,7 +19,11 @@ public final class BedrockStateFields {
     Map.entry(INPUT + "BedrockRemotePlayerMovement", Set.of("TRACKER", "connection", "level")),
     Map.entry(INPUT + "BedrockVehiclePredictions", Set.of("SESSION")),
     Map.entry(RENDER + "BedrockActorState", Set.of("ACTORS", "generation", "uniqueIdsAvailable")),
-    Map.entry(RENDER + "BedrockProjectileOwners", Set.of("OWNERS", "generation"))
+    Map.entry(RENDER + "BedrockProjectileOwners", Set.of("OWNERS", "generation")),
+    Map.entry("com/viaversion/viafabricplus/bedrock/appearance/BedrockNativeBlocks", Set.of("VIEW", "UPDATES", "level", "generation")),
+    Map.entry("com/viaversion/viafabricplus/bedrock/screen/container/BedrockNativeContainers", Set.of("PRESENTATIONS", "replacing", "ticks")),
+    Map.entry("com/viaversion/viafabricplus/bedrock/screen/container/BedrockNativePlayerInventory", Set.of("owner", "menu", "presentation", "retainedQuery", "retiredMenu", "retiredOpening", "retiredGeneration")),
+    Map.entry("com/viaversion/viafabricplus/bedrock/screen/container/BedrockPlayerInventory", Set.of("admitting"))
   );
   private BedrockStateFields() {}
 }

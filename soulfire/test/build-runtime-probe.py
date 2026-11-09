@@ -27,6 +27,9 @@ if without_timeline:
 without_isolation = "--without-isolation" in args
 if without_isolation:
     args.remove("--without-isolation")
+without_world = "--without-world-isolation" in args
+if without_world:
+    args.remove("--without-world-isolation")
 with tempfile.TemporaryDirectory(prefix="afk-runtime-probe-") as directory:
     root = Path(directory)
     shutil.copytree(source / "plugin", root / "plugin")
@@ -36,6 +39,9 @@ with tempfile.TemporaryDirectory(prefix="afk-runtime-probe-") as directory:
                               ("BedrockIsolationProbe.java", "plugin/src/de/afkservice/BedrockIsolationProbe.java"),
                               ("AmbientProbeMixin.java", "plugin/src/de/afkservice/mixin/AmbientProbeMixin.java")]:
         shutil.copy2(source / "test/fixtures" / name, root / destination)
+    if without_world:
+        marker = root / "plugin/src/de/afkservice/mixin/BedrockClientStateMixin.java"
+        marker.write_text(marker.read_text().replace('  "com.viaversion.viafabricplus.bedrock.appearance.BedrockNativeBlocks",\n', ''))
     fabric = root / "plugin/fabric.mod.json"
     data = json.loads(fabric.read_text())
     data["entrypoints"]["main"].append("de.afkservice.RuntimeProbe")

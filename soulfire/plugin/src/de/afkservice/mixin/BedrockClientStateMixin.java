@@ -14,6 +14,10 @@ import org.spongepowered.asm.mixin.Mixin;
   "com.viaversion.viafabricplus.bedrock.input.BedrockRemotePlayerMovement",
   "com.viaversion.viafabricplus.bedrock.input.BedrockVehiclePredictions",
   "com.viaversion.viafabricplus.bedrock.render.BedrockActorState",
-  "com.viaversion.viafabricplus.bedrock.render.BedrockProjectileOwners"
+  "com.viaversion.viafabricplus.bedrock.render.BedrockProjectileOwners",
+  "com.viaversion.viafabricplus.bedrock.appearance.BedrockNativeBlocks",
+  "com.viaversion.viafabricplus.bedrock.screen.container.BedrockNativeContainers",
+  "com.viaversion.viafabricplus.bedrock.screen.container.BedrockNativePlayerInventory",
+  "com.viaversion.viafabricplus.bedrock.screen.container.BedrockPlayerInventory"
 }, remap = false, priority = 900)
 public abstract class BedrockClientStateMixin {}

@@ -30,7 +30,13 @@ public final class BedrockClientState {
     var bot = BotConnection.currentOptional().orElse(null);
     if (bot == null) return original;
     var storage = bot.metadata().getOrSet(KEY, Storage::new);
-    return storage.cells.computeIfAbsent(field, ignored -> new Cell(fresh(original))).value;
+    var cell = storage.cells.get(field);
+    if (cell != null) return cell.value;
+    // A factory can depend on another per-client field (block updates own
+    // their block view). Construct outside ConcurrentHashMap's bin lock.
+    var created = new Cell(fresh(original));
+    var existing = storage.cells.putIfAbsent(field, created);
+    return existing == null ? created.value : existing.value;
   }
 
   public static void write(Object value, String field) {
@@ -56,12 +62,17 @@ public final class BedrockClientState {
   }
 
   private static Object fresh(Object prototype) {
-    if (prototype == null || prototype instanceof Number || prototype instanceof Boolean || prototype instanceof Enum<?> || prototype.getClass().isRecord()) return prototype;
+    if (prototype == null || prototype instanceof Number || prototype instanceof Boolean || prototype instanceof String || prototype instanceof Enum<?> || prototype.getClass().isRecord()) return prototype;
     if (prototype instanceof WeakReference<?>) return new WeakReference<>(null);
     if (prototype instanceof IdentityHashMap<?, ?>) return new IdentityHashMap<>();
     if (prototype instanceof WeakHashMap<?, ?>) return new WeakHashMap<>();
     if (prototype instanceof Map<?, ?>) return new HashMap<>();
     try {
+      if (prototype.getClass().getName().equals("com.viaversion.viafabricplus.bedrock.appearance.BedrockNativeBlockUpdates")) {
+        var view = prototype.getClass().getDeclaredField("view"); view.setAccessible(true);
+        var constructor = prototype.getClass().getDeclaredConstructor(view.getType()); constructor.setAccessible(true);
+        return constructor.newInstance(read(view.get(prototype), "com/viaversion/viafabricplus/bedrock/appearance/BedrockNativeBlocks#VIEW"));
+      }
       if (prototype.getClass().getName().equals("net.raphimc.viabedrock.api.model.NativeProjectileOwners")) {
         // These two stateless callbacks resolve Minecraft through the current
         // connection. Reuse the callbacks, never the mutable owner maps.

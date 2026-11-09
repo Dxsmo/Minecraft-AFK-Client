@@ -1,0 +1,25 @@
+{
+  "protocol": "1.21.4",
+  "spawnSneak": true,
+  "teleportSneak": true,
+  "respawnSneak": true,
+  "sameAccountRestarts": 2,
+  "noSyntheticRelease": true,
+  "disabledAccountNeverSneaks": true,
+  "repeatedManualCommands": 2,
+  "settings": [
+    {
+      "viewDistance": 6
+    },
+    {
+      "viewDistance": 6
+    },
+    {
+      "viewDistance": 6
+    },
+    {
+      "viewDistance": 6
+    }
+  ],
+  "warnings": []
+}

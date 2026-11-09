@@ -93,8 +93,21 @@ const server=mc.createServer({ host:process.env.MINECRAFT_FIXTURE_HOST ? '0.0.0.
 const timers=[];
 const empty={blockId:-1};
 const saleItems=()=>Array.from({length:63},(_,i)=>stockSlots.includes(i)?{blockId:260,itemCount:64,itemDamage:0}:empty);
+const playerItems=()=>Array.from({length:45},(_,i)=>stockSlots.includes(i+18)?{blockId:260,itemCount:64,itemDamage:0}:empty);
+const openMenus=new WeakMap();
+const openSale=client=>{
+  openMenus.set(client,1);
+  client.write('open_window',{windowId:1,inventoryType:'minecraft:chest',windowTitle:JSON.stringify({text:'Items verkaufen'}),slotCount:27});
+  client.write('window_items',{windowId:1,items:saleItems()});
+};
 server.on('playerJoin', client=>{
-  clients.push(client);
+  clients.push(client); openMenus.set(client,0);
+  client.on('close_window',()=>{
+    openMenus.set(client,0);
+    // Delayed confirmations can arrive after close/respawn. The fixture's
+    // promised refills must update the current player window in that case.
+    if(refillSales)client.write('window_items',{windowId:0,items:playerItems()});
+  });
   client.on('packet',(data,meta)=>{ if(['entity_action','block_place','block_dig','chat','window_click','settings'].includes(meta.name)) packets.push({name:client.username,type:meta.name,data,at:Date.now()}); });
   client.on('window_click',data=>{
     if(blockArmed) {
@@ -114,7 +127,7 @@ server.on('playerJoin', client=>{
     if(refillSales){
       // Refill before the next game tick: the count stays identical, while
       // the server's actual payout confirms the successful transfer.
-      client.write('window_items',{windowId:data.windowId,items:saleItems()});
+      client.write('window_items',openMenus.get(client)===data.windowId?{windowId:data.windowId,items:saleItems()}:{windowId:0,items:playerItems()});
       client.write('chat',{message:JSON.stringify({text:'[HugoSMP] +$121,60 (Basis: $64, Bonus: +$57,60 durch 1.9x)'}),position:0});
     }else client.write('set_slot',{windowId:data.windowId,slot:data.slot,item:empty});
     };
@@ -128,8 +141,7 @@ server.on('playerJoin', client=>{
       if(latePausedMenu) controllers[0].stdin.write(JSON.stringify({type:'pause_autosell',autosell_pause_after_ms:0,autosell_resume_after_ms:lateMenuDelay+1000})+'\n');
       else controllers[0].stdin.write('{"type":"chat","text":"/home fixture"}\n');
       timers.push(setTimeout(()=>{
-        client.write('open_window',{windowId:1,inventoryType:'minecraft:chest',windowTitle:JSON.stringify({text:'Items verkaufen'}),slotCount:27});
-        client.write('window_items',{windowId:1,items:saleItems()});
+        openSale(client);
       },latePausedMenu?lateMenuDelay:4000));
       return;
     }
@@ -141,13 +153,11 @@ server.on('playerJoin', client=>{
         for(let i=0;i<365;i++)client.write('chat',{message:JSON.stringify({text:'[HugoSMP] Du kannst dies nicht tun, weil dein Inventar gerade gespeichert oder geladen wird.'}),position:0});
       },3600));
       timers.push(setTimeout(()=>{
-        client.write('open_window',{windowId:1,inventoryType:'minecraft:chest',windowTitle:JSON.stringify({text:'Items verkaufen'}),slotCount:27});
-        client.write('window_items',{windowId:1,items:saleItems()});
+        openSale(client);
       },4000));
       return;
     }
-    client.write('open_window',{windowId:1,inventoryType:'minecraft:chest',windowTitle:JSON.stringify({text:'Items verkaufen'}),slotCount:27});
-    client.write('window_items',{windowId:1,items:saleItems()});
+    openSale(client);
   }});
   client.write('login',{entityId:client.id,gameMode:0,dimension:0,difficulty:1,maxPlayers:4,levelType:'flat',reducedDebugInfo:false});
   // 1.8 treats a zero-section ground-up chunk as an unload packet. Supply
@@ -212,6 +222,9 @@ try {
     resetAt = Date.now();
     player.write('respawn',{dimension:0,difficulty:1,gamemode:0,levelType:'flat'});
     player.write('position',{x:2.5,y:64,z:0.5,yaw:0,pitch:30,flags:0});
+    // Respawn constructs a new player inventory. Real servers resynchronize
+    // it; GUI-only refills from the previous player are not a valid snapshot.
+    if(refillSales)player.write('window_items',{windowId:0,items:playerItems()});
     await waitFor(()=>freshSneakAfter(resetAt));
   }
   const sneak=packets.filter(packet=>packet.name===names[0]&&packet.type==='entity_action');

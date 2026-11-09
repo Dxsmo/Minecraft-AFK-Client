@@ -87,3 +87,50 @@ nicht als vollständig behoben bewiesen.
 
 [Fixture-Ergebnisse](performance/stability-2026-11-09-191/) enthalten keine
 Produktions-Anmeldedaten oder Microsoft-Sitzungen.
+
+## Fortsetzung: Welt- und Inventarzustand (Controls 1.9.2)
+
+1.9.1 wurde um 11:38–11:41 Uhr mit konsistenter Datensicherung installiert.
+Backup: `/home/desmo/afk-backups/20261109-113854-before-controls191`.
+Die öffentliche authentifizierte Konsole lieferte Verlauf und Heartbeat; alle
+sieben beobachteten Livezeilen hatten dieselbe ID im gespeicherten Verlauf.
+Die ausgelieferten JavaScript-/CSS-Dateien stimmen bytegenau mit dem geprüften
+Build überein. Alle temporären Prüfsitzungen wurden entfernt.
+
+Die Mehrkonten-Abstürze traten im anschließend untersuchten Logfenster nicht
+erneut auf, aber zwei Bedrock-Konten wurden weiter getrennt. 1.9.1 ist deshalb
+keine vollständige Lösung der Bedrock-Disconnects. Einmalige Anmelde-Drosselung
+und „bereits auf dem Server“ werden von nachfolgenden EOF-Abbrüchen getrennt.
+
+Weitere Prüfung zeigt: Auch `BedrockNativeBlocks.VIEW`/`UPDATES` und der
+Weltbesitzer waren global. `synchronizeLevel` leert die Blockdaten beim Wechsel
+auf den Client eines anderen Kontos. Das betrifft auch die Fluidzustände für
+die Bewegung. Native Container-/Spielerinventarbesitzer und deren Zähler waren
+ebenfalls nicht pro Verbindung getrennt.
+
+1.9.2 erweitert die explizite Zuordnung auf 44 Felder. Der Block-Updater erhält
+die eigene Blockansicht derselben Verbindung; seine Konstruktion erfolgt
+außerhalb einer Map-Bin-Sperre. Ein realer Zwei-Client-Test initialisiert
+unterschiedliche Blöcke an derselben Position. Ohne die neue Welt-Trennung
+verliert der echte Bibliotheksaufruf `state()` den Zustand von Client A.
+Mit Trennung bleiben beide Ergebnisse korrekt. Beide Tests verwenden die
+vollständigen SoulFire-Kontexte einschließlich des jeweiligen Minecraft-Clients.
+
+Produktive JAR-SHA256:
+`2a160d9f3c2c27a851fcb8e973cf0eb23b106f4a13d61a3cc26baf8c69b769e6`.
+Dies belegt die weiteren lokalen Fehler und deren Korrektur. Auch daraus folgt
+noch kein Nachweis, dass sämtliche serverseitigen Schließungen verschwinden.
+
+Ein zunächst fehlgeschlagener kombinierter Respawn-/Telemetrieverlust-Test
+wurde separat instrumentiert: Der native Verkäufer war aktiviert, hatte kein
+Fenster offen und tatsächlich keinen Bestand. Ursache war die Testserver-
+Nachfüllung in bereits geschlossene Fenster nach verzögerten Bestätigungen.
+Die Fixture sendet die zugesagten Nachfüllungen jetzt an das jeweils aktuelle
+Fenster und synchronisiert beim Schließen sowie nach Respawn das Spielerinventar. Die Behauptung
+eines Produktionsfehlers wird daraus nicht abgeleitet.
+
+Die produktive 1.9.2-JAR besteht danach den kombinierten Test mit 36 Stacks,
+120 ms Bestätigungsverzögerung, vollständig unterdrückten Inventar-Telemetrie-
+Frames, Respawn, Aus-/Einschalten, Lease-Auslauf und Inventarsperre. Manueller
+Verkauf/Navigation und Java-1.21.4-Neustarts bestehen ebenfalls. Es sind keine
+Diagnose-Probes in der produktiven JAR enthalten.
