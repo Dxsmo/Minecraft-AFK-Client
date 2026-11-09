@@ -18,6 +18,9 @@ if without_ambient:
 without_sky = "--without-sky" in args
 if without_sky:
     args.remove("--without-sky")
+without_udp = "--without-udp" in args
+if without_udp:
+    args.remove("--without-udp")
 with tempfile.TemporaryDirectory(prefix="afk-runtime-probe-") as directory:
     root = Path(directory)
     shutil.copytree(source / "plugin", root / "plugin")
@@ -38,5 +41,7 @@ with tempfile.TemporaryDirectory(prefix="afk-runtime-probe-") as directory:
         data["mixins"].remove("BedrockWorldBufferMixin")
     if without_sky:
         data["mixins"].remove("HeadlessSkyTextureMixin")
+    if without_udp:
+        data["mixins"].remove("BedrockReceiveBufferMixin")
     mixins.write_text(json.dumps(data))
     subprocess.run([sys.executable, str(root / "build-plugin.py"), *args], check=True)

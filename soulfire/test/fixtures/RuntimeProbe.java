@@ -36,6 +36,27 @@ public final class RuntimeProbe implements ModInitializer {
         result.put("skyLoadScheduled", pendingSky.get(null) != null);
         result.put("skyResourcesChanged", skyResources.get(null) != null);
         sky.getMethod("clear").invoke(null);
+        try (var socket = java.nio.channels.DatagramChannel.open();
+             var sender = new java.net.DatagramSocket()) {
+          socket.configureBlocking(false);
+          result.put("udpReceiveBufferBefore", socket.socket().getReceiveBufferSize());
+          var datagram = new io.netty.channel.socket.nio.NioDatagramChannel(socket);
+          Class.forName("org.cloudburstmc.netty.channel.raknet.RakClientChannel")
+              .getConstructor(io.netty.channel.socket.DatagramChannel.class).newInstance(datagram);
+          result.put("udpReceiveBufferAfter", socket.socket().getReceiveBufferSize());
+          socket.bind(new java.net.InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), 0));
+          byte[] payload = new byte[1200];
+          for (int i = 0; i < 600; i++) sender.send(new java.net.DatagramPacket(payload, payload.length, socket.getLocalAddress()));
+          var incoming = java.nio.ByteBuffer.allocate(1500);
+          int received = 0;
+          long deadline = System.nanoTime() + 100_000_000L;
+          while (System.nanoTime() < deadline) {
+            incoming.clear();
+            if (socket.receive(incoming) != null) received++;
+          }
+          result.put("udpBurstSent", 600);
+          result.put("udpBurstReceived", received);
+        }
         var protocolType = Class.forName("com.viaversion.viaversion.api.protocol.version.ProtocolVersion");
         var bedrock = Class.forName("net.raphimc.viabedrock.api.BedrockProtocolVersion").getField("BEDROCK_LATEST").get(null);
         var parse = Class.forName("com.soulfiremc.server.bot.BotConnectionFactory").getMethod("parseAddress", String.class, protocolType);

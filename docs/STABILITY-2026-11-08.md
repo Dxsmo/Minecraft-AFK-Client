@@ -1,6 +1,6 @@
 # Erneute Account-Prüfung und Menü-/Reconnect-Korrektur
 
-Controls-Version 1.8.2, SoulFire und SDK checksum-/versionsgepinnt auf 2.10.7.
+Controls-Version 1.8.3, SoulFire und SDK checksum-/versionsgepinnt auf 2.10.7.
 
 ## Aktueller produktiver Befund
 
@@ -192,6 +192,36 @@ geändert; mit Korrektur bleiben beide unverändert. Zwei getrennte Offline-Clie
 prüfen weiterhin Verkauf, gehaltene Maus-/Schleichtasten und unabhängigen Stopp.
 Siehe [Gegenversuch und Korrektur](performance/stability-2026-11-08/sky-texture-1.8.2.json).
 Die Test-Erweiterung wird nicht auf dem Pi installiert.
+
+## UDP-Verluste im Container
+
+Der Host-Netzwerkzähler meldete keine UDP-Empfangsfehler. Im eigenen
+Netzwerk-Namensraum des SoulFire-Containers standen dagegen um 06:22 Uhr
+14.979 `RcvbufErrors`; um 06:25 Uhr waren es 18.187. Auch einzelne aktive
+UDP-Sockets hatten Tausende Drops. Die Fehler sind damit konkret auf volle
+lokale Empfangspuffer eingegrenzt. Der Pi erlaubt bereits 4 MiB, seine
+Standardpuffer und die von RakNet angelegten Sockets nutzen dies aber nicht.
+
+`BedrockReceiveBufferMixin` fordert im Konstruktor des RakNet-Clients mindestens
+4 MiB für den darunterliegenden UDP-Socket an und protokolliert den tatsächlich
+vom Betriebssystem gewährten Wert. TCP, Sendepuffer und globale Kernel-Einstellungen
+des Pi werden nicht geändert. Größere bereits konfigurierte Puffer bleiben erhalten.
+Der RAM-Bedarf steigt begrenzt pro Bedrock-Verbindung; Linux kann intern den
+konfigurierten Wert für Verwaltungsdaten verdoppeln.
+
+Ein echter Linux-/Fabric-Gegenversuch erstellt den RakClientChannel mit seinem
+NIO-Datagram-Socket: bei 600 Paketen zu je 1.200 Bytes vor dem Auslesen kommen
+mit dem bisherigen Puffer 93, nach der Korrektur alle 600 an. Der tatsächlich
+gemeldete Java-Socketpuffer wächst von 106.496 auf 4.194.304 Bytes. Dieselben
+Clients prüfen weiterhin Verkäufe und unabhängigen Stopp. Siehe
+[Gegenversuch und Korrektur](performance/stability-2026-11-08/udp-buffer-1.8.3.json).
+Dies belegt die Abhilfe für lokale Burst-Verluste; entfernte Server-/Netzfehler
+werden dadurch nicht pauschal als behoben ausgegeben.
+
+Das fertige Produktions-JAR 1.8.2 bestand außerdem den bisherigen Belastungstest:
+588 Klickpakete, 2.467 Pickups, 323 Resynchronisationen, Inventarsperre,
+verzögerte Menüs, manuelles Verkaufsmenü und unabhängiger Stopp;
+siehe [Messung](performance/stability-2026-11-08/release-1.8.2-stress.json).
 
 ## Produktiver Rollout
 

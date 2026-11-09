@@ -16,6 +16,7 @@
     "HeadlessAmbientMixin",
     "HeadlessSkyTextureMixin",
     "BedrockTransportMixin",
+    "BedrockReceiveBufferMixin",
     "ConnectionDiagnosticsMixin",
     "CameraFrameMixin",
     "CameraItemsMixin",

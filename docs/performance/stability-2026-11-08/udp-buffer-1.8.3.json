@@ -1,0 +1,133 @@
+{
+  "runtime": "SoulFire 2.10.7 / Fabric / Java 25 on Linux",
+  "burst": "600 UDP datagrams of 1,200 bytes sent over loopback before draining; real RakClientChannel constructor",
+  "hostReceiveMaximum": 4194304,
+  "negative": {
+    "ambientSamples": 0,
+    "botContext": true,
+    "skyLoadScheduled": false,
+    "skyResourcesChanged": false,
+    "udpReceiveBufferBefore": 106496,
+    "udpReceiveBufferAfter": 106496,
+    "udpBurstSent": 600,
+    "udpBurstReceived": 93,
+    "bedrockAddresses": [
+      {
+        "nethernet": false,
+        "host": "example.invalid",
+        "port": 19132,
+        "input": "example.invalid:19132"
+      },
+      {
+        "nethernet": false,
+        "host": "127.0.0.1",
+        "port": 19133,
+        "input": "127.0.0.1:19133"
+      },
+      {
+        "nethernet": false,
+        "host": "::1",
+        "port": 19134,
+        "input": "[::1]:19134"
+      },
+      {
+        "nethernet": true,
+        "host": "nethernet.viafabricplus.localhost",
+        "port": 25565,
+        "input": "nethernet://example.invalid:19135"
+      }
+    ],
+    "javaPort": 25565,
+    "javaNethernet": false,
+    "worldBufferPacketLimit": 65536,
+    "worldBufferRejectsOver64MiB": true,
+    "worldBufferDrainedBytes": 65536,
+    "worldBufferAfterDrain": 0
+  },
+  "fixed": {
+    "ambientSamples": 0,
+    "botContext": true,
+    "skyLoadScheduled": false,
+    "skyResourcesChanged": false,
+    "udpReceiveBufferBefore": 106496,
+    "udpReceiveBufferAfter": 4194304,
+    "udpBurstSent": 600,
+    "udpBurstReceived": 600,
+    "bedrockAddresses": [
+      {
+        "port": 19132,
+        "input": "example.invalid:19132",
+        "nethernet": false,
+        "host": "example.invalid"
+      },
+      {
+        "port": 19133,
+        "input": "127.0.0.1:19133",
+        "nethernet": false,
+        "host": "127.0.0.1"
+      },
+      {
+        "port": 19134,
+        "input": "[::1]:19134",
+        "nethernet": false,
+        "host": "::1"
+      },
+      {
+        "port": 25565,
+        "input": "nethernet://example.invalid:19135",
+        "nethernet": true,
+        "host": "nethernet.viafabricplus.localhost"
+      }
+    ],
+    "javaPort": 25565,
+    "javaNethernet": false,
+    "worldBufferPacketLimit": 65536,
+    "worldBufferRejectsOver64MiB": true,
+    "worldBufferDrainedBytes": 65536,
+    "worldBufferAfterDrain": 0
+  },
+  "fixedSmoke": {
+    "controllers": 2,
+    "soakSeconds": 0,
+    "droppedItemsPerClient": 0,
+    "sellStacks": 3,
+    "sellInterval": 2,
+    "salePeriodsMs": [],
+    "streamResyncs": 2,
+    "droppedInventoryFrames": 0,
+    "lostMenuReplies": 0,
+    "nativeChecks": false,
+    "injectedStreamFailures": 0,
+    "pickups": 0,
+    "blockInventory": false,
+    "lateBlockedMenu": false,
+    "latePausedMenu": false,
+    "navigationDuringOpen": false,
+    "manualSaleMenu": false,
+    "lateMenuDelay": 20000,
+    "delayedMenuReplies": 0,
+    "blockOnClick": false,
+    "blockedClicks": 0,
+    "blockedCommands": 0,
+    "ackDelay": 0,
+    "maxInFlight": 1,
+    "rpcDurations": [
+      {
+        "method": "SendChat",
+        "ms": 42
+      }
+    ],
+    "extraNodeProcesses": 0,
+    "javaAutoDetection": false,
+    "nativeRightUse": true,
+    "nativeLeftMining": true,
+    "noUnsneak": true,
+    "viewDistance": 2,
+    "confirmedSales": 3,
+    "refilledSlotsConfirmed": false,
+    "manualCommandDelivered": true,
+    "inventoryRpcCalls": 0,
+    "povRenderRpcCalls": 0,
+    "independentStop": true
+  }
+}
