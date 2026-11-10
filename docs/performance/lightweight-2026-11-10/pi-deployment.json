@@ -1,0 +1,59 @@
+{
+  "at": "2026-11-10T08:34:24.372Z",
+  "applicationCommit": "b29011f",
+  "nativeVersion": "1.10.0",
+  "nativeSha256": "134c4e9781e3ae9a82699ebf8aebc7d688a100b00c0e3f9b7f9262e11db33b57",
+  "allServicesHealthy": true,
+  "accountStartSelectionPreserved": true,
+  "configuredAccounts": 31,
+  "intendedActiveAccounts": 13,
+  "accountStatusCounts": {
+    "ONLINE": 13
+  },
+  "requestedViewDistanceCounts": {
+    "4": 13
+  },
+  "crouchingAtPoseCheck": 13,
+  "recentSellingAccounts": 3,
+  "console": {
+    "apiStatus": 200,
+    "historyReceived": true,
+    "historyCount": 2000,
+    "heartbeatReceived": true,
+    "liveEvents": 4,
+    "allLiveEventsHaveIds": true,
+    "matchedStoredIds": 4,
+    "removedCameraStatus": 404,
+    "nonSellCommands": 0,
+    "homeSettingExposed": false
+  },
+  "publicAssets": [
+    {
+      "file": "index.html",
+      "status": 200,
+      "shaMatches": true
+    },
+    {
+      "file": "assets/index-CCOWJmoR.js",
+      "status": 200,
+      "shaMatches": true
+    },
+    {
+      "file": "assets/AccountDetailPage-DsvpGupS.js",
+      "status": 200,
+      "shaMatches": true
+    },
+    {
+      "file": "assets/AccountSettingsPanel-Dh8JoJkz.js",
+      "status": 200,
+      "shaMatches": true
+    },
+    {
+      "file": "assets/index-DXAthvC_.css",
+      "status": 200,
+      "shaMatches": true
+    }
+  ],
+  "bedrockRemoteStreamDisconnectsStillObserved": true,
+  "backup": "/home/desmo/afk-backups/20261110-092754-before-lightweight110"
+}

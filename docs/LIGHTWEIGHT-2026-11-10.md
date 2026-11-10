@@ -1,8 +1,23 @@
 # Sparsamer Betrieb ohne Live-Kamera
 
-Stand: lokal implementiert und geprüft; Einspielen auf dem Pi benötigt eine
-wiederhergestellte SSH-Verbindung. Am 10. November wurde die bisherige Anmeldung
-abgelehnt. Dieses Dokument behauptet keine bereits gemessene Einsparung auf dem Pi.
+Stand: am 10. November 2026 auf dem Pi installiert. Anwendungsquellstand
+`b29011f`, native Erweiterung 1.10.0; Backend, Website und SoulFire sind gesund.
+Backup: `/home/desmo/afk-backups/20261110-092754-before-lightweight110`.
+Die gesamte vorherige Startauswahl der 31 Accounts blieb unverändert.
+
+Bei der Nachkontrolle waren alle 13 vorgesehenen Accounts online; alle 13 hatten
+Sichtweite vier und meldeten Crouchen. Die native Diagnose zeigte bei den Java-
+1.21.4- und Bedrock-1.26.60-Verbindungen eine bekannte Simulationsdistanz von vier.
+Die öffentliche Website lieferte die geprüften neuen Assets bytegleich aus;
+der entfernte Kamera-Endpunkt antwortete lokal mit HTTP 404. Authentifizierter
+Konsolenverlauf, Heartbeat und laufende Ereignisse wurden geprüft. Drei Accounts
+hatten nach dem Update neue Verkaufseingänge.
+
+Weiterhin beobachtet: einzelne Bedrock-Abbrüche mit `End of stream`, anschließend
+Wiederverbinden. Dieses Update ist kein nachgewiesener Fix dieser Abbruchursache.
+Der kurze Vergleich direkt nach einem JVM-Neustart beweist auch keine dauerhafte
+RAM-/CPU-Ersparnis; beim vorherigen Messpunkt waren weniger Accounts online.
+Siehe `performance/lightweight-2026-11-10/pi-deployment.json` für die Nachweise.
 
 ## Änderungen
 
