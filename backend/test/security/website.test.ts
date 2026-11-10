@@ -18,16 +18,6 @@ let sessions: {sessionId:string;csrfToken:string}[] = [];
 const sockets: WebSocket[] = [];
 const statusListeners = new Set<(status:any) => void>(), consoleListeners = new Set<(event:any) => void>();
 const sellListeners = new Set<(event: { id: string; lastSellAt: string }) => void>();
-const cameraViewers = new Map<string, Set<{ frame: (frame: any) => void; error: (error: unknown) => void }>>();
-const cameraSubscribe = vi.fn((id: string, viewer: { frame: (frame: any) => void; error: (error: unknown) => void }) => {
-  if (!cameraViewers.has(id)) cameraViewers.set(id, new Set());
-  cameraViewers.get(id)!.add(viewer);
-  return () => { cameraViewers.get(id)?.delete(viewer); };
-});
-vi.mock("../../src/soulfire/liveCam.js", () => ({ LiveCamStreams: class {
-  subscribe(id: string, viewer: any) { return cameraSubscribe(id, viewer); }
-  async close() {}
-} }));
 vi.mock("../../src/soulfire/versions.js", async importOriginal => {
   const actual = await importOriginal<typeof import("../../src/soulfire/versions.js")>();
   return { ...actual, protocolOptions: vi.fn(async () => [
@@ -68,7 +58,7 @@ beforeEach(async()=>{
   for(const ws of sockets.splice(0)) ws.terminate();
   await prisma.minecraftAccount.deleteMany({where:{id:{in:accounts.map(a=>a.id)}}});
   await prisma.user.deleteMany({where:{id:{in:users.map(u=>u.id)}}});
-  users=[];accounts=[];sessions=[];sendCommand.mockClear();cameraSubscribe.mockClear();cameraViewers.clear();
+  users=[];accounts=[];sessions=[];sendCommand.mockClear();
   for(const role of ["USER","USER","ADMIN"] as const) {
     const user=await prisma.user.create({data:{username:"security-"+randomUUID().slice(0,8),passwordHash,role}});
     users.push(user);sessions.push(await createSession(user.id,{}));
@@ -324,7 +314,7 @@ it("exposes last-sale times only to authorized viewers and rechecks dashboard ac
 });
 
 it("rejects missing, null and foreign origins for cookie-authenticated sockets",async()=>{
-  for(const path of ["/ws/dashboard","/ws/%64ashboard",`/ws/%61ccounts/${accounts[0].id}`,`/ws/accounts/${accounts[0].id}/camera`,`/ws/accounts/${accounts[0].id}/control`])
+  for(const path of ["/ws/dashboard","/ws/%64ashboard",`/ws/%61ccounts/${accounts[0].id}`,`/ws/accounts/${accounts[0].id}/control`])
   for(const origin of [undefined,"null","https://evil.example",config.publicOrigin+".evil.example"]) {
     const ws=new WebSocket(url+path,{headers:{...headers(),...(origin?{origin}:{})}});sockets.push(ws);
     const error=await once(ws,"error");expect(String(error[0])).toContain("403");
@@ -334,77 +324,13 @@ it("rejects missing, null and foreign origins for cookie-authenticated sockets",
 it("rejects unauthenticated, foreign account sockets",async()=>{
   const anonymous=new WebSocket(url+"/ws/dashboard",{headers:{origin:config.publicOrigin}});sockets.push(anonymous);
   expect((await once(anonymous,"close"))[0]).toBe(4401);
-  for(const path of [`/ws/accounts/${accounts[1].id}`, `/ws/accounts/${accounts[1].id}/camera`]) {
+  for(const path of [`/ws/accounts/${accounts[1].id}`]) {
     const connection=await socket(path);expect((await connection.closed)[0]).toBe(4401);expect(connection.messages).toEqual([]);
   }
 });
 
-it("checks camera access before rendering and aborts on revoked permissions, logout and account disconnect", async () => {
-  const foreign=await socket(`/ws/accounts/${accounts[1].id}/camera`);
-  expect((await foreign.closed)[0]).toBe(4401); expect(cameraSubscribe).not.toHaveBeenCalled();
-  const own=await socket(`/ws/accounts/${accounts[0].id}/camera`);
-  await waitFor(()=>cameraSubscribe.mock.calls.length===1);
-  for(const viewer of cameraViewers.get(accounts[0].id)!) viewer.frame({type:"frame",image:"own-frame"});
-  await waitFor(()=>own.messages.some(m=>m.image==="own-frame"));
-  await prisma.userMinecraftAccount.deleteMany({where:{minecraftAccountId:accounts[0].id}});
-  for(const viewer of cameraViewers.get(accounts[0].id)!) viewer.frame({type:"frame",image:"revoked-secret"});
-  expect((await own.closed)[0]).toBe(4401); expect(JSON.stringify(own.messages)).not.toContain("revoked-secret");
-  await waitFor(()=>cameraViewers.get(accounts[0].id)!.size===0);
-  const admin=await socket(`/ws/accounts/${accounts[1].id}/camera`,2);
-  await waitFor(()=>cameraViewers.get(accounts[1].id)?.size===1);
-  await destroySession(sessions[2].sessionId); expect((await admin.closed)[0]).toBe(4401);
-  await waitFor(()=>cameraViewers.get(accounts[1].id)!.size===0);
-  const other=await socket(`/ws/accounts/${accounts[1].id}/camera`,1);
-  await waitFor(()=>cameraViewers.get(accounts[1].id)?.size===1);
-  for(const listener of statusListeners) listener({...snapshot(accounts[1]),status:"OFFLINE"});
-  expect((await other.closed)[0]).toBe(1000);await waitFor(()=>cameraViewers.get(accounts[1].id)!.size===0);
-});
-
-it("never starts a camera for anonymous visitors or offline accounts", async () => {
-  const anonymous=new WebSocket(url+`/ws/accounts/${accounts[0].id}/camera`,{headers:{origin:config.publicOrigin}});sockets.push(anonymous);
-  expect((await once(anonymous,"close"))[0]).toBe(4401);expect(cameraSubscribe).not.toHaveBeenCalled();
-  vi.mocked(clientManager.get).mockImplementationOnce(()=>({getStatus:()=>({...snapshot(accounts[0]),status:"OFFLINE"})}) as any);
-  const offline=await socket(`/ws/accounts/${accounts[0].id}/camera`);
-  expect((await offline.closed)[0]).toBe(1000);expect(cameraSubscribe).not.toHaveBeenCalled();
-  expect(offline.messages).toContainEqual({type:"offline"});
-});
-
-it("bounds camera frames per viewer until the displayed image is acknowledged", async () => {
-  const own = await socket(`/ws/accounts/${accounts[0].id}/camera`);
-  await waitFor(() => cameraSubscribe.mock.calls.length === 1);
-  const publish = (image: string) => { for (const viewer of cameraViewers.get(accounts[0].id)!) viewer.frame({ type: "frame", image, mime: "image/jpeg" }); };
-  publish("first"); await waitFor(() => own.messages.some(message => message.image === "first"));
-  expect(own.messages.at(-1)).toMatchObject({ sequence: 1, mime: "image/jpeg" });
-  for (let i = 0; i < 100; i++) publish("obsolete");
-  await new Promise(resolve => setTimeout(resolve, 40));
-  expect(own.messages.filter(message => message.type === "frame")).toHaveLength(1);
-  own.ws.send(JSON.stringify({ type: "frameAck", sequence: 12345 }));
-  await new Promise(resolve => setTimeout(resolve, 40)); publish("wrong-ack");
-  await new Promise(resolve => setTimeout(resolve, 40));
-  expect(own.messages.filter(message => message.type === "frame")).toHaveLength(1);
-  own.ws.send(JSON.stringify({ type: "frameAck", sequence: 1 }));
-  await new Promise(resolve => setTimeout(resolve, 40)); publish("latest");
-  await waitFor(() => own.messages.some(message => message.image === "latest"));
-  expect(own.messages.at(-1)).toMatchObject({ sequence: 2 });
-});
-
-it("does not let a slow camera viewer block another viewer of the same account", async () => {
-  const slow = await socket(`/ws/accounts/${accounts[0].id}/camera`), fast = await socket(`/ws/accounts/${accounts[0].id}/camera`);
-  await waitFor(() => cameraViewers.get(accounts[0].id)?.size === 2);
-  for (const viewer of cameraViewers.get(accounts[0].id)!) viewer.frame({ type: "frame", image: "first" });
-  await waitFor(() => slow.messages.some(message => message.type === "frame") && fast.messages.some(message => message.type === "frame"));
-  fast.ws.send(JSON.stringify({ type: "frameAck", sequence: 1 }));
-  await new Promise(resolve => setTimeout(resolve, 40));
-  for (const viewer of cameraViewers.get(accounts[0].id)!) viewer.frame({ type: "frame", image: "second" });
-  await waitFor(() => fast.messages.some(message => message.image === "second"));
-  expect(slow.messages.filter(message => message.type === "frame")).toHaveLength(1);
-});
-
-it("rejects malformed camera acknowledgements", async () => {
-  const own = await socket(`/ws/accounts/${accounts[0].id}/camera`);
-  await waitFor(() => cameraSubscribe.mock.calls.length === 1);
-  own.ws.send(JSON.stringify({ type: "frameAck", sequence: "1" }));
-  expect((await own.closed)[0]).toBe(4400);
+it("no longer exposes the removed camera websocket", async () => {
+  expect((await app.inject({ url: `/ws/accounts/${accounts[0].id}/camera`, headers: { ...headers(), origin: config.publicOrigin } })).statusCode).toBe(404);
 });
 
 it("validates WebSocket commands, CSRF and current account access before sending them",async()=>{

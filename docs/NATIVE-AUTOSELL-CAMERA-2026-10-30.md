@@ -1,5 +1,7 @@
 # AutoSell direkt im Client und flüssigere Live Cam
 
+> Historische Messung: Die Live-Kamera wurde am 10. November 2026 entfernt.
+
 
 Nachtrag zu [AutoSell-Fix 1.2.0](AUTOSELL-FIX-2026-10-30.md). SoulFire bleibt auf **2.10.6**, die Controls-Erweiterung ist **1.3.0**. Die Texte der vier Feature-Ankündigungen wurden wie gewünscht angepasst. Die Ankündigungskennung und bereits gelesene Updates bleiben erhalten.
 

@@ -26,6 +26,12 @@ public final class BedrockClientState {
   }
   private BedrockClientState() {}
 
+  /** Release transient world/input data only after connection shutdown. */
+  public static void release(BotConnection bot) {
+    var storage = bot.metadata().getAndRemove(KEY);
+    if (storage != null) storage.cells.clear();
+  }
+
   public static Object read(Object original, String field) {
     var bot = BotConnection.currentOptional().orElse(null);
     if (bot == null) return original;

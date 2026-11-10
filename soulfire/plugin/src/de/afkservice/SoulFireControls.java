@@ -5,6 +5,7 @@ import com.soulfiremc.server.api.SoulFireAPI;
 import com.soulfiremc.server.api.event.bot.BotPreTickEvent;
 import com.soulfiremc.server.api.event.bot.ChatMessageReceiveEvent;
 import com.soulfiremc.server.api.event.bot.BotDisconnectedEvent;
+import com.soulfiremc.server.api.event.bot.BotConnectionRemovedEvent;
 import net.fabricmc.api.ModInitializer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.phys.EntityHitResult;
@@ -26,6 +27,7 @@ public final class SoulFireControls implements ModInitializer {
     int player, level;
     double x, y, z;
     long next;
+    long reportAt;
   }
 
   @Override
@@ -35,6 +37,14 @@ public final class SoulFireControls implements ModInitializer {
         event -> NativeAutoSell.serverMessage(event.connection(), event.parseToPlainText()));
     SoulFireAPI.registerListener(BotDisconnectedEvent.class,
         event -> NativeAutoSell.disconnected(event.connection()));
+    SoulFireAPI.registerListener(BotConnectionRemovedEvent.class,
+        event -> release(event.connection()));
+  }
+
+  public static void release(BotConnection bot) {
+    CHECKS.remove(bot); VISUALS.remove(bot);
+    NativeAutoSell.disconnected(bot);
+    BedrockClientState.release(bot);
   }
 
   private static void tick(BotPreTickEvent event) {
@@ -48,9 +58,11 @@ public final class SoulFireControls implements ModInitializer {
       mc.options.cloudStatus().set(net.minecraft.client.CloudStatus.OFF);
       mc.options.particles().set(net.minecraft.server.level.ParticleStatus.MINIMAL);
       mc.options.entityShadows().set(false);
-      // A tiny advertised radius also limits chunks sent by servers that
-      // honor client send distance. Keep the original six-chunk request.
-      mc.options.renderDistance().set(6);
+      // Match the requested client radius; multiplayer simulation is owned
+      // by the server and cannot be forced through a local client option.
+      var client = bot.settingsSource().stem().settings().get("client-settings");
+      int distance = client == null ? 4 : number(client, "render-distance");
+      mc.options.renderDistance().set(Math.max(2, Math.min(32, distance)));
     }
     NativeAutoSell.tick(bot);
     boolean crouch = flag(settings, "crouch-enabled");
@@ -60,6 +72,16 @@ public final class SoulFireControls implements ModInitializer {
     int check = number(settings, "sneak-check");
     long now = System.nanoTime();
     int player = System.identityHashCode(mc.player), level = System.identityHashCode(mc.level);
+    if (state.level != level) state.reportAt = now + 5_000_000_000L;
+    if (state.reportAt != 0 && now >= state.reportAt) {
+      state.reportAt = 0;
+      // This is the engine's received/translated value, not an assertion about
+      // a server/plugin's actual ticking rules (old protocols synthesize it).
+      System.out.println("[afk-service] Chunk distances (" + bot.accountName()
+          + "): requested view=" + mc.options.renderDistance().get()
+          + ", client-known simulation=" + mc.level.getServerSimulationDistance()
+          + ", protocol=" + bot.currentProtocolVersion().getName());
+    }
     boolean moved = state.player != player || state.level != level
       || Math.abs(mc.player.getX() - state.x) > 2 || Math.abs(mc.player.getY() - state.y) > 2
       || Math.abs(mc.player.getZ() - state.z) > 2;

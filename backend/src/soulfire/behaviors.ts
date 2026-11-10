@@ -120,6 +120,20 @@ export class SoulFireBehaviors {
 
   private resetTasks(): void { this.generation++; this.sell = null; this.foreground = null; }
 
+  /** Native AutoSell has its own game-thread timer. Idle maintenance must not
+   * repeatedly run the backend sale loop for every incoming world snapshot. */
+  needsTick(): boolean {
+    if (!this.online) return false;
+    const now = this.clock();
+    return !!this.commands.length || !!this.foreground || !!this.sell
+      || (!!this.cfg.crouch_enabled && (now >= this.nextSneak || (this.sneakChecks[0] ?? Infinity) <= now))
+      || (!this.game.nativeAutosell && !!this.cfg.autosell_enabled);
+  }
+
+  dispose(): void {
+    this.online = false; this.resetTasks(); this.commands.length = 0; this.sneakChecks.length = 0;
+  }
+
   async tick(): Promise<void> {
     const now = this.clock();
     if (!this.online) return;

@@ -18,6 +18,7 @@ export class SoulFireController extends EventEmitter {
   private receivedConfig = false;
   private finished = false;
   private buffer = "";
+  private wakeSession: (() => void) | undefined;
 
   constructor() {
     super();
@@ -41,12 +42,12 @@ export class SoulFireController extends EventEmitter {
       this.receivedConfig = true;
       void runSoulFire(command as SoulFireConfig, event => {
         if (!this.finished) this.stdout.write(`${JSON.stringify(event)}\n`);
-      }, this.abort, this.queued).then(() => this.finish(0)).catch(error => {
+      }, this.abort, this.queued, wake => { this.wakeSession = wake; }).then(() => this.finish(0)).catch(error => {
         if (!this.finished && !this.abort.signal.aborted) this.stdout.write(`${JSON.stringify({ type: "connection_failed", error: soulFireError(error) })}\n`);
         this.finish(1);
       });
     } else if (command.type === "disconnect") this.kill();
-    else this.queued.push(command);
+    else { this.queued.push(command); this.wakeSession?.(); }
   }
 
   kill(signal: NodeJS.Signals | number = "SIGTERM"): boolean {
@@ -59,6 +60,7 @@ export class SoulFireController extends EventEmitter {
   private finish(code: number | null, signal: NodeJS.Signals | null = null) {
     if (this.finished) return;
     this.finished = true; this.abort.abort(); this.queued.length = 0;
+    this.buffer = ""; this.wakeSession = undefined;
     this.exitCode = code; this.signalCode = signal;
     this.stdin.destroy(); this.stdout.end(); this.stderr.end();
     queueMicrotask(() => { this.emit("exit", code, signal); this.emit("close", code, signal); });

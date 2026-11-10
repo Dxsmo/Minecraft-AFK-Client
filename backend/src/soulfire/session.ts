@@ -19,6 +19,9 @@ import { mergeBotSettings } from "./settings.js";
 import { readRuntimeStatus } from "./runtimeStatus.js";
 import { reserveStartup } from "./startupGate.js";
 import { withAccountLifecycle } from "./accountLifecycle.js";
+import { soulFireHealthChecks } from "./healthChecks.js";
+import { scheduleSession } from "./scheduler.js";
+import { soulFireViewDistance } from "./viewDistance.js";
 
 // Reserved by our pinned native extension, never a Minecraft inventory slot.
 export const SELL_ALL_PLAYER_SLOTS = -1048576;
@@ -35,19 +38,20 @@ function streamRetryDelay(ms: number, signal: AbortSignal): Promise<void> {
 export type SoulFireConfig = BehaviorConfig & { host: string; port: number; username: string; auth_type: string; email?: string; edition: Edition;
   cache_dir: string; account_id?: string; version?: string; autosell_pause_after_ms?: number; autosell_resume_after_ms?: number };
 
-export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort: AbortController, queued: Record<string, any>[]): Promise<void> {
+export async function runSoulFire(config: SoulFireConfig, emit: BotOutput, abort: AbortController, queued: Record<string, any>[], registerWake?: (wake: (() => void) | undefined) => void): Promise<void> {
   return withAccountLifecycle(config.cache_dir, abort.signal, async () => {
     const release = await reserveStartup(`${config.host.toLowerCase()}:${config.port}`, abort.signal);
     try {
       return await runSession(config, event => {
         if (event.type === "spawn" || event.type === "msa_code") release();
         emit(event);
-      }, abort, queued);
+      }, abort, queued, registerWake);
     } finally { release(); }
   });
 }
 
-async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortController, queued: Record<string, any>[]): Promise<void> {
+async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortController, queued: Record<string, any>[], registerWake?: (wake: (() => void) | undefined) => void): Promise<void> {
+  const viewDistance = soulFireViewDistance();
   const rpc = soulFireRpc();
   const signal = abort.signal;
   const call = () => ({ signal, timeoutMs: 15_000 });
@@ -56,7 +60,7 @@ async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortC
   const instanceId = instance.id;
   const address = `${config.host.includes(":") ? `[${config.host}]` : config.host}:${config.port}`;
   await rpc.instance.updateInstanceConfigEntry({ id: instanceId, namespace: "bot", key: "address", value: fromJson(ValueSchema, address) }, call());
-  let info = await rpc.instance.getInstanceInfo({ id: instanceId }, call());
+  let info: Awaited<ReturnType<typeof rpc.instance.getInstanceInfo>> | undefined = await rpc.instance.getInstanceInfo({ id: instanceId }, call());
   if (info.result.case !== "info") throw new Error("SoulFire hat keine Instanz-Konfiguration geliefert");
   const previous = await readRemoteAccount(config.cache_dir);
   let account = previous?.instanceId === instanceId ? info.result.value.config?.accounts.find(a => a.profileId === previous.botId) : undefined;
@@ -109,7 +113,7 @@ async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortC
   const resumeMs = config.autosell_resume_after_ms ?? 0;
   account = { ...account, config: mergeBotSettings(account.config ?? [], {
     "auto-reconnect": { enabled: false }, "auto-respawn": { enabled: false },
-    "client-settings": { "render-distance": 6 }, "bot": { "restore-on-reboot": false, "protocol-version": selected.id },
+    "client-settings": { "render-distance": viewDistance }, "bot": { "restore-on-reboot": false, "protocol-version": selected.id },
     "afk-service": { "auto-button": (config.auto_button || "off").toUpperCase(), "crouch-enabled": !!config.crouch_enabled,
       "native-auto-sell": initialSellConfig, "sell-manual-until": 0, "sell-manual-menu-until": 0, "sell-home-pending": false,
       "sell-pause-from": resumeMs ? configuredAt + (config.autosell_pause_after_ms ?? 0) : 0,
@@ -118,6 +122,10 @@ async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortC
   // One account/one transaction, including all startup settings. Unrelated
   // account settings survive refreshes, retries and native extension updates.
   await rpc.instance.replaceInstanceAccounts({ id: instanceId, accounts: [account] }, call());
+  // The long-lived scheduler needs IDs/settings, never the full startup
+  // catalogue or Microsoft account/token response held in its async frame.
+  info = undefined;
+  account = undefined;
   emit({ type: "behavior_log", message: `Minecraft-Protokoll ausgewählt (${selected.displayName || selected.id}); bereite Client-Steuerung vor…` });
 
   let sneakCheck = 0;
@@ -233,7 +241,7 @@ async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortC
     if (controlUnavailable) { controlUnavailable = false; emit({ type: "control_status", available: true }); }
   };
   let position: { x: number; y: number; z: number; dimension: string } | undefined;
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let unschedule: (() => void) | undefined;
   let schedulerTask: Promise<void> | undefined;
   let stream: Promise<void> | undefined;
   let wakeScheduler: (() => void) | undefined;
@@ -313,7 +321,7 @@ async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortC
       // automation lock. Frequent game-state frames make this poll unnecessary.
       if (!statusBusy && now - heartbeatAt >= 5000 && now - lastStatusAt >= 5000) {
         statusBusy = true; lastStatusAt = now;
-        void rpc.bot.getBotInfo(ids, { signal, timeoutMs: 3000 }).then(async state => {
+        void soulFireHealthChecks.read(rpc, ids, signal).then(async state => {
           if (signal.aborted) return;
           controlRestored();
           startupStatus(state.status?.runtimeState);
@@ -355,7 +363,7 @@ async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortC
         })
           .finally(() => { statusBusy = false; });
       }
-      if (busy) return;
+      if (busy || (!queued.length && !behaviors.needsTick())) return;
       busy = true;
       schedulerTask = (async () => {
         while (queued.length) {
@@ -373,7 +381,7 @@ async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortC
         }
         // Native selling and manual commands must keep working even when
         // inventory telemetry is dropped under load. The client owns the GUI.
-        if (inventory.ready || gateway.nativeAutosell) await behaviors.tick();
+        if ((inventory.ready || gateway.nativeAutosell) && behaviors.needsTick()) await behaviors.tick();
       })().catch(error => {
         if (!signal.aborted && Date.now() - lastWarning >= 30_000) { lastWarning = Date.now(); emit({ type: "warning", message: error instanceof Error ? error.message : "SoulFire-Aktion fehlgeschlagen" }); }
       }).finally(() => {
@@ -383,18 +391,24 @@ async function runSession(config: SoulFireConfig, emit: BotOutput, abort: AbortC
       });
     };
     wakeScheduler = () => { if (busy) eventPending = true; else step(); };
-    timer = setInterval(step, 100);
+    registerWake?.(wakeScheduler);
+    unschedule = scheduleSession(step);
+    step();
     await new Promise<void>(resolve => { if (signal.aborted) resolve(); else signal.addEventListener("abort", () => resolve(), { once: true }); });
   } catch (error) {
     if (!signal.aborted) emit({ type: "connection_failed", error: soulFireError(error) });
     throw error;
   } finally {
-    clearInterval(timer);
+    unschedule?.();
+    registerWake?.(undefined);
     wakeScheduler = undefined;
     abort.abort();
     // Finish in-flight actions before stopping this account or its replacement.
     await schedulerTask;
     await rpc.bot.setBotsDesiredState({ instanceId, botIds: [botId], desiredState: BotDesiredState.STOPPED }, { timeoutMs: 30_000 }).catch(() => undefined);
     await stream?.catch(() => undefined);
+    queued.length = 0;
+    inventory.reset();
+    behaviors.dispose();
   }
 }

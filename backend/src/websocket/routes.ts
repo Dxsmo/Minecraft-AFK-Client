@@ -9,13 +9,12 @@ import { authorizeSocket } from "./authorization.js";
 import { prisma } from "../database/prisma.js";
 import type { SessionContext } from "../auth/session.js";
 import type { ClientStatusSnapshot } from "../minecraft/types.js";
-import { LiveCamStreams } from "../soulfire/liveCam.js";
 
 function batchLiveEvents(socket: import("ws").WebSocket, connection: NonNullable<ReturnType<typeof authorizeSocket>>) {
   let messages: unknown[] = [];
   const latest = new Map<string, unknown>();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  connection.subscribe(() => clearTimeout(timer));
+  connection.subscribe(() => { clearTimeout(timer); messages = []; latest.clear(); });
   return (message: unknown, key?: string) => {
     if (socket.readyState !== socket.OPEN) return;
     if (key) latest.set(key, message);
@@ -34,61 +33,6 @@ function batchLiveEvents(socket: import("ws").WebSocket, connection: NonNullable
 
 /** Cookie-authenticated website sockets require a trusted Origin (app.ts). */
 export default async function registerWebsocketRoutes(app: FastifyInstance) {
-  const cameras = new LiveCamStreams();
-  app.addHook("onClose", () => cameras.close());
-
-  app.get("/ws/accounts/:id/camera", { websocket: true }, (socket, req) => {
-    const { id: accountId } = req.params as { id: string };
-    const connection = authorizeSocket(socket, req, { accountId });
-    if (!connection) return;
-    const { run, send, subscribe } = connection;
-    let sentSequence = 0, pendingSequence = 0, pendingSince = 0;
-    let messages = 0, windowStart = Date.now();
-    socket.on("message", (raw, binary) => {
-      if (Date.now() - windowStart >= 1000) { messages = 0; windowStart = Date.now(); }
-      if (binary || Buffer.byteLength(raw as Buffer) > 256 || ++messages > 30) { socket.close(4429, "Camera input limit"); return; }
-      let message: any;
-      try { message = JSON.parse(raw.toString()); } catch { socket.close(4400, "Invalid camera acknowledgement"); return; }
-      if (message?.type !== "frameAck" || !Number.isSafeInteger(message.sequence) || message.sequence < 1) { socket.close(4400, "Invalid camera acknowledgement"); return; }
-      run(() => { if (message.sequence === pendingSequence) pendingSequence = 0; });
-    });
-    // Complete the current account permission check before touching SoulFire.
-    run(() => {
-      if (socket.readyState !== socket.OPEN) return;
-      if (clientManager.get(accountId)?.getStatus().status !== "ONLINE") {
-        send({ type: "offline" }); socket.close(1000, "Account offline"); return;
-      }
-      send({ type: "loading" });
-      // Drop frames for slow clients instead of queuing renders or image data.
-      let pending = false;
-      subscribe(cameras.subscribe(accountId, {
-        loading: () => run(() => send({ type: "loading" })),
-        frame: frame => {
-          if (pending || socket.readyState !== socket.OPEN) return;
-          pending = true;
-          run(() => {
-            try {
-              // Recheck access even while waiting for a slow viewer's ACK.
-              if (pendingSequence && Date.now() - pendingSince > 15000) { socket.close(1000, "Camera viewer stopped responding"); return; }
-              if (pendingSequence || socket.bufferedAmount > 64 * 1024) return;
-              pendingSequence = ++sentSequence; pendingSince = Date.now(); send({ ...frame, sequence: pendingSequence });
-            }
-            finally { pending = false; }
-          });
-        },
-        error: error => {
-          req.log.warn({ err: error, accountId }, "Live cam stream stopped");
-          run(() => { send({ type: "error", message: "Die Live Cam konnte nicht geladen werden. Bitte erneut versuchen." }); socket.close(1011, "Camera unavailable"); });
-        },
-      }));
-      subscribe(clientManager.onStatusEvent(status => {
-        if (status.id === accountId && status.status !== "ONLINE") {
-          send({ type: "offline" }); socket.close(1000, "Account offline");
-        }
-      }));
-    });
-  });
-
   app.get("/ws/accounts/:id", { websocket: true }, (socket, req) => {
     const { id: accountId } = req.params as { id: string };
     const connection = authorizeSocket(socket, req, { accountId });

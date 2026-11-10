@@ -63,7 +63,7 @@ try{
  assert.ok(!packets.some(p=>p.type==='entity_action'&&p.data.actionId==='stop_sneaking'));
  assert.ok(!packets.some(p=>p.client===1&&p.type==='entity_action'&&p.data.actionId==='start_sneaking'));
  assert.ok(packets.filter(p=>p.type==='settings').length>=4);
- assert.ok(packets.filter(p=>p.type==='settings').every(p=>p.data.viewDistance===6));
+ assert.ok(packets.filter(p=>p.type==='settings').every(p=>p.data.viewDistance===4));
  console.log(JSON.stringify({protocol:'1.21.4',spawnSneak:true,teleportSneak:true,respawnSneak:true,sameAccountRestarts:2,noSyntheticRelease:true,disabledAccountNeverSneaks:true,repeatedManualCommands:2,settings:packets.filter(p=>p.type==='settings').map(p=>({client:p.client,viewDistance:p.data.viewDistance})),warnings:events.flat().filter(e=>e.type==='warning')},null,2));
 }finally{
  controllers.forEach(c=>c.kill());await pause(200);server.close();await rm(root,{recursive:true,force:true});

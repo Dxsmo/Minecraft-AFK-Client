@@ -122,11 +122,25 @@ public final class BedrockIsolationProbe {
       }
       result.put("independentWorldBlockLookups", true);
       result.put("blockUpdaterOwnsSameClientView", true);
+      SoulFireControls.release(bots.getFirst());
+      bots.getFirst().runnableWrapper().runWrapped(() -> {
+        Object replacement = BedrockClientState.read(globalTimeline, owner + "#TIMELINE");
+        if (replacement == values[0][fieldNames.indexOf(owner + "#TIMELINE")])
+          throw new IllegalStateException("Released connection retained its old timeline");
+      });
+      bots.get(1).runnableWrapper().runWrapped(() -> {
+        Object survivor = BedrockClientState.read(globalTimeline, owner + "#TIMELINE");
+        if (survivor != values[1][fieldNames.indexOf(owner + "#TIMELINE")])
+          throw new IllegalStateException("Releasing A cleared active client B");
+      });
+      result.put("releasedTransientState", true);
+      result.put("releasePreservedOtherClient", true);
       result.put("passed", true);
     } catch (Throwable error) {
       result.put("passed", false); result.put("error", error.toString());
       if (error.getCause() != null) result.put("cause", error.getCause().toString());
     }
+    BOTS.clear();
     try { Files.writeString(Path.of("/data/afk-bedrock-isolation.json"), new com.google.gson.Gson().toJson(result)); }
     catch (Exception error) { throw new IllegalStateException(error); }
   }

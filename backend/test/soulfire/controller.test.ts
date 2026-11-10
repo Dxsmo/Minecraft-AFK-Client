@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { once } from "node:events";
+const wake = vi.fn();
 const sessions: Array<{ config: any; emit: (event: any) => void; abort: AbortController; queue: any[]; resolve: () => void; reject: (error: Error) => void }> = [];
-vi.mock("../../src/soulfire/session.js", () => ({ runSoulFire: vi.fn((config, emit, abort, queue) => new Promise<void>((resolve, reject) => {
+vi.mock("../../src/soulfire/session.js", () => ({ runSoulFire: vi.fn((config, emit, abort, queue, registerWake) => new Promise<void>((resolve, reject) => {
+  registerWake(wake);
   sessions.push({ config, emit, abort, queue, resolve, reject });
   abort.signal.addEventListener("abort", resolve, { once: true });
 })) }));
@@ -12,6 +14,7 @@ it("isolates account commands/events and cancellation while sharing the Node run
   one.stdout.on("data", data=>outputOne.push(data.toString())); two.stdout.on("data", data=>outputTwo.push(data.toString()));
   one.stdin.write('{"account_id":"one"}\n'); two.stdin.write('{"account_id":"two"}\n');
   one.stdin.write('{"type":"chat","text":"/home private"}\n');
+  expect(wake).toHaveBeenCalled();
   expect(sessions[0].queue).toEqual([{ type:"chat",text:"/home private" }]); expect(sessions[1].queue).toEqual([]);
   sessions[1].emit({type:"spawn"}); expect(outputOne).toEqual([]); expect(outputTwo).toEqual(['{"type":"spawn"}\n']);
   const closed=once(one,"close"); one.stdin.write('{"type":"disconnect"}\n'); await closed;

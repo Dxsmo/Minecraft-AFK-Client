@@ -234,10 +234,6 @@ are documented in [SoulFire migration](docs/SOULFIRE-MIGRATION.md).
   **1.26.51**; other Bedrock versions require a compatible engine release.
 - Java and Bedrock accounts are added and authenticated separately. Adding one
   edition never discovers, links or creates an account for the other edition.
-- The **Live Cam** tab between Console and Einstellungen shows the selected
-  account's real SoulFire POV. It loads only while the tab is open, the account
-  is online and the browser document is visible. Multiple viewers share one
-  stream per account; leaving the view cancels it when the last viewer leaves.
 - Crouch remains held. Silent checks after home/TPA/position transitions run
   after 3 seconds; periodic and restart checks remain. Checks never toggle off.
 - Auto button Off/Left/Right holds native Minecraft input without an open video
@@ -248,7 +244,7 @@ are documented in [SoulFire migration](docs/SOULFIRE-MIGRATION.md).
   until **2 minutes after** the restart, including controller reconnects.
 - Manual commands take priority. `/desmo` reads nine `/sellmulti` categories.
   CleanSpawner finds a reachable spawner and applies the configured keep/drop/
-  sell actions. The client requests **2 chunks** view distance; simulation
+  sell actions. The client requests **4 chunks** view distance (operator configurable from 2–32); simulation
   distance remains controlled by the server.
 - Clicking an account icon opens the searchable, alphabetically sorted chooser
   containing **1,489 transparent PNGs**, with custom upload still available.

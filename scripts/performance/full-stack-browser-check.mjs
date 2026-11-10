@@ -42,9 +42,8 @@ try {
   assert.equal((await readAccount()).autoButton, 'RIGHT');
   checks.push('real login, 100 dashboard accounts, virtual console and all account settings categories');
   checks.push('held button saved through real API');
-  await page.getByRole('button', { name: 'Live Cam', exact: true }).click();
-  await page.getByText('Der Account ist offline. Die Live Cam startet, sobald er verbunden ist.').waitFor();
-  checks.push('offline Live Cam does not open a render stream');
+  if (await page.getByRole('button', { name: 'Live Cam', exact: true }).count()) throw Error('Removed camera tab remains');
+  checks.push('camera tab removed');
   await navigate('/dashboard'); await page.locator('.account-card').nth(99).waitFor();
   await page.getByRole('button', { name: 'Account-Bild auswählen', exact: true }).first().click();
   await page.getByRole('searchbox', { name: 'Items suchen' }).fill('diamond_sword');

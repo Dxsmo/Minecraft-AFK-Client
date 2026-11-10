@@ -1,0 +1,12 @@
+{
+  "fieldsInitializedPerClient": 44,
+  "independentMutableObjects": 19,
+  "timelineA": 1,
+  "timelineB": 0,
+  "otherClientClearPreservedState": true,
+  "independentWorldBlockLookups": true,
+  "blockUpdaterOwnsSameClientView": true,
+  "releasedTransientState": true,
+  "releasePreservedOtherClient": true,
+  "passed": true
+}

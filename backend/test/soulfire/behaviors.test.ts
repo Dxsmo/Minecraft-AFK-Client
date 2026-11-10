@@ -342,3 +342,17 @@ describe("recovery without command bursts", () => {
     expect(f.game.chat).not.toHaveBeenCalled();
   });
 });
+
+it("sleeps between native maintenance deadlines, wakes for manual commands and releases stopped tasks", async () => {
+  const f = fixture({ crouch_enabled: true, autosell_enabled: true }); f.game.nativeAutosell = true;
+  await f.engine.spawned(); expect(f.engine.needsTick()).toBe(true);
+  await f.engine.tick(); expect(f.engine.needsTick()).toBe(false);
+  f.advance(3000); expect(f.engine.needsTick()).toBe(true); await f.engine.tick();
+  expect(f.engine.needsTick()).toBe(false);
+  f.engine.enqueue("chat", "/fixture manual"); expect(f.engine.needsTick()).toBe(true);
+  await f.engine.tick(); expect(f.game.chat).toHaveBeenCalledWith("/fixture manual");
+  expect(f.engine.needsTick()).toBe(false);
+  f.engine.enqueue("chat", "/fixture abandoned"); f.engine.dispose();
+  expect(f.engine.needsTick()).toBe(false); await f.engine.tick();
+  expect(f.game.chat).toHaveBeenCalledTimes(1);
+});

@@ -138,7 +138,7 @@ export function useAccountConsole(accountId: string | undefined, renderLogs = tr
         } else if (msg.type === "console" && msg.event) {
           const e = msg.event;
           pending.push({ id: e.id ?? `${e.timestamp}-${Math.random()}`, minecraftAccountId: e.minecraftAccountId, type: e.type, message: e.message, createdAt: e.timestamp });
-          // Keep the newest complete buffer while a camera/settings/hidden
+          // Keep the newest complete buffer while a settings/hidden
           // tab does not need console renders; bound the temporary queue too.
           if (pending.length > MAX_ACCOUNT_CONSOLE_LOGS * 2) pending = pending.slice(-MAX_ACCOUNT_CONSOLE_LOGS);
           if (!flushTimer && renderLogsRef.current && !document.hidden) flushTimer = setTimeout(flush, 50);

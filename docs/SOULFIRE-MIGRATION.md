@@ -68,15 +68,7 @@ metadata columns.
 
 ## Feature mapping
 
-- Live Cam uses SoulFire's native POV stream for the selected account only:
-  640×360 PNG frames, 48-block view distance and a minimum 400 ms interval
-  between renders. It starts after website account authorization and shares one
-  upstream stream across that account's viewers. Closing the tab/socket stops
-  rendering when the last viewer leaves. Hidden browser documents disconnect;
-  reconnecting/offline bots wait until online. Slow clients drop frames instead
-  of queuing images, and current account permissions are checked before delivery.
-  The camera component is a separate frontend chunk loaded on demand. Native
-  renderer caches can remain allocated in the shared JVM after rendering stops.
+- The live camera has been removed from the website, backend and native extension.
 - Java and Bedrock share the same scheduler for commands, AutoSell, `/desmo`
   multiplier tooltips and CleanSpawner. Clicks carry SoulFire's current menu
   identity. Inventory/menu/tooltip data comes from `watchBotEvents` with

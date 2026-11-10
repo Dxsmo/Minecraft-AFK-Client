@@ -84,44 +84,7 @@ try {
   assert.deepEqual(commands, ['/sellmulti', '/homes', '/tpaccept']);
   assert.ok(sneakActions.includes('start_sneaking'), 'Configured sneak must reach the server');
   assert.ok(!sneakActions.includes('stop_sneaking'), 'Checks and foreground tasks must never release held sneak');
-  process.env.DATABASE_URL ??= 'file:/tmp/audit-camera.db';
-  process.env.SESSION_SECRET ??= 'isolated-native-camera-fixture';
-  const { LiveCamStreams, LIVE_CAM_OPTIONS } = await import('../dist/soulfire/liveCam.js');
-  const ids = JSON.parse(await readFile(path.join(root, 'soulfire.json'), 'utf8'));
-  let upstreams = 0, cameraClosed = false;
-  const cameraErrors = [], frames = [[], []];
-  const camera = new LiveCamStreams(async function* (_id, signal) {
-    upstreams++;
-    try { yield* soulFireRpc().bot.watchBotPov({ ...ids, ...LIVE_CAM_OPTIONS }, { signal, timeoutMs: 0 }); }
-    finally { cameraClosed = true; }
-  });
-  assert.equal(upstreams, 0);
-  const viewers = frames.map(target => ({ frame: frame => target.push(frame), error: error => cameraErrors.push(String(error)) }));
-  const stopFirst = camera.subscribe(ids.botId, viewers[0]);
-  const stopSecond = camera.subscribe(ids.botId, viewers[1]);
-  try {
-    await wait(() => { assert.deepEqual(cameraErrors, []); return frames.every(target => target.length >= 2); });
-    assert.equal(upstreams, 1);
-    const jpeg = Buffer.from(frames[0][0].image, 'base64');
-    assert.equal(frames[0][0].mime, 'image/jpeg');
-    assert.deepEqual([...jpeg.subarray(0, 2)], [255,216]);
-    const header = jpeg.indexOf(Buffer.from([255,192])); assert.ok(header > 0, 'Missing JPEG baseline frame header');
-    assert.equal(jpeg.readUInt16BE(header + 7), 480); assert.equal(jpeg.readUInt16BE(header + 5), 270);
-    const beforeWorldChange = frames.map(target => target.length);
-    clients[0].write('respawn', { dimension: -1, difficulty: 1, gamemode: 0, levelType: 'flat' });
-    await new Promise(resolve => setTimeout(resolve, 150));
-    clients[0].write('respawn', { dimension: 0, difficulty: 1, gamemode: 0, levelType: 'flat' });
-    const freshChunk = Buffer.alloc(8192 + 2048 + 2048 + 256); freshChunk.fill(255, 10240, 12288);
-    clients[0].write('map_chunk', { x: 0, z: 0, groundUp: true, bitMap: 1, chunkData: freshChunk });
-    for (let x = 0; x < 5; x++) for (let z = 0; z < 5; z++) clients[0].write('block_change', { location: { x, y: 63, z }, type: 16 });
-    clients[0].write('position', { x: 0.5, y: 64, z: 0.5, yaw: 0, pitch: 30, flags: 0 });
-    await wait(() => frames.every((target, i) => target.length >= beforeWorldChange[i] + 2));
-    stopFirst(); assert.equal(cameraClosed, false);
-    stopSecond(); await wait(() => cameraClosed);
-    assert.equal(upstreams, 1);
-  } finally { stopFirst(); stopSecond(); await camera.close(); }
   console.log(JSON.stringify({
-    nativeCamera: { width: 480, height: 270, sharedUpstreams: upstreams, viewerFrames: frames.map(target => target.length), stoppedAfterLastViewer: cameraClosed, survivedWorldChange: true },
     sneakPreserved: true, nativeMultipliers: multipliers.length, nativeSpawnerDrop: true, nativeSpawnerSell: true,
     retainedStackPerItem: true, retainedForeignItems: true, manualCommandOrder: true, warnings: 0 }, null, 2));
 } catch (error) {

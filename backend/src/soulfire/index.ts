@@ -4,6 +4,7 @@ import { runSoulFire, type SoulFireConfig } from "./session.js";
 const emit = (event: Record<string, unknown>) => process.stdout.write(`${JSON.stringify(event)}\n`);
 const abort = new AbortController();
 const queued: Record<string, any>[] = [];
+let wakeSession: (() => void) | undefined;
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 let configReceived = false;
 let resolveConfig: (config: SoulFireConfig) => void;
@@ -14,7 +15,7 @@ input.on("line", line => {
     const command = JSON.parse(line);
     if (!configReceived) { configReceived = true; resolveConfig(command); }
     else if (command.type === "disconnect") abort.abort();
-    else queued.push(command);
+    else { queued.push(command); wakeSession?.(); }
   } catch { if (!configReceived) rejectConfig(new Error("Ungültige Client-Konfiguration")); }
 });
 input.on("close", () => { if (!configReceived) rejectConfig(new Error("Client-Konfiguration fehlt")); abort.abort(); });
@@ -22,7 +23,7 @@ process.on("SIGTERM", () => abort.abort());
 process.on("SIGINT", () => abort.abort());
 
 
-void configPromise.then(config => runSoulFire(config, emit, abort, queued)).catch(error => {
+void configPromise.then(config => runSoulFire(config, emit, abort, queued, wake => { wakeSession = wake; })).catch(error => {
   if (!abort.signal.aborted) emit({ type: "connection_failed", error: soulFireError(error) });
   process.exitCode = 1;
 }).finally(() => { input.close(); process.exit(); });

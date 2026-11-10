@@ -1,5 +1,7 @@
 # Kamera: Datenmenge und Spielreaktionszeiten
 
+> Historische Messung: Die Live-Kamera wurde am 10. November 2026 entfernt.
+
 Die gemeldeten 600 ms im laufenden Betrieb wurden nicht auf dem Produktions-Pi oder am Internetanschluss des Nutzers gemessen. Für die Diagnose müssen Internet-Ping, Minecraft-Keepalive-Ping und Reaktionszeit des Client-Spielthreads unterschieden werden. Im lokalen Test wurden Netzwerk-Keepalives schnell beantwortet, während Spielaktionen bei knapper CPU bereits mehrere hundert Millisekunden warteten. Deshalb sind beide Messungen enthalten.
 
 ## Gefundene Belastungen und Änderung
