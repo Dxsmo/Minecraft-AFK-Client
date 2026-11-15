@@ -22,10 +22,13 @@ Manual commands are never replayed automatically after reconnect.
 
 The new engines persist private Microsoft caches below
 `backend/data/bot-cache/<account-id>/` (inside `backend_data` with Docker).
-Existing compatible Prismarine caches can be reused there. Tokens stored only in
-the retired engine's volume, Azalea caches and revoked/incompatible caches do not
-automatically become Prismarine sessions: those accounts need one new device-code
-sign-in. Old files/volumes are left intact. Each edition authenticates independently.
+Existing compatible Prismarine caches can be reused there. A controlled, one-time
+import can also convert a private legacy Live token cache. Preserve its issuing
+OAuth client: optional `microsoft-client.json` metadata contains only `clientId`;
+the engines recognize Nintendo, Java/Win32 (Java only), and Android (Bedrock only).
+Never relabel a refresh token as a different app. Legacy files are not imported
+automatically by the engines. Revoked or incompatible tokens still require a new
+device-code sign-in. Old files/volumes are left intact. Each edition authenticates independently.
 Do not copy tokens between editions or publish cache files.
 
 New complete backups archive the backend data directory, including SQLite and

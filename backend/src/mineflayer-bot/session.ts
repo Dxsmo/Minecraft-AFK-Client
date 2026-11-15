@@ -4,6 +4,7 @@ import { AutomationBehaviors, type BotOutput } from "../minecraft/behaviors.js";
 import type { Config, Command } from "../bedrock-bot/protocol.js";
 import { MineflayerGateway } from "./gateway.js";
 import { selectJavaVersion } from "../minecraft/versions.js";
+import { microsoftClientOptions } from "../minecraft/microsoftClient.js";
 
 export interface MineflayerSession { bot: Bot; command(command: Command): void; stop(): void }
 
@@ -15,6 +16,7 @@ export function startMineflayer(config: Config, emit: BotOutput, ended: (code: n
     username: microsoft ? config.email || config.username : config.username,
     auth: microsoft ? "microsoft" : "offline", version: selectJavaVersion(config.version),
     profilesFolder: config.cache_dir, password: microsoft ? config.password || undefined : undefined,
+    ...(microsoft ? microsoftClientOptions(config.cache_dir, "JAVA") : {}),
     viewDistance: "short", clientSettings: { viewDistance: 4 }, hideErrors: true, checkTimeoutInterval: 60_000,
     // Drop excessive physics catch-up after host contention instead of
     // sending a sudden movement burst that triggers server anti-cheat.

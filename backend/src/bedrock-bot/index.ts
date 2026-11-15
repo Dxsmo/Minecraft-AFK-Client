@@ -1,6 +1,6 @@
 //! Bedrock Minecraft bot subprocess (one process == one Bedrock account).
 //!
-//! Driven entirely over stdio with the same NDJSON protocol as the Azalea Java
+//! Driven entirely over stdio with the same NDJSON protocol as the Mineflayer Java
 //! bot (see ./protocol.ts). The Node backend spawns this via
 //! `node dist/bedrock-bot/index.js` when an account's edition is BEDROCK, and
 //! owns the reconnect policy — this process just exits when the connection ends.
@@ -10,6 +10,7 @@
 //! set with bounded inventory requests and world interactions.
 
 import { mkdirSync } from "node:fs";
+import { microsoftClientOptions } from "../minecraft/microsoftClient.js";
 import readline from "node:readline";
 import { createClient } from "bedrock-protocol";
 
@@ -108,7 +109,7 @@ async function main(): Promise<void> {
       // Discovery already completed over a separate, closed UDP socket.
       // Keep the native peer solely for the actual connection.
       skipPing: true,
-      ...(isMicrosoft ? { profilesFolder: config.cache_dir } : {}),
+      ...(isMicrosoft ? { profilesFolder: config.cache_dir, ...microsoftClientOptions(config.cache_dir, "BEDROCK") } : {}),
       connectTimeout: CONNECT_TIMEOUT_MS,
       // Default library logs are plain stdout and get discarded by our NDJSON
       // reader. Forward only its connection messages, never token/debug dumps.
