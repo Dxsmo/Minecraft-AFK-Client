@@ -1,6 +1,3 @@
-import path from "node:path";
-import { config } from "../config/config.js";
-import { stopRemoteAccount } from "../soulfire/lifecycle.js";
 import { MinecraftClient } from "./MinecraftClient.js";
 import type { ClientRuntimeConfig, ClientStatusSnapshot, ConsoleEvent } from "./types.js";
 import { prisma } from "../database/prisma.js";
@@ -81,12 +78,6 @@ export class ClientManager {
     await prisma.minecraftAccount.updateMany({ where: { status: { not: "OFFLINE" } }, data: { status: "OFFLINE" } });
     for (const account of accounts) {
       this.register(account);
-    }
-    // Reconcile controllers after a backend crash while SoulFire stayed alive.
-    for (let offset = 0; offset < accounts.length; offset += 8) {
-      await Promise.all(accounts.slice(offset, offset + 8).map(account =>
-        stopRemoteAccount(path.join(config.dataDir, "bot-cache", account.id))
-          .catch(err => logger.warn({ err, accountId: account.id }, "SoulFire startup reconciliation failed"))));
     }
     const toResume = accounts.filter((a) => a.autoStart);
     for (const account of toResume) {

@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 
 /**
- * Fake SoulFire adapter subprocess: an EventEmitter with the child-process surface
+ * Fake isolated engine subprocess: an EventEmitter with the child-process surface
  * MinecraftClient uses (stdin.write, stdout/stderr streams, kill, exit). Tests
  * drive the real state machine by pushing NDJSON lines to stdout and emitting
  * `exit`, without spawning a real process or opening a network connection.
@@ -42,8 +42,8 @@ class FakeChild extends EventEmitter {
 
 const children: FakeChild[] = [];
 
-vi.mock("../../src/soulfire/controller.js", () => ({
-  createSoulFireController: vi.fn(() => {
+vi.mock("../../src/minecraft/botProcess.js", () => ({
+  createBotProcess: vi.fn(() => {
     const child = new FakeChild(); children.push(child); return child;
   }),
 }));
@@ -88,7 +88,7 @@ function lastChild(): FakeChild {
   return children[children.length - 1];
 }
 
-describe("MinecraftClient (SoulFire adapter) state machine", () => {
+describe("MinecraftClient (isolated engine) state machine", () => {
   beforeEach(() => {
     children.length = 0;
     active.length = 0;
@@ -137,6 +137,8 @@ describe("MinecraftClient (SoulFire adapter) state machine", () => {
     client.updateConfig(baseConfig({ edition, autoButton: "LEFT" }));
     expect(messages(lastChild()).at(-1)).toMatchObject({ type: "configure", auto_button: "left" });
     client.disconnect(); client.connect();
+    // Replacement waits for the retired process to release its socket/cache.
+    await vi.waitFor(() => expect(children).toHaveLength(2), { timeout: 2000 });
     expect(messages(lastChild())[0]).toMatchObject({ auto_button: "left" });
   });
 
@@ -242,7 +244,7 @@ describe("MinecraftClient (SoulFire adapter) state machine", () => {
     expect(config).not.toHaveProperty("tpauto_enabled");
   });
 
-  it.each(["JAVA", "BEDROCK"] as const)("launches %s through the common SoulFire adapter", edition => {
+  it.each(["JAVA", "BEDROCK"] as const)("launches %s through the common isolated engine", edition => {
     const client = makeClient({ edition });
     client.connect();
     const cfg = JSON.parse(String(lastChild().stdin.write.mock.calls[0][0]));

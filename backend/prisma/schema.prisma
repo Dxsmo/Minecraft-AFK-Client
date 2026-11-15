@@ -115,7 +115,7 @@ model Session {
 model MinecraftAccount {
   id                         String       @id @default(cuid())
   name                       String       @unique
-  // Java and Bedrock are driven by the shared SoulFire service.
+  // Java uses Mineflayer and Bedrock uses bedrock-protocol.
   edition                    String       @default("JAVA")
   // Optional website-only display label. Unlike `name` (which doubles as the
   // offline join username and therefore must be a valid Minecraft name), this

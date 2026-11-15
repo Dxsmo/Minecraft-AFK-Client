@@ -26,13 +26,13 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-# ---- Runtime stage: website and SoulFire control adapters ----
+# ---- Runtime stage: website and isolated Mineflayer/Bedrock account engines ----
 FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-# Authenticated RPC, Prisma and HTTPS assets need certificates and OpenSSL.
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
+# Microsoft authentication, Prisma and HTTPS assets need certificates and OpenSSL.
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./

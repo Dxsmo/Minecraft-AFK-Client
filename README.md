@@ -1,7 +1,7 @@
 # Minecraft AFK Client Management Service
 
 A self-hosted, production-oriented web service to manage multiple Minecraft
-Minecraft bot accounts: start/stop/restart them independently, watch a live
+bot accounts: start/stop/restart them independently, watch a live
 per-account console, run commands, configure account automation, and
 control access with a proper user/role system. Built to run comfortably on
 a Raspberry Pi 5 (8 GB) and be exposed to the internet behind Cloudflare.
@@ -23,18 +23,19 @@ Application services (auth, users, accounts, commands, logging)
 Minecraft Client Manager (ClientManager)
         │
         ▼
-MinecraftClient instances → SoulFire controllers (shared Node scheduler)
-        │                    │ authenticated SDK / private RPC
-        │                    ▼
-        │              SoulFire 2.10.7 + native held-input extension (Java 25)
-        ▼                    │ Java / ViaBedrock
-Minecraft Server(s) ◀─────────┘
+MinecraftClient supervisors (reconnects + watchdogs + startup admission)
+        │  per-account NDJSON / isolated Node processes
+        ├── Java: Mineflayer 4.39.0
+        └── Bedrock: bedrock-protocol 3.60.1
+                         │
+                         ▼
+                 Minecraft Server(s)
 ```
 
 | Layer     | Choice                                                        |
 |-----------|----------------------------------------------------------------|
 | Backend   | Node.js 24+, TypeScript, Fastify, `@fastify/websocket`         |
-| Minecraft | [SoulFire 2.10.7](https://github.com/soulfiremc-com/SoulFire) shared Java/Bedrock engine |
+| Minecraft | [Mineflayer](https://github.com/PrismarineJS/mineflayer) (Java) + [bedrock-protocol](https://github.com/PrismarineJS/bedrock-protocol) (Bedrock) |
 | Database  | SQLite via Prisma ORM                                          |
 | Auth      | Argon2id password hashing, **server-side sessions** (cookie + DB), CSRF double-submit cookie |
 | Logging   | Pino (structured JSON), secrets redacted                       |
@@ -56,7 +57,8 @@ users/          user CRUD (admin-only)
 accounts/       Minecraft account CRUD, ownership checks, assignments
 notes/          rich-text notes, owner-managed read/write sharing
 minecraft/      MinecraftClient (state machine + subprocess control), ClientManager
-soulfire/       common SDK adapter, authentication migration and automation
+mineflayer-bot/ Java authentication, world interactions and inventory gateway
+bedrock-bot/    Bedrock authentication, RakNet, inventory and held inputs
 commands/       permission-checked command dispatch
 websocket/      live console + dashboard WebSocket routes
 logging/        pino logger, console log persistence, audit log
@@ -69,11 +71,11 @@ config/         typed environment configuration
 ## 2. Prerequisites
 
 - Node.js 24+ and npm
-- Docker + Docker Compose (recommended; builds the SoulFire input extension)
-- A server compatible with SoulFire's installed Java/ViaBedrock codecs
-- For local engine development outside Docker: Java 25 JDK + Python 3
+- Docker + Docker Compose (recommended)
+- A server compatible with the installed Java/Bedrock codecs
+- For native dependencies outside Docker: Python 3, make, a C++ compiler and CMake
 
-Existing installation: see [SoulFire migration and account retention](docs/SOULFIRE-MIGRATION.md).
+Existing installation: see [engine migration and account retention](docs/ENGINE-MIGRATION.md).
 
 ---
 
@@ -86,8 +88,6 @@ cd backend
 cp ../.env.example .env        # then edit values, see section 4
 npm install
 npx prisma migrate dev         # creates backend/data/afk.db + applies schema
-# Start SoulFire separately with the input extension and set SOULFIRE_URL /
-# SOULFIRE_SECRET_KEY_FILE (see docs/SOULFIRE-MIGRATION.md).
 npm run dev                    # http://localhost:4000
 ```
 
@@ -121,8 +121,8 @@ checks for Minecraft accounts, command-execution permission checks, user
 service invariants (last-admin protection, session invalidation), and the
 `MinecraftClient` state machine (`OFFLINE → CONNECTING → ONLINE`,
 reconnect scheduling, manual disconnect, command dispatch, NDJSON event
-handling) using mocked SoulFire controllers — no live Minecraft server or Microsoft login
-is required for the unit tests.
+handling) using mocked processes. Additional integration tests run isolated local Java
+protocol servers; no Microsoft or production account is used.
 
 With Vite running, the uploader-category browser regression check can be run
 from the repository root using an installed Playwright and Chrome:
@@ -221,22 +221,20 @@ login form to sign in.
 
 ## 6. Minecraft account configuration
 
-All Java and Bedrock accounts use **SoulFire 2.10.7** through the same scheduler.
+Java uses **Mineflayer 4.39.0**; Bedrock uses **bedrock-protocol 3.60.1**.
 The website framework, roles, account IDs and existing data remain in place.
-The input extension, authentication migration and complete deployment procedure
-are documented in [SoulFire migration](docs/SOULFIRE-MIGRATION.md).
+See [engine migration](docs/ENGINE-MIGRATION.md) for installation and login caches.
 
-- New accounts authenticate once using Microsoft's device-code flow. Passwords
-  are never collected. Accepted legacy refresh tokens are imported without
-  another sign-in; revoked or incompatible tokens need a new device code.
-- The version selector reads SoulFire's installed Java/ViaBedrock codecs. Java
-  automatic detection queries the server status. This release exposes Bedrock
-  **1.26.51**; other Bedrock versions require a compatible engine release.
+- Microsoft device-code login persists a separate cache for each account.
+  Incompatible or expired caches require one new sign-in.
+- The version selector reads installed codecs. Java supports up to **26.1**
+  (with same-protocol release aliases); Bedrock defaults to **1.26.51**.
+  Java automatic detection queries server status; Bedrock uses its UDP advertisement.
 - Java and Bedrock accounts are added and authenticated separately. Adding one
   edition never discovers, links or creates an account for the other edition.
 - Crouch remains held. Silent checks after home/TPA/position transitions run
   after 3 seconds; periodic and restart checks remain. Checks never toggle off.
-- Auto button Off/Left/Right holds native Minecraft input without an open video
+- Auto button Off/Left/Right repeats game interactions without a video
   session and restores it after respawns/reconnects. Game/server cooldowns apply.
 - AutoSell shifts player inventory items into its current sale menu and waits
   for acknowledgments. Timeouts recover with finite deadlines. World changes
@@ -244,15 +242,15 @@ are documented in [SoulFire migration](docs/SOULFIRE-MIGRATION.md).
   until **2 minutes after** the restart, including controller reconnects.
 - Manual commands take priority. `/desmo` reads nine `/sellmulti` categories.
   CleanSpawner finds a reachable spawner and applies the configured keep/drop/
-  sell actions. The client requests **4 chunks** view distance (operator configurable from 2–32); simulation
-  distance remains controlled by the server.
+  sell actions. Both editions request four chunks view distance;
+  simulation distance remains controlled by the server.
 - Clicking an account icon opens the searchable, alphabetically sorted chooser
   containing **1,489 transparent PNGs**, with custom upload still available.
 - Ordinary disconnects retry after 15 seconds. Server login throttles wait
   60–300 seconds; repeated unavailable-service failures back off to 120 seconds.
   Manual restarts wait five seconds. Automatic game commands are limited to
   `/sell`; reconnects never return home or replay manual commands.
-  Real game-state checks feed the existing frozen-client watchdog.
+  Completed behavior passes feed the existing frozen-client watchdog.
 
 ### Feature visibility
 
@@ -341,18 +339,14 @@ docker compose up -d
 docker compose logs -f
 ```
 
-This starts three containers:
+This starts two containers:
 
-- **backend**: Fastify, SQLite, WebSockets and all lightweight account controllers
-  in one Node runtime. Existing data stays in `backend_data`.
-- **soulfire**: the common Java/Bedrock engine and native held-input extension.
-  Its accounts, signing key and Minecraft runtime persist in `soulfire_data`.
-  RPC is private to the Compose network.
-- **web**: Caddy serves the React SPA and proxies `/api/*` and `/ws/*` to the
-  backend on public ports 80/443.
+- **backend**: Fastify, SQLite, WebSockets and isolated Node processes for each
+  Minecraft account. Website data and authentication caches stay in `backend_data`.
+- **web**: Caddy serves the React SPA and proxies `/api/*` and `/ws/*` to the backend.
 
-For an existing installation, back up both data volumes and use
-`bash scripts/update.sh`; see [the migration procedure](docs/SOULFIRE-MIGRATION.md).
+For an existing installation, back up the data and use `bash scripts/update.sh`;
+see [the migration procedure](docs/ENGINE-MIGRATION.md).
 
 Set `SITE_ADDRESS` in `.env` to your real domain (e.g. `afk.example.com`)
 for Caddy to automatically provision HTTPS via Let's Encrypt, or leave it
@@ -375,8 +369,8 @@ troubleshooting).
   fixes, test evidence and unverified deployment boundaries.
 - [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) — current protocol, authentication,
   renderer and verification boundaries.
-- [`docs/SOULFIRE-MIGRATION.md`](docs/SOULFIRE-MIGRATION.md) — updating, account
-  retention, cache import, feature mapping and complete backups.
+- [`docs/ENGINE-MIGRATION.md`](docs/ENGINE-MIGRATION.md) — updating, account
+  retention, authentication caches and local verification.
 - `.env.example` — all environment variables with descriptions.
 - `scripts/backup-db.sh` / `scripts/restore-db.sh` — SQLite backup/restore
   (works for both Docker and bare-metal installs).
@@ -388,12 +382,10 @@ troubleshooting).
 ## 11. Known limitations / future work
 
 - Microsoft can require another sign-in if previous refresh tokens are no longer
-  accepted. Automatic companion accounts require successful authentication for
-  that edition; ownership/profile restrictions may prevent it.
-- The Pi's previous Azalea capacity measurements do not predict SoulFire's
-  memory/CPU requirements. Measure real accounts before choosing a capacity.
-- SoulFire has screenshot/POV APIs; a website live-view UI is not added by this
-  migration. See [current limitations](docs/LIMITATIONS.md).
+  accepted. Each edition signs in independently.
+- Measure the new per-account Node processes on the actual host before choosing
+  capacity. Historical Azalea/shared-JVM measurements do not predict this engine.
+- Live camera and manual movement/inventory APIs remain removed.
 - No built-in email/2FA — access control relies on strong passwords +
   the RBAC/audit system described above. Consider adding 2FA if exposing
   this beyond a small trusted group.

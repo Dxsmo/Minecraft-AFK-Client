@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
-// The website consumes SoulFire's runtime catalog for both editions.
+// The website consumes the installed engines' codec catalog for both editions.
 const catalog = { java: { versions: ['26.3', '26.2'], defaultVersion: '26.3' },
   bedrock: { versions: ['1.26.51', '1.26.50'], defaultVersion: '1.26.51' } };
 

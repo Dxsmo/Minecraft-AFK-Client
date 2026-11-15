@@ -46,6 +46,53 @@ describe("Bedrock automation with the installed wire codec", () => {
   beforeEach(() => { vi.useFakeTimers(); vi.spyOn(process.stdout, "write").mockImplementation(() => true); });
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
+  it.each(["1.21.130", "1.26.51"])("drops spawner stacks through an acknowledged current-menu request in %s", version => {
+    const { inventory, packets } = setup(version);
+    inventory.onOpen({ window_id: "first", window_type: "container" });
+    inventory.onContent({ window_id: "first", input: [stack(91), stack(92)] });
+    const before = inventory.snapshot(() => "minecraft:stone");
+    inventory.clickMenu(before.menuId, 0, "drop");
+    const request = packets.at(-1)!;
+    expect(request.name).toBe("item_stack_request");
+    expect(request.params.requests[0].actions[0]).toMatchObject({ type_id: "drop", count: 64, source: { slot: 0, stack_id: 91 } });
+    expect(inventory.snapshot(() => "minecraft:stone").slots[0].count).toBe(64);
+    inventory.onResponse({ responses: [{ status: "ok", request_id: request.params.requests[0].request_id,
+      containers: [{ slot_type: { container_id: "container" }, slots: [{ slot: 0, count: 0, item_stack_id: 0 }] }] }] });
+    expect(inventory.snapshot(() => "minecraft:stone").slots.map(slot => slot.slot)).toEqual([1]);
+    inventory.onOpen({ window_id: "first", window_type: "container" });
+    inventory.onContent({ window_id: "first", input: [stack()] });
+    expect(() => inventory.clickMenu(before.menuId, 0, "drop")).toThrow("nicht mehr");
+    const current = inventory.snapshot(() => "minecraft:stone");
+    inventory.clickMenu(current.menuId, 0, "left");
+    expect(packets.at(-1)!.params.requests[0].actions[0]).toMatchObject({ type_id: "take", count: 1, destination: { slot_type: { container_id: "cursor" } } });
+  });
+
+  it("encodes legacy spawner drops without predicting their completion", () => {
+    const { sender, inventory, packets } = setup("1.21.130");
+    sender.authoritativeInventory = false;
+    inventory.onOpen({ window_id: "first", window_type: "container" });
+    inventory.onContent({ window_id: "first", input: [stack()] });
+    const snapshot = inventory.snapshot(() => "minecraft:stone");
+    inventory.clickMenu(snapshot.menuId, 0, "drop");
+    expect(packets.at(-1)!.params.transaction.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source_type: "world_interaction", new_item: expect.objectContaining({ count: 64 }) }),
+    ]));
+    expect(inventory.snapshot(() => "minecraft:stone").slots).toHaveLength(1);
+  });
+
+  it("opens a reachable spawner even with auto input disabled and restores crouch", async () => {
+    const { held, registry, sender, inventory, packets } = mouse("1.26.51", "right");
+    const spawner = Object.entries(registry.blocksByRuntimeId).find(([, b]: any) => b.stateId === registry.blocksByName.mob_spawner.defaultState)!;
+    held.onUpdateBlock({ position: { x: 0, y: 70, z: 2 }, block_runtime_id: Number(spawner[0]) >>> 0 });
+    held.configure("off");
+    const opened = held.openNearestSpawner(true);
+    // Required section is already present; this is an actual encoded click.
+    expect(await opened).toBe(true);
+    expect(packets.findLast(packet => packet.name === "inventory_transaction")!.params.transaction.transaction_data)
+      .toMatchObject({ action_type: "click_block", block_position: { x: 0, y: 70, z: 2 } });
+    sender.tickInput(); expect(inputFlag(packets.at(-1)!.params, "sneak_down")).toBe(true);
+  });
+
   function mouse(version: string, mode: "left" | "right", hashes = false) {
     const test = setup(version);
     test.sender.updatePosition({ x: 0.5, y: 70.5, z: 0.5 }, 0, 0);

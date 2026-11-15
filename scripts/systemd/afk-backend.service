@@ -1,8 +1,7 @@
 [Unit]
 Description=Minecraft AFK Client Management Service (backend)
-After=network-online.target afk-soulfire.service
+After=network-online.target
 Wants=network-online.target
-Requires=afk-soulfire.service
 
 [Service]
 Type=simple

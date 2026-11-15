@@ -12,6 +12,7 @@ import { emit, type BehaviorConfig, type Config, type OutEvent } from "./protoco
 import { BotSender } from "./send.js";
 import { BedrockInventory } from "./inventory.js";
 import { BedrockAutoButton } from "./autoButton.js";
+import { AutomationBehaviors } from "../minecraft/behaviors.js";
 
 /** Emit a heartbeat at most this often. */
 const HEARTBEAT_INTERVAL_MS = 15000;
@@ -53,6 +54,8 @@ export class BehaviorState {
   private teleportCrouchChecks: number[] = [];
   private manualAutosellPauseUntil = 0;
   private cfg: BehaviorConfig;
+  private cleaner: AutomationBehaviors;
+  private cleanerBusy = false;
 
   private spawned = false;
   private lastHeartbeatAt = 0;
@@ -82,8 +85,23 @@ export class BehaviorState {
       autosell_enabled: config.autosell_enabled ?? false,
       autosell_interval_seconds: config.autosell_interval_seconds ?? 60,
       autosell_command: config.autosell_command ?? "/sell",
+      spawner_type: config.spawner_type,
+      spawner_drop_items: config.spawner_drop_items,
+      spawner_sell_items: config.spawner_sell_items,
     };
+    this.cleaner = new AutomationBehaviors(this.cleanerConfig(), {
+      held: async () => {}, sneak: async () => {}, chat: async text => this.sender.command(text),
+      inventory: async () => this.inventory.snapshot(id => this.autoButton.itemName(id)),
+      click: async (menu, slot, action) => this.inventory.clickMenu(menu, slot, action),
+      close: async menu => this.inventory.closeMenu(menu),
+      openSpawner: async () => this.autoButton.openNearestSpawner(!!this.cfg.crouch_enabled),
+    }, event => emit(event as OutEvent));
   }
+
+  private cleanerConfig() { return { spawner_type: this.cfg.spawner_type,
+    spawner_drop_items: this.cfg.spawner_drop_items, spawner_sell_items: this.cfg.spawner_sell_items }; }
+
+  private cancelCleaner(): void { this.autoButton.cancelSpawner(); this.cleaner.cancelForeground(); }
 
   pauseAutosell(afterMs: number, resumeMs: number): void {
     const now = Date.now();
@@ -98,6 +116,7 @@ export class BehaviorState {
       this.cfg.autosell_interval_seconds !== cfg.autosell_interval_seconds ||
       this.cfg.autosell_command !== cfg.autosell_command;
     this.cfg = { ...cfg };
+    void this.cleaner.configure(this.cleanerConfig());
     this.autoButton.configure(cfg.auto_button);
     if (!cfg.autosell_enabled) this.inventory.interrupt();
     if (autosellChanged && this.cfg.autosell_enabled) {
@@ -109,6 +128,7 @@ export class BehaviorState {
   }
 
   markSpawned(): void {
+    void this.cleaner.spawned();
     const now = Date.now();
     this.spawned = true;
     this.automationReadyAt = now + SPAWN_STABILIZE_MS;
@@ -118,6 +138,7 @@ export class BehaviorState {
   }
 
   markJoining(): void {
+    this.cancelCleaner(); this.cleaner.joining();
     this.autoButton.reset();
     this.inventory.reset();
     this.spawned = false;
@@ -127,6 +148,7 @@ export class BehaviorState {
   }
 
   markTeleported(): void {
+    this.cancelCleaner(); this.cleaner.transition();
     this.autoButton.teleported();
     this.scheduleTeleportCrouchCheck(Date.now());
     this.inventory.interrupt();
@@ -142,12 +164,15 @@ export class BehaviorState {
   enqueueChat(text: string): void {
     const trimmed = text.trim();
     if (!trimmed) return;
+    if (this.manualQueue.length >= 32) { emit({ type: "warning", message: "Befehlswarteschlange voll" }); return; }
     this.manualQueue.push({ kind: "command", text: trimmed });
   }
   enqueueCleanSpawner(): void {
+    if (this.queue.some(task => task.kind === "clean_spawner") || this.cleaner.hasForegroundWork || this.cleanerBusy) return;
     this.queue.push({ kind: "clean_spawner" });
   }
   enqueueSellMultipliers(): void {
+    if (this.manualQueue.some(task => task.kind === "sell_multipliers")) return;
     this.manualQueue.push({ kind: "sell_multipliers" });
   }
 
@@ -179,6 +204,7 @@ export class BehaviorState {
     if (this.spawned) this.sender.tickInput();
 
     if (this.spawned && this.manualQueue.length) {
+      this.cancelCleaner();
       this.runForeground(this.manualQueue.shift()!, now, true);
       return;
     }
@@ -187,6 +213,17 @@ export class BehaviorState {
       return;
     }
     if (!this.spawned || now < this.automationReadyAt || now < this.manualAutosellPauseUntil) return;
+
+    if (this.cleaner.hasForegroundWork || this.cleanerBusy) {
+      if (!this.cleanerBusy) {
+        this.cleanerBusy = true;
+        void this.cleaner.tick().catch(error => {
+          this.cancelCleaner();
+          emit({ type: "warning", message: `CleanSpawner: ${error instanceof Error ? error.message : String(error)}` });
+        }).finally(() => { this.cleanerBusy = false; });
+      }
+      return;
+    }
 
     // Run at most one foreground task per tick.
     const task = this.queue.shift();
@@ -230,14 +267,8 @@ export class BehaviorState {
         emit({ type: "behavior_log", message: `Command dispatched: ${task.text}` });
         break;
       case "clean_spawner":
-        // Clean-spawner needs precise world/block interaction and container item
-        // handling that is server- and world-specific and cannot be implemented
-        // reliably (or verified) on Bedrock with the low-level protocol. Rather
-        // than fake it, surface a clear message. See docs/LIMITATIONS.md.
-        emit({
-          type: "warning",
-          message: "Clean-spawner is not available on Bedrock accounts (see LIMITATIONS.md).",
-        });
+        this.inventory.interrupt(true);
+        this.cleaner.enqueue("clean_spawner");
         break;
     }
   }
@@ -245,6 +276,7 @@ export class BehaviorState {
   // --- Inbound inventory lifecycle messages ---
 
   onChat(sender: string | null, message: string): void {
+    this.cleaner.onChat(sender, message);
     const now = Date.now();
 
     const plain = message.replace(/§./g, "").replace(/^(?:<HugoSMP>|\[HugoSMP\])\s*/, "").trim();

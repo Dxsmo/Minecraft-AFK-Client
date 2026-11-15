@@ -49,7 +49,7 @@ assert.equal(older.length, 2000); assert.ok(!older.some(old => logs.some(row => 
 for (const range of ['1h', '6h', '24h']) assert.ok((await admin(`/minecraft/accounts/audit-000/earnings/history?range=${range}`)).points.length > 0);
 const earnings = await admin('/minecraft/accounts/audit-000/earnings'); assert.ok(earnings.last24h > 0);
 const versions = await admin('/minecraft/versions'); assert.ok(versions.java.versions.length > 1 && versions.bedrock.versions.length > 0);
-checks.push('log cursor pagination, cent sums, all graph ranges and live SoulFire version catalog');
+checks.push('log cursor pagination, cent sums, all graph ranges and installed engine version catalog');
 
 const content = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Audit edit' }] }] };
 const note = await admin('/notes', { method: 'POST', body: { title: 'Audit temporary note', content }, expected: 201 });

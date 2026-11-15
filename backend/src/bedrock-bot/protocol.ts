@@ -36,10 +36,16 @@ export interface Config {
   autosell_command?: string;
   autosell_pause_after_ms?: number;
   autosell_resume_after_ms?: number;
+  spawner_type?: string;
+  spawner_drop_items?: string[];
+  spawner_sell_items?: string[];
 }
 
 /** Behavior-only subset of Config, re-sent later to update settings live. */
 export interface BehaviorConfig {
+  spawner_type?: string;
+  spawner_drop_items?: string[];
+  spawner_sell_items?: string[];
   crouch_enabled?: boolean;
   auto_button?: "off" | "left" | "right";
   autosell_enabled?: boolean;

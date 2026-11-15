@@ -28,7 +28,7 @@ export const createAccountSchema = z
     minecraftVersion: z.string().max(16).default(""),
     serverHost: z.string().min(1).max(255),
     serverPort: z.coerce.number().int().min(1).max(65535).default(25565),
-    // Both editions run through SoulFire.
+    // Select the matching Java or Bedrock engine.
     edition: z.enum(["JAVA", "BEDROCK"]).default("JAVA"),
     // Microsoft account email. Used as the identity for the device-code sign-in
     // and its on-disk token cache. Required for every account. Never exposed

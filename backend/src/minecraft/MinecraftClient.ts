@@ -5,7 +5,7 @@ import { parseSellEarning } from "./sellEarnings.js";
 import {
   parseWorldRestartSeconds, WORLD_RESTART_SELL_LEAD_MS, WORLD_RESTART_SELL_COOLDOWN_MS,
 } from "./worldRestart.js";
-import { createSoulFireController, type SoulFireController } from "../soulfire/controller.js";
+import { createBotProcess, type BotProcess } from "./botProcess.js";
 import path from "node:path";
 import readline from "node:readline";
 import type {
@@ -20,7 +20,6 @@ import type {
 import { accountLogger } from "../logging/logger.js";
 import { config as appConfig } from "../config/config.js";
 import type { Logger } from "pino";
-import { stopRemoteAccount } from "../soulfire/lifecycle.js";
 import { terminateSubprocess } from "../utils/terminateSubprocess.js";
 import { ReconnectPolicy } from "./reconnectPolicy.js";
 
@@ -57,13 +56,13 @@ function isServerFallbackMessage(message: string): boolean {
     .test(message.trim().replace(/\s+/g, " "));
 }
 
-/** Supervises isolated SoulFire controllers through the existing NDJSON
- * contract. All controllers share Node and a dedicated JVM, avoiding one OS
- * process per account. This class owns reconnection and website events. */
+/** Supervises isolated Mineflayer/Bedrock processes through the same NDJSON
+ * contract. Owns reconnection, watchdogs and website events for both editions. */
 export class MinecraftClient extends EventEmitter {
   private readonly reconnectPolicy = new ReconnectPolicy();
-  private subprocess: SoulFireController | null = null;
-  private pendingStop: Promise<void> = Promise.resolve();
+  private subprocess: BotProcess | null = null;
+  private pendingStops = new Set<Promise<void>>();
+  private connectionGeneration = 0;
   private status: ClientStatus = "OFFLINE";
   private reconnectTimer: NodeJS.Timeout | null = null;
   private restartTimer: NodeJS.Timeout | null = null;
@@ -154,14 +153,13 @@ export class MinecraftClient extends EventEmitter {
     this.setStatus("OFFLINE");
   }
 
-  /** Wait before the website process exits: the Minecraft bot lives in a
-   * separate JVM and needs its explicit stop request to complete. */
+  /** Drain every child, including previously retired processes, on shutdown. */
   async shutdown(): Promise<void> {
     const controller = this.subprocess;
     const closed = controller && controller.exitCode === null && controller.signalCode === null
       ? new Promise<void>(resolve => controller.once("close", () => resolve())) : Promise.resolve();
     this.disconnect();
-    await Promise.all([closed, this.pendingStop]);
+    await Promise.all([closed, ...this.pendingStops]);
   }
 
   restart(): void {
@@ -221,6 +219,14 @@ export class MinecraftClient extends EventEmitter {
   }
 
   private attemptConnect(reconnecting = false): void {
+    const generation = ++this.connectionGeneration;
+    if (this.pendingStops.size) {
+      this.setStatus(reconnecting ? "RECONNECTING" : "CONNECTING");
+      void Promise.all([...this.pendingStops]).then(() => {
+        if (generation === this.connectionGeneration && !this.manuallyStopped) this.attemptConnect(reconnecting);
+      });
+      return;
+    }
     this.connectionEnded = false;
     this.lastControlFailureAt = null;
     this.setStatus(reconnecting ? "RECONNECTING" : "CONNECTING");
@@ -230,9 +236,9 @@ export class MinecraftClient extends EventEmitter {
       `Connecting to ${this.config.serverHost}:${this.config.serverPort}`,
     );
 
-    let child: SoulFireController;
+    let child: BotProcess;
     try {
-      child = createSoulFireController();
+      child = createBotProcess(this.config.edition);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.error({ err }, `Failed to spawn bot subprocess: ${message}`);
@@ -303,7 +309,7 @@ export class MinecraftClient extends EventEmitter {
       username: this.config.name,
       account_id: this.config.id,
       edition: this.config.edition,
-      // Both editions resolve their protocol through SoulFire.
+      // Each engine negotiates only codecs it actually implements.
       version: this.config.minecraftVersion,
       email: this.config.credentialsSecret,
       password: this.config.credentialsPassword,
@@ -478,14 +484,14 @@ export class MinecraftClient extends EventEmitter {
       case "control_status":
         if (event.available === false) {
           if (this.lastControlFailureAt === null) {
-            this.emitConsole("WARNING", `Gemeinsamer SoulFire-Dienst nicht erreichbar; Minecraft-Verbindung wird nicht vorsorglich getrennt. ${String(event.error ?? "")}`.trim());
+            this.emitConsole("WARNING", `Bot-Steuerung vorübergehend nicht erreichbar. ${String(event.error ?? "")}`.trim());
           }
           this.lastControlFailureAt = Date.now();
         } else if (event.available === true && this.lastControlFailureAt !== null) {
           this.lastControlFailureAt = null;
           // Give the recovered stream/status check time to confirm game state.
           this.lastHeartbeatAt = Date.now();
-          this.emitConsole("SYSTEM", "SoulFire-Steuerverbindung wieder erreichbar; prüfe bestehende Minecraft-Verbindung.");
+          this.emitConsole("SYSTEM", "Bot-Steuerung wieder erreichbar; prüfe bestehende Minecraft-Verbindung.");
         }
         break;
 
@@ -548,6 +554,7 @@ export class MinecraftClient extends EventEmitter {
   }
 
   private teardownSubprocess(reason: string): void {
+    this.connectionGeneration++;
     this.clearOnlineWatchdog();
     const child = this.subprocess;
     this.subprocess = null;
@@ -565,8 +572,10 @@ export class MinecraftClient extends EventEmitter {
       /* stdin may already be gone */
     }
 
-    this.pendingStop = stopRemoteAccount(path.join(appConfig.dataDir, "bot-cache", this.config.id))
-      .catch(err => this.log.warn({ err }, "Could not stop shared SoulFire bot"));
+    if (child.exitCode === null && child.signalCode === null) {
+      const stopped = new Promise<void>(resolve => child.once("close", () => { this.pendingStops.delete(stopped); resolve(); }));
+      this.pendingStops.add(stopped);
+    }
     terminateSubprocess(child, 500, 4000);
   }
 

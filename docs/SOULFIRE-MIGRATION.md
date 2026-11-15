@@ -1,5 +1,8 @@
 # SoulFire migration
 
+> Historical document for the retired engine. The current runtime uses
+> [Mineflayer and bedrock-protocol](ENGINE-MIGRATION.md); follow that guide for updates.
+
 The active Java and Bedrock controllers now use SoulFire **2.10.7** through its
 matching TypeScript SDK. Docker Compose adds `afk-soulfire`; the website and
 its database remain in the existing backend/web containers. All account controllers

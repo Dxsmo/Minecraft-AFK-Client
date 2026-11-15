@@ -14,28 +14,27 @@ const fs=require('node:fs'),zlib=require('node:zlib'),args=process.argv.slice(2)
 fs.appendFileSync(process.env.AFK_BACKUP_TEST_LOG,JSON.stringify(args)+'\\n');
 if(args.includes('ps')&&args.at(-1)==='backend')console.log('existing-backend');
 if(args.includes('run')){
- if(args.includes('/soulfire-data')&&process.env.AFK_BACKUP_TEST_FAIL==='1')process.exit(3);
- process.stdout.write(zlib.gzipSync(Buffer.from(args.includes('/soulfire-data')?'soulfire-cache':'website-cache')));
+ if(process.env.AFK_BACKUP_TEST_FAIL==='1')process.exit(3);
+ process.stdout.write(zlib.gzipSync(Buffer.from('website-cache')));
 }
 `,{mode:0o755});
   return {dir,log,output,execute:()=>run("bash",[script,output],{env:{...process.env,PATH:`${dir}:${process.env.PATH}`,AFK_BACKUP_TEST_LOG:log,AFK_BACKUP_TEST_FAIL:fail?'1':'0'}})};
 }
-it("backs up both private volumes after stopping the running backend and resumes only that service",async()=>{
+it("backs up website and authentication data after stopping the running backend and resumes only that service",async()=>{
  const f=await fixture();try{
   await f.execute();const calls=(await readFile(f.log,"utf8")).trim().split("\n").map(line=>JSON.parse(line));
   const stop=calls.findIndex(args=>args.includes('stop')),reads=calls.map((args,index)=>args.includes('run')?index:-1).filter(index=>index>=0);
-  expect(reads).toHaveLength(2);expect(reads.every(index=>index>stop)).toBe(true);
+  expect(reads).toHaveLength(1);expect(reads.every(index=>index>stop)).toBe(true);
   expect(calls[stop]).toEqual(['compose','stop','backend']);expect(calls.at(-1)).toEqual(['compose','start','backend']);
   expect(gunzipSync(await readFile(path.join(f.output,'backend-data.tar.gz'))).toString()).toBe('website-cache');
-  expect(gunzipSync(await readFile(path.join(f.output,'soulfire-data.tar.gz'))).toString()).toBe('soulfire-cache');
   expect((await stat(path.join(f.output,'backend-data.tar.gz'))).mode&0o777).toBe(0o600);
  }finally{await rm(f.dir,{recursive:true,force:true});}
 });
-it("resumes the previous services when backing up the SoulFire volume fails",async()=>{
+it("resumes the previous services when backing up the backend data fails",async()=>{
  const f=await fixture(true);try{
   await expect(f.execute()).rejects.toMatchObject({code:3});
   const calls=(await readFile(f.log,"utf8")).trim().split("\n").map(line=>JSON.parse(line));
   expect(calls.at(-1)).toEqual(['compose','start','backend']);
-  await expect(stat(path.join(f.output,'soulfire-data.tar.gz'))).rejects.toThrow();
+  await expect(stat(path.join(f.output,'backend-data.tar.gz'))).rejects.toThrow();
  }finally{await rm(f.dir,{recursive:true,force:true});}
 });

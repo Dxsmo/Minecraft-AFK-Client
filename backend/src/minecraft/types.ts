@@ -26,7 +26,7 @@ export interface ConsoleEvent {
   timestamp: string;
 }
 
-/** Emitted once SoulFire resolves the real Minecraft profile (username/uuid). */
+/** Emitted once the engine resolves the real Minecraft profile (username/uuid). */
 export interface ProfileEvent {
   minecraftAccountId: string;
   username: string;
@@ -39,7 +39,7 @@ export interface ClientRuntimeConfig {
   minecraftVersion: string;
   serverHost: string;
   serverPort: number;
-  /** Minecraft edition supplied to the shared SoulFire service. */
+  /** Selects the Mineflayer or Bedrock process. */
   edition: "JAVA" | "BEDROCK";
   authType: "OFFLINE" | "MICROSOFT";
   /** Microsoft account email, only relevant when authType === "MICROSOFT". Never exposed to the frontend. */

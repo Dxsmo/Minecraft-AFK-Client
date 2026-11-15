@@ -196,13 +196,8 @@ docker compose ps
 
 ## 8. Non-Docker fallback (systemd)
 
-If you'd rather not use Docker, install Java 25 first and prepare the dedicated
-runtime/input extension as described in [SoulFire migration](SOULFIRE-MIGRATION.md).
-The systemd units expect the JAR in `soulfire-runtime/`, the data directory in
-`soulfire-data/`, and both owned/writable by `afkservice`. In `backend/.env` set
-`SOULFIRE_URL=http://127.0.0.1:38765` and
-`SOULFIRE_SECRET_KEY_FILE=/opt/afk-service/soulfire-data/secret-key.bin`.
-
+Without Docker, install Node.js 24+, Python 3, make, a C++ compiler and CMake
+for native dependencies. No Java or Rust runtime is required.
 
 ```bash
 cd /opt/afk-service/backend
@@ -210,9 +205,9 @@ npm ci
 npm run build
 npm prune --omit=dev
 npx prisma migrate deploy
-sudo cp ../scripts/systemd/afk-backend.service ../scripts/systemd/afk-soulfire.service /etc/systemd/system/
+sudo cp ../scripts/systemd/afk-backend.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now afk-soulfire afk-backend
+sudo systemctl enable --now afk-backend
 sudo systemctl status afk-backend
 ```
 
@@ -232,10 +227,9 @@ cd /opt/afk-service
 bash scripts/backup-stack.sh
 ```
 
-This stops/resumes the account services for a consistent snapshot and archives both website data
-and SoulFire data with private file permissions. A database-only backup omits
-Microsoft authentication caches and the SoulFire signing key. Keep `.env`
-separately. See [the migration guide](SOULFIRE-MIGRATION.md).
+This stops/resumes the backend for a consistent snapshot and archives its SQLite
+database, website data and per-account Microsoft caches with private permissions.
+Keep `.env` separately. See [the migration guide](ENGINE-MIGRATION.md).
 
 ## 10. Updates
 
@@ -244,15 +238,14 @@ cd /opt/afk-service
 git pull --ff-only origin master
 bash scripts/backup-stack.sh
 bash scripts/update.sh
-docker compose logs --tail=100 backend soulfire
+docker compose logs --tail=100 backend
 ```
 
 All images build before any running container is replaced. SQLite migrations
 run at backend startup. Existing volumes and account IDs remain in place. The
-old `update-bedrock.sh` filename forwards to the complete update; it no longer
-retains an Azalea binary. Cold SoulFire builds/startups download the pinned
-release and Minecraft libraries; allow several minutes. Subsequent updates
-reuse Docker/download caches. The website no longer builds Rust.
+old `update-bedrock.sh` filename forwards to the complete update. Both engines
+ship in the backend image. Native dependencies are compiled in the Docker build;
+subsequent updates reuse the dependency layers. No Rust or Java build is needed.
 
 For routine updates, run `git pull --ff-only origin master` and
 `bash scripts/update.sh` in the existing project directory. The script keeps
@@ -283,19 +276,11 @@ name and data volumes. There is no need to stop the stack before building.
 
 | Symptom | Check |
 |---|---|
-| SoulFire is not healthy yet | Allow its initial verified runtime downloads to finish; inspect `docker compose logs soulfire`. |
-| SDK connection/authentication fails | Check the private `SOULFIRE_URL` and read-only signing-key mount; do not expose RPC publicly. |
-| An old account requests a device code | Its original cache was missing/rejected or incompatible. Account settings/history remain; complete one new Microsoft sign-in. |
-| Bedrock version rejected | This pinned engine exposes 1.26.51. Check server compatibility and the account's endpoint. |
-| Companion account cannot join | The default is the same host with Java 25565 / Bedrock 19132; correct custom endpoints in its settings. |
-| Held inputs do nothing | Confirm `afk-service-controls` is listed at SoulFire startup; Docker installs it in `/data/minecraft/mods`. |
+| Account remains CONNECTING | Inspect its console for authentication, unsupported protocol or world-entry timeout. |
+| An old account requests a device code | The previous cache is missing, incompatible or expired; settings/history remain. Complete the new Microsoft sign-in. |
+| Bedrock version rejected | Choose a codec listed by the installed engine and verify the host/UDP port. |
+| Java version rejected | Mineflayer supports up to 26.1 and same-protocol release aliases. Newer protocols need an engine upgrade or server-side protocol compatibility. |
+| Held inputs do nothing | Verify the selected Off/Left/Right setting, reachable target, held item and server cooldowns. |
 | Login cookie absent over local HTTP | Use `SESSION_COOKIE_SECURE=false` only for local HTTP development. |
-| CSRF rejected | Website writes need the current `afk_csrf` cookie echoed in `x-csrf-token`. |
-| High memory usage | Measure real accounts and set `SOULFIRE_JAVA_OPTIONS` together with backend/OS headroom; old Azalea capacity estimates do not apply. |
-| All accounts disconnect together; `ECONNREFUSED ...:38765` | Collect `bash scripts/diagnose-disconnects.sh 2h` on the affected host; see [shared service outage diagnosis](DISCONNECTS-2026-11-04.md). |
-| Repeated five-minute retries after `Authenticated as`, or AutoSell slows near item piles | See [world-entry recovery and native AutoSell fixes](STABILITY-2026-11-06.md); rebuild both backend and SoulFire extension. |
-
-The systemd fallback additionally needs a Java 25 SoulFire service and its input
-extension. Configure `SOULFIRE_URL` and `SOULFIRE_SECRET_KEY_FILE` in the backend
-environment and give its service user read access to the signing key. See the
-[local runtime instructions](SOULFIRE-MIGRATION.md).
+| CSRF rejected | Echo the current `afk_csrf` cookie in `x-csrf-token` for writes. |
+| High memory usage or shared outage | Collect `bash scripts/diagnose-disconnects.sh 2h` and measure per-account processes on the actual host. |

@@ -7,8 +7,7 @@
 //!
 //! NOTE: bedrock-protocol is a low-level packet client and exact packet schemas
 //! vary by protocol version. This bot implements the console/automation feature
-//! set reliably; auto-sell menus are unverified against a live Bedrock server, and
-//! clean-spawner is unavailable.
+//! set with bounded inventory requests and world interactions.
 
 import { mkdirSync } from "node:fs";
 import readline from "node:readline";
@@ -23,16 +22,22 @@ import { discoverBedrockServer } from "./discovery.js";
 import { BedrockPacketRecovery, installBedrockFrameValidation, type BedrockDecodeClient } from "./packetRecovery.js";
 import { installBedrockNetworkNbtArrays } from "./networkNbt.js";
 
+process.umask(0o077);
+
 const CONNECT_TIMEOUT_MS =
   (Number.parseInt(process.env.BOT_CONNECT_TIMEOUT_SECS ?? "", 10) || 45) * 1000;
 
 let exiting = false;
+let stopClient: (() => void) | undefined;
 function endProcess(code: number): void {
   if (exiting) return;
   exiting = true;
   // Give stdout a tick to flush the final NDJSON line before exiting.
   setTimeout(() => process.exit(code), 50);
 }
+const stop = () => { stopClient?.(); endProcess(0); };
+process.on("SIGTERM", stop);
+process.on("SIGINT", stop);
 
 process.on("uncaughtException", (err) => {
   emit({ type: "fatal_error", error: `Uncaught error: ${err?.message ?? String(err)}` });
@@ -67,6 +72,8 @@ async function main(): Promise<void> {
   let client: ReturnType<typeof createClient>;
   let selected: BedrockVersionSelection | undefined;
   let spawned = false;
+  let transportCloseReason: string | undefined;
+  let observingTransport = false;
   const versionFailure = (message: string) => selected?.negotiating && !spawned
     ? `${message}; server advertised protocol ${selected.advertisedProtocol}, client offered ${selected.version} (protocol ${selected.protocol}). The advertised newer protocol is not implemented; the server must accept this stable client version.`
     : message;
@@ -88,7 +95,7 @@ async function main(): Promise<void> {
       port: config.port || 19132,
       username: config.username,
       offline: !isMicrosoft,
-      viewDistance: 6,
+      viewDistance: 4,
       // A proxy may advertise its internal/default port instead of the public
       // port entered on the website. Always use the configured endpoint.
       followPort: false,
@@ -118,8 +125,8 @@ async function main(): Promise<void> {
       },
     });
     // The installed library reads client.viewDistance, not options.viewDistance,
-    // when sending request_chunk_radius. Keep all Bedrock accounts fixed at 6.
-    Object.assign(client, { viewDistance: 6 });
+    // when sending request_chunk_radius. Preserve the four-chunk runtime limit.
+    Object.assign(client, { viewDistance: 4 });
   } catch (err) {
     emit({ type: "fatal_error", error: `Failed to start Bedrock client: ${errMsg(err)}` });
     endProcess(1);
@@ -152,8 +159,10 @@ async function main(): Promise<void> {
     clearInterval(watchdog);
     clearInterval(tick);
     endProcess(code);
+    try { c.disconnect?.(); } catch { /* May still be authenticating. */ }
     try { c.close?.(); } catch { /* process exit still closes native sockets */ }
   };
+  stopClient = () => shutdown(0);
 
   const packetRecovery = new BedrockPacketRecovery(
     client as unknown as BedrockDecodeClient,
@@ -164,6 +173,17 @@ async function main(): Promise<void> {
 
   // --- Lifecycle events ---
   const onSession = () => {
+    // The library otherwise emits a bare close and drops the native RakNet
+    // reason. Its session listener has installed this transport callback first.
+    const transport = (client as unknown as { connection?: { onCloseConnection?: (reason: unknown) => void } }).connection;
+    if (!observingTransport && transport?.onCloseConnection) {
+      observingTransport = true;
+      const original = transport.onCloseConnection;
+      transport.onCloseConnection = reason => {
+        if (reason !== undefined && reason !== null) transportCloseReason = `RakNet transport closed (reason ${String(reason)})`;
+        original(reason);
+      };
+    }
     if (!progress.advance("transport")) return;
     const profile = (client as unknown as { profile?: { name: string; uuid: string } }).profile;
     if (profile?.name) emit({ type: "profile", username: profile.name, uuid: profile.uuid ?? "" });
@@ -206,7 +226,7 @@ async function main(): Promise<void> {
   c.on("disconnect", (packet: unknown) => onGone(reasonOf(packet)));
   c.on("kick", (packet: unknown) => onGone(reasonOf(packet)));
   c.on("close", () => {
-    if (!exiting) onGone("Connection closed");
+    if (!exiting) onGone(transportCloseReason ?? "Connection closed");
   });
   c.on("error", (err: unknown) => {
     if (exiting) return;
@@ -360,6 +380,7 @@ function toBigIntOrNull(v: unknown): bigint | null {
 
 /** Single shared stdin reader: first line is Config, the rest are Commands. */
 const stdinReader = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+stdinReader.on("close", stop);
 let onConfigLine: ((line: string) => void) | null = null;
 let onCommandLine: ((line: string) => void) | null = null;
 const bufferedCommands: string[] = [];
@@ -373,7 +394,7 @@ stdinReader.on("line", (line) => {
     return;
   }
   if (onCommandLine) onCommandLine(t);
-  else bufferedCommands.push(t);
+  else if (bufferedCommands.length < 128) bufferedCommands.push(t);
 });
 
 /** Resolve the first stdin line into a Config. */

@@ -11,6 +11,7 @@ import { config } from "../../src/config/config.js";
 import { clientManager } from "../../src/minecraft/ClientManager.js";
 import { recordAuditLog } from "../../src/logging/auditLog.js";
 import { PNG } from "pngjs";
+import { minecraftVersionCatalog } from "../../src/minecraft/versions.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>, url: string, passwordHash: string;
 let users: {id:string;username:string}[] = [], accounts: {id:string;name:string}[] = [];
@@ -18,13 +19,6 @@ let sessions: {sessionId:string;csrfToken:string}[] = [];
 const sockets: WebSocket[] = [];
 const statusListeners = new Set<(status:any) => void>(), consoleListeners = new Set<(event:any) => void>();
 const sellListeners = new Set<(event: { id: string; lastSellAt: string }) => void>();
-vi.mock("../../src/soulfire/versions.js", async importOriginal => {
-  const actual = await importOriginal<typeof import("../../src/soulfire/versions.js")>();
-  return { ...actual, protocolOptions: vi.fn(async () => [
-    { id: "RELEASE|777", displayName: "26.3", keywords: ["26.3", "777"] },
-    { id: "SPECIAL|2193", displayName: "Bedrock 1.26.51", keywords: ["Bedrock 1.26.51", "2193"] },
-  ]) };
-});
 const sendCommand = vi.fn((command: string) => ({ id: "command-receipt", minecraftAccountId: accounts[0]?.id, type: "USER_COMMAND", message: command, timestamp: new Date().toISOString() }));
 const headers = (index = 0, csrf = true) => ({ cookie: `${config.session.cookieName}=${sessions[index].sessionId}`, ...(csrf ? {"x-csrf-token": sessions[index].csrfToken} : {}) });
 const snapshot = (account: {id:string;name:string}) => ({ id:account.id, name:account.name, status:"ONLINE", serverHost:"minecraft.example", serverPort:25565,
@@ -104,8 +98,8 @@ it("provides authenticated users with the installed Bedrock version catalogue", 
   const { bedrock } = response.json();
   expect(bedrock.defaultVersion).toBe("1.26.51");
   expect(bedrock.versions[0]).toBe("1.26.51");
-  expect(bedrock.versions).toEqual(["1.26.51"]);
-  expect(response.json().java.versions).toEqual(["26.3"]);
+  expect(bedrock.versions).toEqual(minecraftVersionCatalog().bedrock.versions);
+  expect(response.json().java.versions).toEqual(minecraftVersionCatalog().java.versions);
   expect(bedrock.versions).not.toContain("26.2");
   expect(bedrock.versions).not.toContain("1.26.60");
   expect(new Set(bedrock.versions).size).toBe(bedrock.versions.length);

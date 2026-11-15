@@ -1,6 +1,7 @@
 import { BotSender } from "./send.js";
 import { emit } from "./protocol.js";
 import { readMultiplier, tooltipText, type SellMultiplier } from "../minecraft/sellMultipliers.js";
+import type { GameInventory } from "../minecraft/behaviors.js";
 
 export type BedrockItem = { network_id: number; count?: number; stack_id?: number; [key: string]: unknown };
 type WindowId = number | string;
@@ -51,6 +52,8 @@ export class BedrockInventory {
   private needsFullPlayerContent = false;
   private hotbarSlot = 0;
   private multiplierScan: { deadline: number; windowId: WindowId | null } | null = null;
+  private menuGeneration = 0;
+  private foregroundRequest: { id: number; menu: string; slot: number; item: BedrockItem } | null = null;
   constructor(private sender: BotSender) {}
 
   get busy(): boolean { return this.requestedAt != null || !!this.container?.owned; }
@@ -74,6 +77,7 @@ export class BedrockInventory {
   request(now: number): void { this.cancelledSellUntil = 0; this.requestedAt = now; this.targets = null; }
 
   reset(): void {
+    this.menuGeneration++; this.foregroundRequest = null;
     this.cancelMultiplierScan();
     this.titles.clear(); this.manualGuardUntil = 0; this.cancelledSellUntil = 0;
     this.player = null; this.container = null; this.requestedAt = null;
@@ -106,6 +110,7 @@ export class BedrockInventory {
   }
 
   onOpen(packet: { window_id: WindowId; window_type: string; coordinates?: unknown }): void {
+    this.menuGeneration++; this.foregroundRequest = null;
     const now = Date.now();
     const position = positionKey(packet.coordinates);
     const manual = now < this.manualGuardUntil;
@@ -143,6 +148,7 @@ export class BedrockInventory {
     if (this.container?.id !== packet.window_id) return;
     if (this.multiplierScan?.windowId === packet.window_id) this.cancelMultiplierScan();
     this.container = null; this.requestedAt = null; this.targets = null; this.pending = null;
+    this.foregroundRequest = null;
   }
 
   tickMultipliers(now: number): void {
@@ -210,6 +216,23 @@ export class BedrockInventory {
     slot_type: { container_id: string } | string; slots: Array<{ slot: number; count: number; item_stack_id: number }>;
   }> }> }): void {
     for (const response of packet.responses ?? []) {
+      const foreground = this.foregroundRequest;
+      if (foreground && foreground.id === response.request_id) {
+        if (response.status === "ok" && foreground.menu === this.menuIdentity()) {
+          for (const region of response.containers ?? []) {
+            const kind = typeof region.slot_type === "string" ? region.slot_type : region.slot_type.container_id;
+            if (kind !== "container" && kind !== "level_entity") continue;
+            for (const slot of region.slots) {
+              if (!this.container?.items || slot.slot < 0 || slot.slot >= this.container.items.length) continue;
+              this.container.items[slot.slot] = slot.count === 0 ? empty() : {
+                ...this.container.items[slot.slot], count: slot.count, stack_id: slot.item_stack_id, has_stack_id: 1,
+              };
+            }
+          }
+        }
+        this.foregroundRequest = null;
+        continue;
+      }
       const pending = this.pending;
       if (!pending || pending.id !== response.request_id) continue;
       if (response.status !== "ok") {
@@ -292,6 +315,59 @@ export class BedrockInventory {
   private confirmLegacyTransfer(): void {
     if (!this.pending || this.sender.authoritativeInventory) return;
     if (!present(this.player?.[this.pending.source]) && present(this.container?.items?.[this.pending.destination])) this.pending = null;
+  }
+
+  private menuIdentity(): string { return this.container ? `${this.container.id}:${this.menuGeneration}` : "player"; }
+
+  snapshot(itemName: (networkId: number) => string): GameInventory {
+    if (this.needsFullPlayerContent) throw new Error("Inventar wird noch synchronisiert");
+    const menu = this.container, size = menu?.items?.length ?? 0;
+    const slots: GameInventory["slots"] = [];
+    const append = (items: BedrockItem[], start: number) => items.forEach((item, slot) => {
+      if (!present(item)) return;
+      const tooltip = multiplierTooltip(item);
+      slots.push({ slot: start + slot, itemId: itemName(item.network_id), count: item.count ?? 0,
+        displayName: tooltipText(tooltip.name), tooltipLines: tooltip.lore.map(tooltipText) });
+    });
+    append(menu?.items ?? [], 0); append(this.player ?? [], size);
+    return { menuId: this.menuIdentity(), title: menu?.title ?? "", slots,
+      containerSlots: Array.from({ length: size }, (_, i) => i),
+      playerSlots: Array.from({ length: this.player?.length ?? 0 }, (_, i) => size + i) };
+  }
+
+  closeMenu(id: string): void {
+    if (id !== this.menuIdentity() || !this.container) throw new Error("Menü wurde inzwischen ersetzt");
+    this.foregroundRequest = null; this.close();
+  }
+
+  /** One acknowledged stack request at a time. No inventory depletion is
+   * predicted; the scheduler observes server packets or a genuine payout. */
+  clickMenu(id: string, slot: number, action: "transfer" | "drop" | "left"): void {
+    const menu = this.container;
+    if (!menu || id !== this.menuIdentity() || !Number.isInteger(slot) || !present(menu.items?.[slot])) throw new Error("Menü oder Inventarplatz nicht mehr verfügbar");
+    const item = menu.items![slot];
+    if (this.foregroundRequest) throw new Error("Vorherige Inventaraktion noch nicht bestätigt");
+    if (action === "transfer") throw new Error("Spawner-Transfer wird nicht unterstützt");
+    const count = action === "drop" ? Math.min(255, item.count!) : 1;
+    if (this.sender.authoritativeInventory) {
+      if (!Number.isInteger(item.stack_id) || item.stack_id! <= 0) throw new Error("Stack-ID fehlt; warte auf Inventarsynchronisation");
+      const request = this.nextRequestId--;
+      const source = { slot_type: { container_id: "container" }, slot, stack_id: item.stack_id };
+      const operation = action === "drop" ? { type_id: "drop", count, source, randomly: false }
+        : { type_id: "take", count, source, destination: { slot_type: { container_id: "cursor" }, slot: 0, stack_id: 0 } };
+      this.foregroundRequest = { id: request, menu: id, slot, item: { ...item } };
+      if (!this.sender.packet("item_stack_request", { requests: [{ request_id: request, actions: [operation], custom_names: [], cause: "chat_public" }] })) {
+        this.foregroundRequest = null; throw new Error("Inventaraktion konnte nicht gesendet werden");
+      }
+    } else {
+      const remaining = item.count! - count;
+      const actions = [
+        { source_type: "container", window_id: menu.id, inventory_id: menu.id, slot, old_item: item, new_item: remaining > 0 ? { ...item, count: remaining } : empty() },
+        action === "drop" ? { source_type: "world_interaction", flags: 0, slot: 0, old_item: empty(), new_item: { ...item, count } }
+          : { source_type: "container", window_id: 124, inventory_id: 124, slot: 0, old_item: empty(), new_item: { ...item, count } },
+      ];
+      if (!this.sender.packet("inventory_transaction", { transaction: { legacy: { legacy_request_id: 0 }, transaction_type: "normal", actions } })) throw new Error("Inventaraktion konnte nicht gesendet werden");
+    }
   }
 
   private close(): void {

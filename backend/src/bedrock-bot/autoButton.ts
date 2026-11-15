@@ -93,6 +93,8 @@ export class BedrockAutoButton {
   private releasePending: object | null = null;
   private mining: { position: Vec; face: number; runtime: number; started: number; duration: number } | null = null;
   private lastAttack = 0;
+  private worldLookupUntil = 0;
+  private worldGeneration = 0;
 
   constructor(private sender: BotSender, private inventory: BedrockInventory, private version: string) {}
 
@@ -112,6 +114,7 @@ export class BedrockAutoButton {
   }
 
   reset(dimension = this.dimension): void {
+    this.worldGeneration++;
     this.dimension = dimension; this.sections.clear(); this.pending.clear(); this.entities.clear();
     this.airUpdates.clear();
     this.releasePending = null; this.lastUseHand = null; this.sender.clearMouseActions();
@@ -119,6 +122,7 @@ export class BedrockAutoButton {
   }
 
   teleported(): void {
+    this.worldGeneration++;
     // The server cancels interactions on a teleport. Reapply desired input
     // against the destination without emitting a mouse-release packet.
     this.mining = null; this.usingItem = false; this.useUntil = 0; this.useRequested = false;
@@ -162,7 +166,7 @@ export class BedrockAutoButton {
   }
 
   onSubchunk(packet: any): void {
-    if (this.mode === "off" || !this.registry || packet.cache_enabled || packet.dimension !== this.dimension || !finite(packet.origin)) return;
+    if ((this.mode === "off" && Date.now() > this.worldLookupUntil) || !this.registry || packet.cache_enabled || packet.dimension !== this.dimension || !finite(packet.origin)) return;
     for (const entry of (packet.entries ?? []).slice(0, 256)) {
       const p = { x: packet.origin.x + entry.dx, y: packet.origin.y + entry.dy, z: packet.origin.z + entry.dz };
       if (!this.nearby(p) || !this.pending.has(key(p))) continue;
@@ -287,7 +291,8 @@ export class BedrockAutoButton {
   tick(now: number): InputFrame {
     if (!this.flushRelease()) return {};
     const view = this.sender.playerView;
-    if (!view || this.mode === "off" || !this.registry) return {};
+    if (!view || !this.registry) return {};
+    if (this.mode === "off") { if (now <= this.worldLookupUntil) this.requestSections(view, now); return {}; }
     this.requestSections(view, now);
     const hand = this.inventory.mouseHand;
     if (!hand || this.inventory.mouseBlocked) return {};
@@ -339,5 +344,54 @@ export class BedrockAutoButton {
       actions.push({ ...action, action: "continue_break" });
     }
     return actions.length ? { blockActions: actions } : {};
+  }
+
+  itemName(networkId: number): string {
+    if (!this.registry && this.startGameData) this.initializeRegistry();
+    const name = this.registry?.items?.[networkId]?.name;
+    return name ? `minecraft:${name.replace(/^minecraft:/, "")}` : `bedrock:${networkId}`;
+  }
+
+  cancelSpawner(): void { this.worldGeneration++; this.worldLookupUntil = 0; }
+
+  /** Find a real, unobstructed spawner within reach; never walk or click
+   * unknown blocks. Missing world sections get one bounded acquisition window. */
+  async openNearestSpawner(crouch: boolean): Promise<boolean> {
+    if (!this.registry && this.startGameData) this.initializeRegistry();
+    if (!this.registry) return false;
+    const generation = this.worldGeneration;
+    this.worldLookupUntil = Date.now() + 2500;
+    while (Date.now() < this.worldLookupUntil && generation === this.worldGeneration) {
+      const view = this.sender.playerView, hand = this.inventory.mouseHand;
+      if (!view || !hand) return false;
+      this.requestSections(view, Date.now());
+      const candidates: Array<{ position: Vec; distance: number }> = [];
+      for (let x = -4; x <= 4; x++) for (let y = -4; y <= 4; y++) for (let z = -4; z <= 4; z++) {
+        const position = { x: Math.floor(view.position.x) + x, y: Math.floor(view.position.y) + y, z: Math.floor(view.position.z) + z };
+        const section = this.sections.get(key(chunk(position)));
+        if (!section?.length) continue;
+        const runtime = section[((position.x & 15) << 8) | ((position.z & 15) << 4) | (position.y & 15)];
+        const block = this.registry.blocksByRuntimeId[runtime] ?? this.registry.blocksByRuntimeId[runtime | 0];
+        const name = block && this.Block.fromStateId(block.stateId, 0).name;
+        const distance = Math.hypot(position.x + 0.5 - view.position.x, position.y + 0.5 - view.position.y, position.z + 0.5 - view.position.z);
+        if (/^(?:mob_)?spawner$/.test(name ?? "") && distance <= 4.5) candidates.push({ position, distance });
+      }
+      for (const candidate of candidates.sort((a, b) => a.distance - b.distance)) {
+        const p = candidate.position, distance = candidate.distance;
+        const direction = { x: (p.x + 0.5 - view.position.x) / distance, y: (p.y + 0.5 - view.position.y) / distance, z: (p.z + 0.5 - view.position.z) / distance };
+        const target = this.target({ position: view.position, direction });
+        if (!target || key(target.position) !== key(p)) continue;
+        if (crouch) { this.sender.setSneak(false); this.sender.tickInput(); }
+        try {
+          return this.sender.packet("inventory_transaction", { transaction: { legacy: { legacy_request_id: 0 }, actions: [], transaction_type: "item_use",
+            transaction_data: { action_type: "click_block", trigger_type: "player_input", block_position: p, face: target.face,
+              hotbar_slot: hand.slot, held_item: hand.item, player_pos: view.position,
+              click_pos: { x: target.point.x - p.x, y: target.point.y - p.y, z: target.point.z - p.z },
+              block_runtime_id: target.runtime, client_prediction: "failure", client_cooldown_state: "off" } } });
+        } finally { if (crouch) this.sender.setSneak(true, true); }
+      }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return false;
   }
 }
